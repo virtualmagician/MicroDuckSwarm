@@ -1,0 +1,12 @@
+{
+  "format": "duckshow/1",
+  "meta": { "name": "Fixture: valid baseline", "duration": 10.0 },
+  "requires": { "policies": [] },
+  "cast": [ { "role": "lead" } ],
+  "tracks": {
+    "lead": {
+      "locomotion": [ { "t": 0.0, "vx": 0.1 }, { "t": 5.0, "vx": 0.0 } ],
+      "events": [ { "t": 1.0, "sound": "chirp" }, { "t": 2.0, "do": "kick_left" } ]
+    }
+  }
+}

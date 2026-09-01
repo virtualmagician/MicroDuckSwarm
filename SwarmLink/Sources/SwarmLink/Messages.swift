@@ -323,8 +323,14 @@ public struct TelemetryMessage: Sendable, Equatable {
     public var state: AgentState
     public var show: String?
     public var showTime: Double
-    public var clockOffsetMs: Double
-    public var clockRttMs: Double
+    /// Milliseconds; `nil` until the first successful time-sync exchange
+    /// (docs/swarmlink-protocol.md §4: "null until the first successful
+    /// time-sync exchange — masters must decode them as optional and treat
+    /// null as 'not yet synced', never as 0").
+    public var clockOffsetMs: Double?
+    /// Milliseconds; `nil` until the first successful time-sync exchange —
+    /// see `clockOffsetMs`.
+    public var clockRttMs: Double?
     public var policiesOk: Bool
     public var batteryPct: Double?
     public var rssiDbm: Double?
@@ -332,7 +338,7 @@ public struct TelemetryMessage: Sendable, Equatable {
 
     public init(
         v: Int = SwarmLinkInfo.protocolVersion, duck: DuckID, seq: Int, state: AgentState, show: String?,
-        showTime: Double, clockOffsetMs: Double, clockRttMs: Double, policiesOk: Bool,
+        showTime: Double, clockOffsetMs: Double?, clockRttMs: Double?, policiesOk: Bool,
         batteryPct: Double? = nil, rssiDbm: Double? = nil, lastError: String? = nil
     ) {
         self.v = v
@@ -370,8 +376,8 @@ extension TelemetryMessage: Codable {
         state = try c.decode(AgentState.self, forKey: .state)
         show = try c.decodeIfPresent(String.self, forKey: .show)
         showTime = try c.decode(Double.self, forKey: .showTime)
-        clockOffsetMs = try c.decode(Double.self, forKey: .clockOffsetMs)
-        clockRttMs = try c.decode(Double.self, forKey: .clockRttMs)
+        clockOffsetMs = try c.decodeIfPresent(Double.self, forKey: .clockOffsetMs)
+        clockRttMs = try c.decodeIfPresent(Double.self, forKey: .clockRttMs)
         policiesOk = try c.decode(Bool.self, forKey: .policiesOk)
         batteryPct = try c.decodeIfPresent(Double.self, forKey: .batteryPct)
         rssiDbm = try c.decodeIfPresent(Double.self, forKey: .rssiDbm)
@@ -387,8 +393,13 @@ extension TelemetryMessage: Codable {
         try c.encode(state, forKey: .state)
         try c.encodeIfPresent(show, forKey: .show)
         try c.encode(showTime, forKey: .showTime)
-        try c.encode(clockOffsetMs, forKey: .clockOffsetMs)
-        try c.encode(clockRttMs, forKey: .clockRttMs)
+        // Explicit `null` (not an omitted key) while unsynced, matching the
+        // wire example in docs/swarmlink-protocol.md §4 and the Python
+        // agent's `build_telemetry`, which always includes the key.
+        if let clockOffsetMs { try c.encode(clockOffsetMs, forKey: .clockOffsetMs) }
+        else { try c.encodeNil(forKey: .clockOffsetMs) }
+        if let clockRttMs { try c.encode(clockRttMs, forKey: .clockRttMs) }
+        else { try c.encodeNil(forKey: .clockRttMs) }
         try c.encode(policiesOk, forKey: .policiesOk)
         try c.encodeIfPresent(batteryPct, forKey: .batteryPct)
         try c.encodeIfPresent(rssiDbm, forKey: .rssiDbm)

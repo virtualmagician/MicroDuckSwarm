@@ -56,7 +56,7 @@ Show files are distributed out-of-band before the show (rsync/scp in v1; the `lo
  "policies_ok": true, "battery_pct": null, "rssi_dbm": null, "last_error": null}
 ```
 
-`battery_pct`/`rssi_dbm` are null until wired to `robot.health` / OS sources on real hardware. Master marks a duck **lost** after 5 s without telemetry (preflight red; if PLAYING, the duck is presumed still performing from its local copy — that's the architecture working, not an emergency).
+`battery_pct`/`rssi_dbm` are null until wired to `robot.health` / OS sources on real hardware. `clock_offset_ms`/`clock_rtt_ms` are **null until the first successful time-sync exchange** — masters must decode them as optional and treat null as "not yet synced", never as 0. Master marks a duck **lost** after 5 s without telemetry (preflight red; if PLAYING, the duck is presumed still performing from its local copy — that's the architecture working, not an emergency).
 
 ## 5 · Agent state machine
 

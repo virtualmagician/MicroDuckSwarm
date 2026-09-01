@@ -116,6 +116,30 @@ final class MessagesTests: XCTestCase {
         XCTAssertEqual(decoded, original)
     }
 
+    /// docs/swarmlink-protocol.md §4: `clock_offset_ms`/`clock_rtt_ms` are
+    /// null until the first successful time-sync exchange — a datagram
+    /// sent before that point (e.g. the Python duck-agent pre-sync) must
+    /// still decode, not be silently dropped.
+    func testTelemetryWithNullClockFieldsDecodesAndRoundTrips() throws {
+        let json = """
+        {"v":1,"type":"telemetry","duck":"duck-03","seq":1,"state":"idle","show":null,
+         "show_time":0.0,"clock_offset_ms":null,"clock_rtt_ms":null,"policies_ok":false,
+         "battery_pct":null,"rssi_dbm":null,"last_error":null}
+        """
+        let decoded = try JSONDecoder().decode(TelemetryMessage.self, from: Data(json.utf8))
+        XCTAssertNil(decoded.clockOffsetMs)
+        XCTAssertNil(decoded.clockRttMs)
+        XCTAssertNil(decoded.show)
+
+        let data = try JSONEncoder().encode(decoded)
+        let text = jsonString(data)
+        XCTAssertTrue(text.contains("\"clock_offset_ms\":null"), text)
+        XCTAssertTrue(text.contains("\"clock_rtt_ms\":null"), text)
+
+        let roundTripped = try JSONDecoder().decode(TelemetryMessage.self, from: data)
+        XCTAssertEqual(roundTripped, decoded)
+    }
+
     func testEnvelopeDispatchesOnType() throws {
         let ack = AckMessage(duck: "duck-01", cmdID: "uuid-6", ok: true, error: nil)
         let data = try JSONEncoder().encode(ack)

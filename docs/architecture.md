@@ -39,10 +39,12 @@ Master↔agent clock sync well under 10 ms on a dedicated AP (min-RTT NTP-style 
 
 - **M0 (now, pre-hardware):** everything in this repo running against `mock_duck` + the browser simulator. Format, agent, mock, SwarmLink skeleton, e2e demo.
 - **M1 (first duck):** hardware bring-up — latency measurements, `robot.setMode` semantics, battery/boot timing, camera access for servo cues, watchdog behavior on the local socket.
-- **M2:** show-grade core — agent as systemd unit, provisioning scripts, 2–3 ducks to music from a StageWizard GO.
+- **M2:** show-grade core — agent as systemd unit, provisioning scripts, OSC facade on SwarmLink, 2–3 ducks to music from a `swarmctl`/OSC GO.
 - **M3:** full flock — preflight dashboard, timeline editor with beat grid, rehearsal tools (seek/loop/solo), servo cues (laser/color homing, marker follow).
 - **M4+:** NPU person following, overhead tag tracking for true formations, Blender import.
+- **StageWizard integration** (the `robotShow` cue type embedding SwarmLink) is **parked** until the hardware is in hand and everything above it is ready; the OSC facade covers triggering in the meantime.
 
 ## Decisions log
 
 - 2026-09-01 — Engine as a Swift package used both ways (StageWizard cue type + OSC facade). Authoring = record infra + minimal timeline UI in parallel. V1 spatial scope: in-place + loose walks + servo cues; no overhead tracking. Duck-agent in Python first. Custom `.onnx` policy triggering in scope via `requires.policies` + `mode` events.
+- 2026-09-01 (later) — StageWizard integration parked until hardware arrives and the rest is ready. M0 hardened by an adversarial review workflow (88 findings → 72 fixed); CI added; e2e verifier now checks curve values, rates, and end-of-show ordering.

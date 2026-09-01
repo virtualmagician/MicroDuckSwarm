@@ -128,6 +128,47 @@ class LoadsShowStringTest(unittest.TestCase):
         show = loads_show(text)
         self.assertEqual(show.tracks["lead"].mouth[0].interp, "linear")
 
+    def test_event_hold_parsed_from_raw_json(self) -> None:
+        # duckshow-format.md: sound events may carry an optional
+        # "hold": <seconds> (a duration, not robotd's boolean start/stop
+        # flag of the same name -- see agent.py's _fire_event). Every
+        # other loader test builds Event dataclasses directly rather than
+        # parsing this field from JSON (F72).
+        text = """
+        {
+          "format": "duckshow/1",
+          "meta": {"duration": 5.0},
+          "cast": [{"role": "lead"}],
+          "tracks": {"lead": {"events": [{"t": 1.0, "sound": "coo", "hold": 2.5}]}}
+        }
+        """
+        show = loads_show(text)
+        event = show.tracks["lead"].events[0]
+        self.assertEqual(event.sound, "coo")
+        self.assertEqual(event.hold, 2.5)
+
+    def test_servo_entry_parsed_from_raw_json_with_default_mode(self) -> None:
+        text = """
+        {
+          "format": "duckshow/1",
+          "meta": {"duration": 30.0},
+          "cast": [{"role": "lead"}],
+          "tracks": {"lead": {"servo": [
+            {"t": 5.0, "mode": "hold", "duration": 2.0},
+            {"t": 20.0, "duration": 1.0}
+          ]}}
+        }
+        """
+        show = loads_show(text)
+        servo = show.tracks["lead"].servo
+        self.assertEqual(servo[0].t, 5.0)
+        self.assertEqual(servo[0].mode, "hold")
+        self.assertEqual(servo[0].duration, 2.0)
+        # "mode" omitted in the JSON -> defaults to "hold"
+        # (docs/duckshow-format.md: "v1 agents only honor {"mode": "hold"}").
+        self.assertEqual(servo[1].mode, "hold")
+        self.assertEqual(servo[1].duration, 1.0)
+
     def test_policies_parsed(self) -> None:
         text = """
         {

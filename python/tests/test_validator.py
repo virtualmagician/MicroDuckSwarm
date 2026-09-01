@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import sys
 import unittest
 from pathlib import Path
@@ -26,6 +27,7 @@ from duckshow.model import (  # noqa: E402
 from duckshow.validator import validate  # noqa: E402
 
 DEMO_SHOW_PATH = Path(__file__).resolve().parent.parent.parent / "shows" / "demo" / "demo.duckshow.json"
+FIXTURES_DIR = Path(__file__).resolve().parent.parent.parent / "shows" / "fixtures"
 
 
 def _issues_by_message_substr(issues, substr):
@@ -225,6 +227,50 @@ class ModeLocomotionOverlapTest(unittest.TestCase):
         )
         issues = validate(show)
         self.assertFalse(_issues_by_message_substr(issues, "overlaps nonzero locomotion"))
+
+
+class FixtureParityTest(unittest.TestCase):
+    """Data-driven regression coverage for shows/fixtures/*.duckshow.json
+    against shows/fixtures/expected.json (F67): each fixture is a small,
+    focused document with one thing wrong (or one thing that's actually
+    fine but easy to mistake for wrong -- see the 'divergent-' fixture).
+    These are also loaded from SwarmLink/Tests/SwarmLinkTests -- see
+    DuckShowFixtureTests.swift and expected.json's own "_comment" for the
+    one tracked cross-language divergence these fixtures pin down.
+    """
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        with open(FIXTURES_DIR / "expected.json", "r", encoding="utf-8") as f:
+            cls.expected = json.load(f)
+
+    def _fixture_names(self):
+        return sorted(k for k in self.expected if not k.startswith("_"))
+
+    def test_every_fixture_file_has_an_expected_entry_and_vice_versa(self) -> None:
+        on_disk = {p.stem.removesuffix(".duckshow") for p in FIXTURES_DIR.glob("*.duckshow.json")}
+        self.assertEqual(on_disk, set(self._fixture_names()))
+
+    def test_fixtures_match_expected_python_validation(self) -> None:
+        for name in self._fixture_names():
+            with self.subTest(fixture=name):
+                spec = self.expected[name]
+                show = load_show(FIXTURES_DIR / f"{name}.duckshow.json")
+                issues = validate(show)
+                errors = [i for i in issues if i.severity == "error"]
+                warnings = [i for i in issues if i.severity == "warning"]
+                self.assertEqual(len(errors), spec["errors"], f"{name}: errors={errors}")
+                self.assertEqual(len(warnings), spec["warnings"], f"{name}: warnings={warnings}")
+                if "error_substr" in spec:
+                    self.assertTrue(
+                        any(spec["error_substr"] in e.message for e in errors),
+                        f"{name}: no error contains {spec['error_substr']!r}: {errors}",
+                    )
+                if "warning_substr" in spec:
+                    self.assertTrue(
+                        any(spec["warning_substr"] in w.message for w in warnings),
+                        f"{name}: no warning contains {spec['warning_substr']!r}: {warnings}",
+                    )
 
 
 if __name__ == "__main__":

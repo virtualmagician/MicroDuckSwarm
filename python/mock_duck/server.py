@@ -19,7 +19,7 @@ import time
 from pathlib import Path
 from typing import Any, Optional
 
-from .errors import RpcError, METHOD_NOT_FOUND, PARSE_ERROR, INVALID_REQUEST
+from .errors import RpcError, METHOD_NOT_FOUND, PARSE_ERROR, INVALID_REQUEST, INVALID_PARAMS, BUSY
 from .intentlog import IntentLog
 from .state import DuckState
 
@@ -49,6 +49,18 @@ class ServerContext:
         self.intent_log = intent_log
         self.latency_ms = latency_ms
         self.jitter_ms = jitter_ms
+        # Live connections, keyed by the asyncio.Task running handle_connection
+        # for them -> their StreamWriter. run_server's shutdown closes these
+        # explicitly and awaits the tasks before Server.wait_closed(), which
+        # on Python >= 3.12.1 otherwise blocks forever while any client (a
+        # reconnecting duck-agent) stays attached. See F19.
+        self.connections: dict[asyncio.Task, asyncio.StreamWriter] = {}
+        # method -> one-shot RpcError to return instead of dispatching, set by
+        # the nonstandard `mock.fail_next` debug request (see _dispatch) so
+        # tests can drive a real JSON-RPC application-error reply (BUSY /
+        # PERMISSION_DENIED) through the mock -- errors.py notes the mock is
+        # otherwise deliberately permissive and never raises these itself.
+        self.pending_errors: dict[str, RpcError] = {}
 
     async def apply_reply_delay(self) -> None:
         delay_ms = self.latency_ms
@@ -152,18 +164,43 @@ def _dispatch(method: str, params: dict[str, Any], ctx: ServerContext) -> Any:
         # Nonstandard, mock-only debug request (see docs at top of file).
         return state.mock_state_snapshot()
 
+    if method == "mock.fail_next":
+        # Nonstandard, mock-only debug request: make the *next* call to
+        # params["method"] fail with a JSON-RPC error reply (application
+        # code by default; any code/message can be supplied) instead of
+        # being dispatched normally. One-shot -- consumed by the first
+        # matching request or notification after this call.
+        target = params.get("method")
+        if not target or not isinstance(target, str):
+            raise RpcError(INVALID_PARAMS, "mock.fail_next requires a string 'method'")
+        code = int(params.get("code", BUSY))
+        message = str(params.get("message", "mock.fail_next injected error"))
+        ctx.pending_errors[target] = RpcError(code, message)
+        return {}
+
     raise RpcError(METHOD_NOT_FOUND, f"Method not found: {method}")
 
 
-async def _send_json(writer: asyncio.StreamWriter, obj: dict[str, Any], ctx: ServerContext) -> None:
+async def _send_json(
+    writer: asyncio.StreamWriter, obj: dict[str, Any], ctx: ServerContext, write_lock: asyncio.Lock
+) -> None:
     await ctx.apply_reply_delay()
     line = json.dumps(obj) + "\n"
-    writer.write(line.encode("utf-8"))
-    await writer.drain()
+    # Serialize against the background _stream_state task: two concurrently
+    # pending drain() calls on the same StreamWriter is a real hazard on
+    # early 3.10.x point releases (predates the CPython gh-74116 fix). See
+    # F22.
+    async with write_lock:
+        writer.write(line.encode("utf-8"))
+        await writer.drain()
 
 
 async def _stream_state(
-    writer: asyncio.StreamWriter, hz: float, ctx: ServerContext, stop_event: asyncio.Event
+    writer: asyncio.StreamWriter,
+    hz: float,
+    ctx: ServerContext,
+    stop_event: asyncio.Event,
+    write_lock: asyncio.Lock,
 ) -> None:
     hz = hz if hz and hz > 0 else DEFAULT_SUBSCRIBE_HZ
     period = 1.0 / hz
@@ -178,8 +215,9 @@ async def _stream_state(
                 },
             }
             line = json.dumps(notification) + "\n"
-            writer.write(line.encode("utf-8"))
-            await writer.drain()
+            async with write_lock:
+                writer.write(line.encode("utf-8"))
+                await writer.drain()
             try:
                 await asyncio.wait_for(stop_event.wait(), timeout=period)
             except asyncio.TimeoutError:
@@ -194,6 +232,14 @@ async def handle_connection(
     logger.info("connection from %s", peer_desc)
     subscribe_task: Optional[asyncio.Task] = None
     subscribe_stop: Optional[asyncio.Event] = None
+    write_lock = asyncio.Lock()
+
+    # Register this connection so run_server's shutdown can close it and
+    # wait for this task to actually finish teardown, instead of hanging in
+    # Server.wait_closed() for as long as the peer stays connected. See F19.
+    task = asyncio.current_task()
+    if task is not None:
+        ctx.connections[task] = writer
 
     def _cancel_subscribe() -> None:
         if subscribe_stop is not None:
@@ -222,7 +268,7 @@ async def handle_connection(
                     "error": {"code": PARSE_ERROR, "message": "Parse error"},
                 }
                 try:
-                    await _send_json(writer, resp, ctx)
+                    await _send_json(writer, resp, ctx, write_lock)
                 except (ConnectionResetError, BrokenPipeError):
                     break
                 continue  # malformed line: reply with -32700, keep the connection alive
@@ -238,7 +284,7 @@ async def handle_connection(
                         "error": {"code": INVALID_REQUEST, "message": "Invalid Request"},
                     }
                     try:
-                        await _send_json(writer, resp, ctx)
+                        await _send_json(writer, resp, ctx, write_lock)
                     except (ConnectionResetError, BrokenPipeError):
                         break
                 continue
@@ -252,12 +298,30 @@ async def handle_connection(
                 hz = params.get("hz", DEFAULT_SUBSCRIBE_HZ)
                 resp = {"jsonrpc": "2.0", "id": msg_id, "result": {"accepted": True, "hz": hz}}
                 try:
-                    await _send_json(writer, resp, ctx)
+                    await _send_json(writer, resp, ctx, write_lock)
                 except (ConnectionResetError, BrokenPipeError):
                     break
                 _cancel_subscribe()
                 subscribe_stop = asyncio.Event()
-                subscribe_task = asyncio.create_task(_stream_state(writer, hz, ctx, subscribe_stop))
+                subscribe_task = asyncio.create_task(
+                    _stream_state(writer, hz, ctx, subscribe_stop, write_lock)
+                )
+                continue
+
+            injected = ctx.pending_errors.pop(method, None)
+            if injected is not None:
+                # mock.fail_next fired for this method: reply with the
+                # injected JSON-RPC error instead of dispatching.
+                if is_request:
+                    resp = {
+                        "jsonrpc": "2.0",
+                        "id": msg_id,
+                        "error": {"code": injected.code, "message": injected.message},
+                    }
+                    try:
+                        await _send_json(writer, resp, ctx, write_lock)
+                    except (ConnectionResetError, BrokenPipeError):
+                        break
                 continue
 
             try:
@@ -270,7 +334,7 @@ async def handle_connection(
                         "error": {"code": exc.code, "message": exc.message},
                     }
                     try:
-                        await _send_json(writer, resp, ctx)
+                        await _send_json(writer, resp, ctx, write_lock)
                     except (ConnectionResetError, BrokenPipeError):
                         break
                 continue
@@ -278,17 +342,33 @@ async def handle_connection(
             if is_request:
                 resp = {"jsonrpc": "2.0", "id": msg_id, "result": result}
                 try:
-                    await _send_json(writer, resp, ctx)
+                    await _send_json(writer, resp, ctx, write_lock)
                 except (ConnectionResetError, BrokenPipeError):
                     break
             # else: notification -- no reply, per docs/robotd-api.md.
     finally:
         _cancel_subscribe()
+        if subscribe_task is not None:
+            # F22: observe whatever the cancelled task raised instead of
+            # silently dropping it (Task.cancel() suppresses the "exception
+            # was never retrieved" warning even for an already-crashed task,
+            # so without this await, a real bug in _stream_state would be
+            # invisible).
+            try:
+                await subscribe_task
+            except asyncio.CancelledError:
+                pass
+            except (ConnectionResetError, BrokenPipeError):
+                pass
+            except Exception:
+                logger.exception("subscribe stream for %s failed", peer_desc)
         try:
             writer.close()
             await writer.wait_closed()
         except Exception:
             pass
+        if task is not None:
+            ctx.connections.pop(task, None)
         logger.info("connection closed %s", peer_desc)
 
 
@@ -340,16 +420,61 @@ async def run_server(
     serve_tasks = [asyncio.create_task(s.serve_forever()) for s in servers]
 
     try:
-        await asyncio.gather(*serve_tasks)
+        # Deliberately asyncio.wait(), not asyncio.gather(): unlike
+        # gather(), wait() does not cancel its member tasks when the
+        # *awaiting* task itself is cancelled (Ctrl-C / asyncio.run
+        # shutdown / a parent task's .cancel()). That distinction matters
+        # here: Server.serve_forever() itself, on cancellation,
+        # internally runs `self.close(); await self.wait_closed()` (see
+        # asyncio.base_events.Server.serve_forever in the stdlib), and
+        # wait_closed() blocks on Python >= 3.12.1 until every connection
+        # ever accepted through that server has closed. If our own
+        # cancellation cascaded straight into serve_tasks the way
+        # gather() would, it would hit that internal wait_closed() call
+        # *before* the finally block below ever runs -- and nothing else
+        # would ever close a still-attached client connection (a
+        # duck-agent reconnects forever), deadlocking run_server
+        # indefinitely. wait() leaves serve_tasks running untouched, so
+        # the finally block gets to close live connections *first*, in
+        # the order that actually lets everything unwind. See F19.
+        done, _pending = await asyncio.wait(serve_tasks, return_when=asyncio.FIRST_EXCEPTION)
+        for t in done:
+            if not t.cancelled():
+                exc = t.exception()
+                if exc is not None:
+                    raise exc
     except asyncio.CancelledError:
         pass
     finally:
         stop_event.set()
         physics_task.cancel()
-        for t in serve_tasks:
-            t.cancel()
+        # Stop accepting new connections before touching existing ones.
         for s in servers:
             s.close()
+        # Close every live client connection so the handler tasks (and,
+        # via Server._detach(), Server.wait_closed() -- both our own call
+        # below and serve_forever()'s internal one triggered by
+        # Server.close() above) can actually finish, instead of waiting
+        # forever for a duck-agent that keeps reconnecting. See F19.
+        live = list(ctx.connections.items())
+        for _conn_task, w in live:
+            try:
+                w.close()
+            except Exception:
+                pass
+        if live:
+            await asyncio.gather(*(t for t, _w in live), return_exceptions=True)
+        for t in serve_tasks:
+            t.cancel()
+        for t in serve_tasks:
+            try:
+                await t
+            except asyncio.CancelledError:
+                pass
         for s in servers:
             await s.wait_closed()
+        try:
+            await physics_task
+        except asyncio.CancelledError:
+            pass
         intent_log.close()

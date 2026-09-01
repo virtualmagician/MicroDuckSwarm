@@ -132,6 +132,18 @@ final class DuckShowTests: XCTestCase {
         XCTAssertTrue(sha1.allSatisfy(\.isHexDigit))
     }
 
+    func testShaHelperMatchesPinnedPythonLiteral() throws {
+        // Same literal is asserted from the Python side in
+        // test_showmaster.ShowFileHelpersTest.test_sha256_of_demo_show_matches_pinned_literal
+        // -- a `load` command's sha256 field must mean the same 64 hex
+        // chars whether it was computed on the Mac (this helper) or the
+        // duck (python's hashlib), or the hash check in
+        // docs/swarmlink-protocol.md #3 doesn't actually guarantee
+        // anything (F67).
+        let sha = try Show.sha256(of: Self.demoShowURL)
+        XCTAssertEqual(sha, "617b07e6dd6596f4bce5cc772072040c9365c1f579decd44cda3244ef7ac496f")
+    }
+
     func testRejectsUnknownMajorFormatVersion() throws {
         let bogus = """
         {"format":"duckshow/99","meta":{"name":"x","author":"y","created":"2026-01-01","duration":1.0},

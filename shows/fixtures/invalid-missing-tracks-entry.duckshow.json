@@ -1,0 +1,9 @@
+{
+  "format": "duckshow/1",
+  "meta": { "name": "Fixture: cast role with no tracks entry", "duration": 10.0 },
+  "requires": { "policies": [] },
+  "cast": [ { "role": "lead" }, { "role": "ghost" } ],
+  "tracks": {
+    "lead": {}
+  }
+}

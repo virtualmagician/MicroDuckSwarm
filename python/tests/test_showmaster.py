@@ -10,8 +10,10 @@ from __future__ import annotations
 import json
 import socket
 import sys
+import threading
 import time
 import unittest
+import unittest.mock
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -51,9 +53,20 @@ class TimeReqTest(unittest.TestCase):
         req = {"v": 1, "type": "time_req", "duck": "duck-01", "t0": t0}
         self.agent_sock.sendto(json.dumps(req).encode("utf-8"), master_addr)
 
-        data, _ = self.agent_sock.recvfrom(65536)
-        resp = json.loads(data.decode("utf-8"))
+        # The master also broadcasts its 5 Hz "state" stream unconditionally
+        # (incl. while "stopped" -- see docs/swarmlink-protocol.md section 2
+        # and F28), to the same roster address this test's socket listens
+        # on; skip those to find the time_resp.
+        self.agent_sock.settimeout(2.0)
+        resp = None
+        for _ in range(50):
+            data, _ = self.agent_sock.recvfrom(65536)
+            msg = json.loads(data.decode("utf-8"))
+            if msg.get("type") == "time_resp":
+                resp = msg
+                break
         after_ns = time.monotonic_ns()
+        self.assertIsNotNone(resp, "no time_resp received (only state broadcasts?)")
 
         self.assertEqual(resp["type"], "time_resp")
         self.assertEqual(resp["t0"], t0)
@@ -89,9 +102,19 @@ class CommandRetryTest(unittest.TestCase):
         self.agent_sock.close()
 
     def _recv_cmd(self, timeout: float = 1.0) -> tuple[dict, tuple]:
+        """Receive the next "cmd" datagram, skipping the 5 Hz "state"
+        broadcast that the master now sends unconditionally to every
+        roster address (docs/swarmlink-protocol.md section 2; F28).
+        """
         self.agent_sock.settimeout(timeout)
-        data, addr = self.agent_sock.recvfrom(65536)
-        return json.loads(data.decode("utf-8")), addr
+        deadline = time.monotonic() + timeout
+        while True:
+            remaining = max(0.0, deadline - time.monotonic())
+            self.agent_sock.settimeout(remaining if remaining > 0 else timeout)
+            data, addr = self.agent_sock.recvfrom(65536)
+            msg = json.loads(data.decode("utf-8"))
+            if msg.get("type") == "cmd":
+                return msg, addr
 
     def test_acks_immediately_on_first_attempt(self) -> None:
         import threading
@@ -235,6 +258,80 @@ class RosterAndRoleTest(unittest.TestCase):
             master.sock.close()
 
 
+class LostDuckWatchdogTest(unittest.TestCase):
+    """F33: the master must mark a duck lost after
+    TELEMETRY_LOST_THRESHOLD_S without telemetry (docs/swarmlink-protocol.md
+    section 4: "Master marks a duck lost after 5 s without telemetry"), and
+    clear it again once telemetry resumes.
+    """
+
+    def setUp(self) -> None:
+        self._orig_threshold = showmaster.TELEMETRY_LOST_THRESHOLD_S
+        showmaster.TELEMETRY_LOST_THRESHOLD_S = 0.3  # keep the test fast
+        self.master = showmaster.SwarmMaster(roster={"duck-01": ("127.0.0.1", 1)}, port=0)
+        self.master.start()
+
+    def tearDown(self) -> None:
+        self.master.close()
+        showmaster.TELEMETRY_LOST_THRESHOLD_S = self._orig_threshold
+
+    def test_duck_marked_lost_after_threshold_then_recovered(self) -> None:
+        self.assertEqual(self.master.lost_ducks(), [])
+        self.master._handle_telemetry({"duck": "duck-01", "state": "playing", "show_time": 1.0})
+        self.assertEqual(self.master.lost_ducks(), [])
+
+        deadline = time.monotonic() + 3.0
+        while time.monotonic() < deadline and "duck-01" not in self.master.lost_ducks():
+            time.sleep(0.05)
+        self.assertEqual(self.master.lost_ducks(), ["duck-01"])
+
+        self.master._handle_telemetry({"duck": "duck-01", "state": "playing", "show_time": 2.0})
+        self.assertEqual(self.master.lost_ducks(), [])
+
+    def test_duck_never_heard_from_is_not_reported_lost(self) -> None:
+        # Mirrors SwarmMaster.swift's sweepLostDucks: only ducks we have
+        # actually received telemetry from at least once are tracked.
+        time.sleep(0.6)
+        self.assertEqual(self.master.lost_ducks(), [])
+
+
+class TelemetryConsoleOutputTest(unittest.TestCase):
+    """F23: console output is diagnostic only and must never block the recv
+    thread -- _handle_telemetry (and the lost/recovered watchdog) route
+    output through a queue drained by a dedicated print thread.
+    """
+
+    def test_handle_telemetry_returns_promptly_when_console_consumer_stalled(self) -> None:
+        master = showmaster.SwarmMaster(roster={"duck-01": ("127.0.0.1", 1)}, port=0)
+        master.start()
+        try:
+            release = threading.Event()
+
+            def blocking_print(*args, **kwargs):
+                # Simulates a stalled/full stdout pipe: the print thread
+                # parks here instead of returning.
+                release.wait(timeout=5)
+
+            with unittest.mock.patch("builtins.print", side_effect=blocking_print):
+                master._emit("prime the stalled consumer")
+                time.sleep(0.1)  # let the print thread pick it up and park
+
+                t0 = time.monotonic()
+                for i in range(50):
+                    master._handle_telemetry(
+                        {"duck": "duck-01", "state": "playing", "show_time": float(i)}
+                    )
+                elapsed = time.monotonic() - t0
+                self.assertLess(
+                    elapsed,
+                    1.0,
+                    "recv-thread telemetry handling blocked on a stalled console consumer (F23)",
+                )
+            release.set()
+        finally:
+            master.close()
+
+
 class ShowFileHelpersTest(unittest.TestCase):
     def test_show_id_for_strips_duckshow_json_suffix(self) -> None:
         self.assertEqual(showmaster.show_id_for(Path("demo.duckshow.json")), "demo")
@@ -254,6 +351,18 @@ class ShowFileHelpersTest(unittest.TestCase):
             self.assertEqual(showmaster.sha256_of_file(path), expected)
         finally:
             path.unlink()
+
+    def test_sha256_of_demo_show_matches_pinned_literal(self) -> None:
+        # Same literal is asserted from the Swift side in
+        # DuckShowTests.swift's testShaHelperMatchesPinnedPythonLiteral --
+        # a load's sha256 field must mean the same 64 hex chars on both
+        # the Mac (SwarmLink) and the duck (this file) for the hash check
+        # in docs/swarmlink-protocol.md #3 to mean anything (F67).
+        demo = Path(__file__).resolve().parent.parent.parent / "shows" / "demo" / "demo.duckshow.json"
+        self.assertEqual(
+            showmaster.sha256_of_file(demo),
+            "617b07e6dd6596f4bce5cc772072040c9365c1f579decd44cda3244ef7ac496f",
+        )
 
 
 if __name__ == "__main__":

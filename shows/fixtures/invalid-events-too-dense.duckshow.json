@@ -1,0 +1,11 @@
+{
+  "format": "duckshow/1",
+  "meta": { "name": "Fixture: two events closer than the minimum interval", "duration": 10.0 },
+  "requires": { "policies": [] },
+  "cast": [ { "role": "lead" } ],
+  "tracks": {
+    "lead": {
+      "events": [ { "t": 1.0, "sound": "chirp" }, { "t": 1.1, "sound": "coo" } ]
+    }
+  }
+}

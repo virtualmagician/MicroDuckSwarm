@@ -1,0 +1,11 @@
+{
+  "format": "duckshow/1",
+  "meta": { "name": "Fixture: event with two action keys", "duration": 10.0 },
+  "requires": { "policies": [] },
+  "cast": [ { "role": "lead" } ],
+  "tracks": {
+    "lead": {
+      "events": [ { "t": 1.0, "do": "kick_left", "sound": "chirp" } ]
+    }
+  }
+}

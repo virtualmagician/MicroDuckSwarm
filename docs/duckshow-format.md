@@ -31,7 +31,7 @@ File extension: `.duckshow.json`. Encoding: UTF-8.
 ```
 
 - `format` — exactly `"duckshow/1"`. Parsers reject unknown major versions; unknown *fields* anywhere are ignored (forward compatibility, same discipline as StageWizard show files).
-- `meta.duration` — seconds; playback ends here regardless of track contents (locomotion is zeroed and `robot.stop` is sent).
+- `meta.duration` — **required**, finite, > 0. Seconds; playback ends here regardless of track contents (locomotion is zeroed and `robot.stop` is sent). Validators reject a missing, null, non-finite, or non-positive duration.
 - `meta.music` — optional; `bpm` + `beat_offset` (seconds to first downbeat) define the beat grid editors snap to. The music itself plays from the show master (StageWizard), never from this file.
 - `cast` — ordered list of roles. Physical assignment (role → duck hostname) lives in the SwarmLink roster, not in the show.
 - `tracks` — one entry per role; every role in `cast` must have a track entry (may be empty `{}` = duck stands idle).
@@ -66,11 +66,11 @@ Point events, exactly one action key per entry:
 
 | Key | Value | Maps to |
 |---|---|---|
-| `do` | skill name (`ground_pick`, `kick_left`, `kick_right`, `sit_toggle`, `roulade`) | `robot.do` |
-| `sound` | sound tag (`alarm`, `greet`, `inquire`, `peck`, `chirp`, `coo`, `wheee`), optional `"hold": <seconds>` | `robot.sound` (+ release after hold) |
+| `do` | skill name — exactly one of `ground_pick`, `kick_left`, `kick_right`, `sit_toggle`, `roulade`; anything else is a validation **error** | `robot.do` |
+| `sound` | sound tag — exactly one of `alarm`, `greet`, `inquire`, `peck`, `chirp`, `coo`, `wheee` (else validation **error**); optional `"hold": <seconds>` | `robot.sound` with `hold: true`, then `hold: false` after the given seconds (released early on stop/panic/end) |
 | `mode` | policy-mode name (string) | `robot.setMode` — see policy section below |
 
-Events fire once, at the first 50 Hz tick ≥ `t`. If playback starts *after* an event's `t` (late join, seek), the event is **skipped**, never replayed — except `mode` events, where the latest one ≤ the seek point is applied so the duck is in the right gait.
+Events fire once, at the first 50 Hz tick ≥ `t`. If playback starts *after* an event's `t` (late join, seek), the event is **skipped**, never replayed — except `mode` events, where the latest one ≤ the seek point is applied so the duck is in the right gait. If no `mode` event precedes that point, the current mode is left unchanged — shows that switch modes should place an explicit `mode` event at `t: 0.0` so every start and seek lands in a defined gait.
 
 ### Servo track (`servo`) — reserved in v1
 

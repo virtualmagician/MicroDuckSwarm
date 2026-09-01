@@ -10,6 +10,29 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+# Closed enums from docs/duckshow-format.md's "Event track" table -- these
+# mirror robotd-api.md's Skill / SoundTag enums (docs/robotd-api.md), so an
+# event referencing anything outside these sets can never succeed on real
+# hardware. Kept here as data, per "Limits live in
+# python/duckshow/limits.py as data, not scattered constants."
+SKILLS = (
+    "ground_pick",
+    "kick_left",
+    "kick_right",
+    "sit_toggle",
+    "roulade",
+)
+
+SOUND_TAGS = (
+    "alarm",
+    "greet",
+    "inquire",
+    "peck",
+    "chirp",
+    "coo",
+    "wheee",
+)
+
 
 @dataclass(frozen=True)
 class Limits:

@@ -4,6 +4,14 @@
 // Mirrors docs/duckshow-format.md exactly. Unknown JSON fields are ignored
 // everywhere (default JSONDecoder behavior against explicit CodingKeys),
 // matching "forward compatibility, same discipline as StageWizard show files".
+//
+// Optionality mirrors the canonical loader in `python/duckshow/loader.py`
+// (docs/architecture.md names it the shared parse/validate implementation):
+// the only required fields are `format`, `meta.duration`, `cast[].role`,
+// every keyframe's `t`, and `requires.policies[].name/mode/file/sha256`.
+// Everything else defaults exactly as the Python model does (scalars 0.0,
+// `pose.active` false, `interp` linear, `servo.mode` "hold", strings nil),
+// so a file that loads on every duck also loads on the master.
 
 import Foundation
 #if canImport(CryptoKit)
@@ -15,11 +23,15 @@ import CryptoKit
 public enum DuckShowError: Error, Sendable, Equatable, CustomStringConvertible {
     /// `format` was present but not a major version this package understands.
     case unsupportedFormat(String)
+    /// The top-level `format` field is missing or not a string.
+    case missingFormat
 
     public var description: String {
         switch self {
         case .unsupportedFormat(let format):
             return "unsupported .duckshow format '\(format)' (expected duckshow/\(SwarmLinkInfo.duckShowFormatMajor))"
+        case .missingFormat:
+            return "missing or non-string top-level 'format' field (expected duckshow/\(SwarmLinkInfo.duckShowFormatMajor))"
         }
     }
 }
@@ -83,27 +95,44 @@ public struct Show: Codable, Sendable, Equatable {
 }
 
 public struct Meta: Codable, Sendable, Equatable {
-    public var name: String
-    public var author: String
+    /// Optional descriptive fields (the Python model treats them as
+    /// `Optional[str]`; the format doc never marks them required).
+    public var name: String?
+    public var author: String?
     /// Kept as the raw string from the file (e.g. "2026-09-01"). The show
     /// format does not specify a time component, so we avoid a lossy/strict
     /// Date decode here and let callers parse it if they need to.
-    public var created: String
+    public var created: String?
+    /// Seconds; "playback ends here regardless of track contents". The one
+    /// piece of meta a master/agent cannot run a show without.
     public var duration: Double
     public var music: Music?
 
-    public init(name: String, author: String, created: String, duration: Double, music: Music? = nil) {
+    private enum CodingKeys: String, CodingKey { case name, author, created, duration, music }
+
+    public init(name: String? = nil, author: String? = nil, created: String? = nil, duration: Double, music: Music? = nil) {
         self.name = name
         self.author = author
         self.created = created
         self.duration = duration
         self.music = music
     }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        name = try c.decodeIfPresent(String.self, forKey: .name)
+        author = try c.decodeIfPresent(String.self, forKey: .author)
+        created = try c.decodeIfPresent(String.self, forKey: .created)
+        duration = try c.decode(Double.self, forKey: .duration)
+        music = try c.decodeIfPresent(Music.self, forKey: .music)
+    }
 }
 
 public struct Music: Codable, Sendable, Equatable {
-    public var file: String
-    public var bpm: Double
+    public var file: String?
+    public var bpm: Double?
+    /// Seconds to the first downbeat; defaults to 0 when omitted (same as
+    /// `python/duckshow/loader.py`).
     public var beatOffset: Double
 
     private enum CodingKeys: String, CodingKey {
@@ -111,10 +140,17 @@ public struct Music: Codable, Sendable, Equatable {
         case beatOffset = "beat_offset"
     }
 
-    public init(file: String, bpm: Double, beatOffset: Double) {
+    public init(file: String? = nil, bpm: Double? = nil, beatOffset: Double = 0.0) {
         self.file = file
         self.bpm = bpm
         self.beatOffset = beatOffset
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        file = try c.decodeIfPresent(String.self, forKey: .file)
+        bpm = try c.decodeIfPresent(Double.self, forKey: .bpm)
+        beatOffset = try c.decodeIfPresent(Double.self, forKey: .beatOffset) ?? 0.0
     }
 }
 
@@ -140,14 +176,26 @@ public struct RequiredPolicy: Codable, Sendable, Equatable {
     public var mode: String
     public var file: String
     public var sha256: String
-    public var slot: String
+    /// Optional, like `PolicyRequirement.slot` in the Python model.
+    public var slot: String?
 
-    public init(name: String, mode: String, file: String, sha256: String, slot: String) {
+    private enum CodingKeys: String, CodingKey { case name, mode, file, sha256, slot }
+
+    public init(name: String, mode: String, file: String, sha256: String, slot: String? = nil) {
         self.name = name
         self.mode = mode
         self.file = file
         self.sha256 = sha256
         self.slot = slot
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        name = try c.decode(String.self, forKey: .name)
+        mode = try c.decode(String.self, forKey: .mode)
+        file = try c.decode(String.self, forKey: .file)
+        sha256 = try c.decode(String.self, forKey: .sha256)
+        slot = try c.decodeIfPresent(String.self, forKey: .slot)
     }
 }
 
@@ -228,9 +276,9 @@ public struct LocomotionKeyframe: Codable, Sendable, Equatable {
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         t = try c.decode(Double.self, forKey: .t)
-        vx = try c.decode(Double.self, forKey: .vx)
-        vy = try c.decode(Double.self, forKey: .vy)
-        vyaw = try c.decode(Double.self, forKey: .vyaw)
+        vx = try c.decodeIfPresent(Double.self, forKey: .vx) ?? 0.0
+        vy = try c.decodeIfPresent(Double.self, forKey: .vy) ?? 0.0
+        vyaw = try c.decodeIfPresent(Double.self, forKey: .vyaw) ?? 0.0
         interp = try c.decodeIfPresent(Interp.self, forKey: .interp) ?? .linear
     }
 }
@@ -267,10 +315,10 @@ public struct HeadKeyframe: Codable, Sendable, Equatable {
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         t = try c.decode(Double.self, forKey: .t)
-        neckPitch = try c.decode(Double.self, forKey: .neckPitch)
-        headPitch = try c.decode(Double.self, forKey: .headPitch)
-        headYaw = try c.decode(Double.self, forKey: .headYaw)
-        headRoll = try c.decode(Double.self, forKey: .headRoll)
+        neckPitch = try c.decodeIfPresent(Double.self, forKey: .neckPitch) ?? 0.0
+        headPitch = try c.decodeIfPresent(Double.self, forKey: .headPitch) ?? 0.0
+        headYaw = try c.decodeIfPresent(Double.self, forKey: .headYaw) ?? 0.0
+        headRoll = try c.decodeIfPresent(Double.self, forKey: .headRoll) ?? 0.0
         interp = try c.decodeIfPresent(Interp.self, forKey: .interp) ?? .linear
     }
 }
@@ -293,10 +341,10 @@ public struct PoseKeyframe: Codable, Sendable, Equatable {
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         t = try c.decode(Double.self, forKey: .t)
-        z = try c.decode(Double.self, forKey: .z)
-        roll = try c.decode(Double.self, forKey: .roll)
-        pitch = try c.decode(Double.self, forKey: .pitch)
-        active = try c.decode(Bool.self, forKey: .active)
+        z = try c.decodeIfPresent(Double.self, forKey: .z) ?? 0.0
+        roll = try c.decodeIfPresent(Double.self, forKey: .roll) ?? 0.0
+        pitch = try c.decodeIfPresent(Double.self, forKey: .pitch) ?? 0.0
+        active = try c.decodeIfPresent(Bool.self, forKey: .active) ?? false
         interp = try c.decodeIfPresent(Interp.self, forKey: .interp) ?? .linear
     }
 }
@@ -315,7 +363,7 @@ public struct MouthKeyframe: Codable, Sendable, Equatable {
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         t = try c.decode(Double.self, forKey: .t)
-        open = try c.decode(Double.self, forKey: .open)
+        open = try c.decodeIfPresent(Double.self, forKey: .open) ?? 0.0
         interp = try c.decodeIfPresent(Interp.self, forKey: .interp) ?? .linear
     }
 }
@@ -327,6 +375,14 @@ public struct MouthKeyframe: Codable, Sendable, Equatable {
 public struct Event: Codable, Sendable, Equatable {
     public var t: Double
     public var action: Action
+    /// Action keys that were present in the file *in addition to* the one
+    /// decoded into `action` (precedence do > sound > mode, same as the
+    /// Python model's `action_kind()`). The format allows exactly one, so
+    /// `Show.validate()` reports an error when this is non-empty — the
+    /// loader keeps the file loadable, mirroring `python/duckshow`, where
+    /// the loader preserves what was present and the validator flags it.
+    /// Never re-encoded.
+    public var extraActionKeys: [String]
 
     public enum Action: Sendable, Equatable {
         /// `"do": "<skill>"` → `robot.do`.
@@ -337,9 +393,10 @@ public struct Event: Codable, Sendable, Equatable {
         case mode(String)
     }
 
-    public init(t: Double, action: Action) {
+    public init(t: Double, action: Action, extraActionKeys: [String] = []) {
         self.t = t
         self.action = action
+        self.extraActionKeys = extraActionKeys
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -353,12 +410,19 @@ public struct Event: Codable, Sendable, Equatable {
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         t = try c.decode(Double.self, forKey: .t)
-        if let skill = try c.decodeIfPresent(String.self, forKey: .doAction) {
+        let skill = try c.decodeIfPresent(String.self, forKey: .doAction)
+        let sound = try c.decodeIfPresent(String.self, forKey: .sound)
+        let mode = try c.decodeIfPresent(String.self, forKey: .mode)
+        var present: [String] = []
+        if skill != nil { present.append("do") }
+        if sound != nil { present.append("sound") }
+        if mode != nil { present.append("mode") }
+        if let skill {
             action = .skill(skill)
-        } else if let sound = try c.decodeIfPresent(String.self, forKey: .sound) {
+        } else if let sound {
             let hold = try c.decodeIfPresent(Double.self, forKey: .hold)
             action = .sound(sound, hold: hold)
-        } else if let mode = try c.decodeIfPresent(String.self, forKey: .mode) {
+        } else if let mode {
             action = .mode(mode)
         } else {
             throw DecodingError.dataCorruptedError(
@@ -366,6 +430,7 @@ public struct Event: Codable, Sendable, Equatable {
                 debugDescription: "event at t=\(t) has none of do/sound/mode"
             )
         }
+        extraActionKeys = Array(present.dropFirst())
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -386,16 +451,28 @@ public struct Event: Codable, Sendable, Equatable {
 /// Reserved-in-v1 servo window. See docs/duckshow-format.md "Servo track".
 public struct ServoWindow: Codable, Sendable, Equatable {
     public var t: Double
+    /// Defaults to `"hold"` when omitted (the only v1 mode; same default as
+    /// the Python `ServoEvent`).
     public var mode: String
     public var duration: Double?
     /// Used by future modes (`color_homing`, etc.); v1 agents only honor `hold`.
     public var target: String?
 
-    public init(t: Double, mode: String, duration: Double? = nil, target: String? = nil) {
+    private enum CodingKeys: String, CodingKey { case t, mode, duration, target }
+
+    public init(t: Double, mode: String = "hold", duration: Double? = nil, target: String? = nil) {
         self.t = t
         self.mode = mode
         self.duration = duration
         self.target = target
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        t = try c.decode(Double.self, forKey: .t)
+        mode = try c.decodeIfPresent(String.self, forKey: .mode) ?? "hold"
+        duration = try c.decodeIfPresent(Double.self, forKey: .duration)
+        target = try c.decodeIfPresent(String.self, forKey: .target)
     }
 }
 
@@ -406,11 +483,31 @@ public extension Show {
     /// versions ("Parsers reject unknown major versions" in the doc).
     static func load(contentsOf url: URL) throws -> Show {
         let data = try Data(contentsOf: url)
-        let show = try JSONDecoder().decode(Show.self, from: data)
-        guard show.format == "duckshow/\(SwarmLinkInfo.duckShowFormatMajor)" else {
-            throw DuckShowError.unsupportedFormat(show.format)
+        return try decode(data)
+    }
+
+    /// Decodes an in-memory `.duckshow` document with the same format gate
+    /// as `load(contentsOf:)`. The `format` field is checked *before* the
+    /// full decode (as `python/duckshow/loader.py` does), so a future-major
+    /// file whose schema no longer matches v1 is reported as
+    /// `DuckShowError.unsupportedFormat` naming the version rather than as
+    /// a `DecodingError` about some missing v1 key.
+    static func decode(_ data: Data) throws -> Show {
+        let probe: FormatProbe
+        do {
+            probe = try JSONDecoder().decode(FormatProbe.self, from: data)
+        } catch is DecodingError {
+            throw DuckShowError.missingFormat
         }
-        return show
+        guard let format = probe.format else { throw DuckShowError.missingFormat }
+        guard format == "duckshow/\(SwarmLinkInfo.duckShowFormatMajor)" else {
+            throw DuckShowError.unsupportedFormat(format)
+        }
+        return try JSONDecoder().decode(Show.self, from: data)
+    }
+
+    private struct FormatProbe: Decodable {
+        let format: String?
     }
 
     /// Hex-encoded SHA-256 of the raw file contents, used for the `load`
@@ -458,26 +555,47 @@ public extension Show {
         var report = ValidationReport()
 
         let castRoles = Set(cast.map(\.role))
+        // Parity with `validator.py:validate` — a cast role with no tracks
+        // entry at all is an ERROR (docs/duckshow-format.md: "every role in
+        // `cast` must have a track entry"), not a warning: unlike an empty
+        // `{}` entry (which validly means "stands idle"), an entirely
+        // missing entry means the file itself is incomplete.
         for role in castRoles where tracks[role] == nil {
-            report.warnings.append(ValidationIssue(role: role, track: "tracks", t: nil,
-                message: "cast role has no track entry (treated as idle)"))
+            report.errors.append(ValidationIssue(role: role, track: "tracks", t: nil,
+                message: "cast role '\(role)' has no tracks entry"))
         }
         for trackRole in tracks.keys where !castRoles.contains(trackRole) {
             report.warnings.append(ValidationIssue(role: trackRole, track: "tracks", t: nil,
                 message: "track entry has no matching cast role"))
         }
 
+        let declaredModes = Set(requires.policies.map(\.mode))
         for (role, roleTracks) in tracks {
             validateLocomotion(roleTracks.locomotion, role: role, into: &report)
             validateHead(roleTracks.head, role: role, into: &report)
             validatePose(roleTracks.pose, role: role, into: &report)
             validateMouth(roleTracks.mouth, role: role, into: &report)
             validateEvents(roleTracks.events, role: role, into: &report)
+            validateEventActionNames(roleTracks.events, role: role, into: &report)
+            validateModeDeclared(roleTracks.events, declaredModes: declaredModes, role: role, into: &report)
             validateModeOverlap(roleTracks.events, locomotion: roleTracks.locomotion, role: role, into: &report)
         }
 
         return report
     }
+
+    // Closed enums from docs/duckshow-format.md's "Event track" table — these
+    // mirror robotd-api.md's Skill / SoundTag enums, so an event referencing
+    // anything outside these sets can never succeed on real hardware. Kept
+    // in sync with `python/duckshow/limits.py`'s `SKILLS`/`SOUND_TAGS`.
+    // Arrays (not Set) so the "expected one of" message text is
+    // deterministic and matches Python's tuple order.
+    static let skills: [String] = [
+        "ground_pick", "kick_left", "kick_right", "sit_toggle", "roulade"
+    ]
+    static let soundTags: [String] = [
+        "alarm", "greet", "inquire", "peck", "chirp", "coo", "wheee"
+    ]
 
     // Limits — see docs/duckshow-format.md "Validation limits".
     private var limitVx: Double { 0.25 }
@@ -487,6 +605,10 @@ public extension Show {
     private var limitPoseZ: Double { 0.05 }
     private var limitPoseRollPitch: Double { 0.5 }
     private var minEventGapSeconds: Double { 0.25 }
+    /// `mode_locomotion_guard_s` in python/duckshow/limits.py.
+    private var modeLocomotionGuardSeconds: Double { 0.5 }
+    /// `_EPS` in python/duckshow/validator.py.
+    private var epsilon: Double { 1e-9 }
 
     private func checkSorted<T>(
         _ keyframes: [T], role: String, track: String, t: (T) -> Double, into report: inout ValidationReport
@@ -497,31 +619,35 @@ public extension Show {
             if let previous {
                 if value == previous {
                     report.errors.append(ValidationIssue(role: role, track: track, t: value,
-                        message: "duplicate keyframe time"))
+                        message: "duplicate t=\(value) in \(track) track"))
                 } else if value < previous {
                     report.errors.append(ValidationIssue(role: role, track: track, t: value,
-                        message: "keyframes not sorted by t"))
+                        message: "\(track) keyframes are not sorted by t"))
                 }
             }
             previous = value
         }
     }
 
+    /// Same wording as `validator.py:_check_scalar_limit`, so tooling that
+    /// greps either validator's output (and shows/fixtures/expected.json's
+    /// `error_substr`) sees the same text.
+    private func checkScalarLimit(
+        _ value: Double, name: String, limit: Double, role: String, track: String, t: Double,
+        into report: inout ValidationReport
+    ) {
+        if abs(value) > limit + epsilon {
+            report.errors.append(ValidationIssue(role: role, track: track, t: t,
+                message: "\(name)=\(value) exceeds limit of +/-\(limit)"))
+        }
+    }
+
     private func validateLocomotion(_ kfs: [LocomotionKeyframe], role: String, into report: inout ValidationReport) {
         checkSorted(kfs, role: role, track: "locomotion", t: { $0.t }, into: &report)
         for kf in kfs {
-            if abs(kf.vx) > limitVx {
-                report.errors.append(ValidationIssue(role: role, track: "locomotion", t: kf.t,
-                    message: "|vx|=\(abs(kf.vx)) exceeds \(limitVx) m/s"))
-            }
-            if abs(kf.vy) > limitVy {
-                report.errors.append(ValidationIssue(role: role, track: "locomotion", t: kf.t,
-                    message: "|vy|=\(abs(kf.vy)) exceeds \(limitVy) m/s"))
-            }
-            if abs(kf.vyaw) > limitVyaw {
-                report.errors.append(ValidationIssue(role: role, track: "locomotion", t: kf.t,
-                    message: "|vyaw|=\(abs(kf.vyaw)) exceeds \(limitVyaw) rad/s"))
-            }
+            checkScalarLimit(kf.vx, name: "vx", limit: limitVx, role: role, track: "locomotion", t: kf.t, into: &report)
+            checkScalarLimit(kf.vy, name: "vy", limit: limitVy, role: role, track: "locomotion", t: kf.t, into: &report)
+            checkScalarLimit(kf.vyaw, name: "vyaw", limit: limitVyaw, role: role, track: "locomotion", t: kf.t, into: &report)
         }
     }
 
@@ -531,9 +657,8 @@ public extension Show {
             for (name, value) in [
                 ("neck_pitch", kf.neckPitch), ("head_pitch", kf.headPitch),
                 ("head_yaw", kf.headYaw), ("head_roll", kf.headRoll)
-            ] where abs(value) > limitHeadAngle {
-                report.errors.append(ValidationIssue(role: role, track: "head", t: kf.t,
-                    message: "|\(name)|=\(abs(value)) exceeds \(limitHeadAngle) rad"))
+            ] {
+                checkScalarLimit(value, name: name, limit: limitHeadAngle, role: role, track: "head", t: kf.t, into: &report)
             }
         }
     }
@@ -541,55 +666,144 @@ public extension Show {
     private func validatePose(_ kfs: [PoseKeyframe], role: String, into report: inout ValidationReport) {
         checkSorted(kfs, role: role, track: "pose", t: { $0.t }, into: &report)
         for kf in kfs {
-            if abs(kf.z) > limitPoseZ {
-                report.errors.append(ValidationIssue(role: role, track: "pose", t: kf.t,
-                    message: "|z|=\(abs(kf.z)) exceeds \(limitPoseZ) m"))
-            }
-            if abs(kf.roll) > limitPoseRollPitch {
-                report.errors.append(ValidationIssue(role: role, track: "pose", t: kf.t,
-                    message: "|roll|=\(abs(kf.roll)) exceeds \(limitPoseRollPitch) rad"))
-            }
-            if abs(kf.pitch) > limitPoseRollPitch {
-                report.errors.append(ValidationIssue(role: role, track: "pose", t: kf.t,
-                    message: "|pitch|=\(abs(kf.pitch)) exceeds \(limitPoseRollPitch) rad"))
-            }
+            checkScalarLimit(kf.z, name: "z", limit: limitPoseZ, role: role, track: "pose", t: kf.t, into: &report)
+            checkScalarLimit(kf.roll, name: "roll", limit: limitPoseRollPitch, role: role, track: "pose", t: kf.t, into: &report)
+            checkScalarLimit(kf.pitch, name: "pitch", limit: limitPoseRollPitch, role: role, track: "pose", t: kf.t, into: &report)
         }
     }
 
     private func validateMouth(_ kfs: [MouthKeyframe], role: String, into report: inout ValidationReport) {
         checkSorted(kfs, role: role, track: "mouth", t: { $0.t }, into: &report)
-        for kf in kfs where !(0.0...1.0).contains(kf.open) {
+        for kf in kfs where kf.open < 0.0 - epsilon || kf.open > 1.0 + epsilon {
             report.errors.append(ValidationIssue(role: role, track: "mouth", t: kf.t,
-                message: "open=\(kf.open) outside 0.0-1.0"))
+                message: "open=\(kf.open) outside allowed range [0.0, 1.0]"))
         }
     }
 
+    /// Event-track rules. Unlike the curve tracks, the doc imposes no
+    /// ordering on `events` (its own example lists them in authoring
+    /// order), so — like `validator.py:_check_event_density` — the density
+    /// check runs on a copy sorted by `t`.
     private func validateEvents(_ events: [Event], role: String, into report: inout ValidationReport) {
-        checkSorted(events, role: role, track: "events", t: { $0.t }, into: &report)
+        for event in events where !event.extraActionKeys.isEmpty {
+            let keys = ([primaryActionKey(event.action)] + event.extraActionKeys).joined(separator: ", ")
+            report.errors.append(ValidationIssue(role: role, track: "events", t: event.t,
+                message: "event has more than one action key: [\(keys)]"))
+        }
         var previous: Double?
-        for event in events {
-            if let previous, event.t - previous < minEventGapSeconds, event.t >= previous {
+        for event in events.sorted(by: { $0.t < $1.t }) {
+            if let previous, event.t - previous < minEventGapSeconds - epsilon {
                 report.errors.append(ValidationIssue(role: role, track: "events", t: event.t,
-                    message: "event density: \(event.t - previous)s since previous event, minimum \(minEventGapSeconds)s"))
+                    message: "event at t=\(event.t) is less than \(minEventGapSeconds)s after previous event at t=\(previous)"))
             }
             previous = event.t
         }
     }
 
+    /// Parity with `validator.py:_check_event_action`'s enum checks: a `do`
+    /// naming a skill outside `Show.skills`, or a `sound` naming a tag
+    /// outside `Show.soundTags`, can never succeed on real hardware
+    /// (docs/robotd-api.md's closed Skill/SoundTag enums), so both are
+    /// errors, not warnings.
+    private func validateEventActionNames(_ events: [Event], role: String, into report: inout ValidationReport) {
+        for event in events {
+            switch event.action {
+            case .skill(let name):
+                guard !Self.skills.contains(name) else { continue }
+                report.errors.append(ValidationIssue(role: role, track: "events", t: event.t,
+                    message: "do='\(name)' is not a recognized skill (expected one of \(Self.skills))"))
+            case .sound(let tag, hold: _):
+                guard !Self.soundTags.contains(tag) else { continue }
+                report.errors.append(ValidationIssue(role: role, track: "events", t: event.t,
+                    message: "sound='\(tag)' is not a recognized sound tag (expected one of \(Self.soundTags))"))
+            case .mode:
+                continue
+            }
+        }
+    }
+
+    private func primaryActionKey(_ action: Event.Action) -> String {
+        switch action {
+        case .skill: return "do"
+        case .sound: return "sound"
+        case .mode: return "mode"
+        }
+    }
+
+    /// Parity with `validator.py:_check_mode_declared`: a `mode` event that
+    /// names a mode not declared in `requires.policies` is a warning (stock
+    /// modes need no declaration, so never an error).
+    private func validateModeDeclared(
+        _ events: [Event], declaredModes: Set<String>, role: String, into report: inout ValidationReport
+    ) {
+        for event in events {
+            guard case .mode(let name) = event.action, !declaredModes.contains(name) else { continue }
+            report.warnings.append(ValidationIssue(role: role, track: "events", t: event.t,
+                message: "mode event references '\(name)', not declared in requires.policies"))
+        }
+    }
+
+    /// "The validator warns if a `mode` event overlaps nonzero locomotion
+    /// within ±0.5 s" (docs/duckshow-format.md). The condition is on the
+    /// *sampled* locomotion the duck is actually commanded with — held or
+    /// interpolated from earlier keyframes — not on where keyframes happen
+    /// to sit, so this samples the curve at the window edges and at every
+    /// keyframe inside the window, exactly like
+    /// `validator.py:_locomotion_nonzero_in_window`.
     private func validateModeOverlap(
         _ events: [Event], locomotion: [LocomotionKeyframe], role: String, into report: inout ValidationReport
     ) {
         guard !locomotion.isEmpty else { return }
+        let sorted = locomotion.sorted { $0.t < $1.t }
         for event in events {
-            guard case .mode = event.action else { continue }
-            let window = (event.t - 0.5)...(event.t + 0.5)
-            let nonzeroNearby = locomotion.contains { kf in
-                window.contains(kf.t) && (kf.vx != 0 || kf.vy != 0 || kf.vyaw != 0)
+            guard case .mode(let name) = event.action else { continue }
+            let lo = max(0.0, event.t - modeLocomotionGuardSeconds)
+            let hi = event.t + modeLocomotionGuardSeconds
+            var times: Set<Double> = [lo, hi]
+            for kf in sorted where lo <= kf.t && kf.t <= hi { times.insert(kf.t) }
+            let nonzero = times.sorted().contains { t in
+                let v = sampleLocomotion(sorted, at: t)
+                return abs(v.vx) > epsilon || abs(v.vy) > epsilon || abs(v.vyaw) > epsilon
             }
-            if nonzeroNearby {
+            if nonzero {
                 report.warnings.append(ValidationIssue(role: role, track: "events", t: event.t,
-                    message: "mode event overlaps nonzero locomotion within ±0.5s"))
+                    message: "mode event '\(name)' overlaps nonzero locomotion within ±\(modeLocomotionGuardSeconds)s"))
             }
         }
+    }
+
+    /// Minimal locomotion sampler mirroring `python/duckshow/sampler.py`:
+    /// hold-first before the first keyframe, hold-last after the last,
+    /// per-segment `interp` (step / linear / smoothstep) in between, and
+    /// zero at/after `meta.duration`. `keyframes` must be sorted by `t`.
+    private func sampleLocomotion(_ keyframes: [LocomotionKeyframe], at t: Double) -> (vx: Double, vy: Double, vyaw: Double) {
+        guard let first = keyframes.first, let last = keyframes.last else { return (0, 0, 0) }
+        if t >= meta.duration { return (0, 0, 0) }
+        if t <= first.t { return (first.vx, first.vy, first.vyaw) }
+        if t >= last.t { return (last.vx, last.vy, last.vyaw) }
+        // Index of the last keyframe with kf.t <= t (bisect_right - 1).
+        var lo = 0, hi = keyframes.count
+        while lo < hi {
+            let mid = (lo + hi) / 2
+            if keyframes[mid].t <= t { lo = mid + 1 } else { hi = mid }
+        }
+        let kf0 = keyframes[lo - 1]
+        let kf1 = keyframes[lo]
+        let span = kf1.t - kf0.t
+        var frac = span <= 0 ? 0.0 : (t - kf0.t) / span
+        switch kf0.interp {
+        case .step:
+            return (kf0.vx, kf0.vy, kf0.vyaw)
+        case .smooth:
+            frac = min(1, max(0, frac))
+            frac = frac * frac * (3 - 2 * frac)
+        case .linear:
+            frac = min(1, max(0, frac))
+        }
+        return (
+            kf0.vx + (kf1.vx - kf0.vx) * frac,
+            kf0.vy + (kf1.vy - kf0.vy) * frac,
+            kf0.vyaw + (kf1.vyaw - kf0.vyaw) * frac
+        )
     }
 }

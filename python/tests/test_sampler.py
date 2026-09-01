@@ -78,6 +78,24 @@ class SmoothInterpTest(unittest.TestCase):
         self.assertAlmostEqual(f.head.head_pitch, expected)
         self.assertNotAlmostEqual(f.head.head_pitch, 0.25)  # would be 0.25 if it were linear
 
+    def test_smooth_quarter_point_matches_pinned_literal(self) -> None:
+        # Pins the actual canonical smoothstep(0.25) = 3*0.25^2 - 2*0.25^3
+        # = 0.15625 as a literal, without importing _smoothstep -- so a
+        # regression that breaks the *formula itself* (e.g. swapping in
+        # x*x) is caught. test_smooth_quarter_point_is_not_linear above
+        # computes its "expected" value by calling the very function under
+        # test, so it can only catch the sampler diverging from
+        # _smoothstep, never _smoothstep itself being wrong (F73).
+        show = _show(head=[HeadKeyframe(t=0.0, head_pitch=0.0, interp="smooth"), HeadKeyframe(t=4.0, head_pitch=1.0)])
+        s = Sampler(show, "lead")
+        f = s.at(1.0)  # frac = 0.25
+        self.assertAlmostEqual(f.head.head_pitch, 0.15625)
+
+    def test_smooth_midpoint_matches_pinned_literal(self) -> None:
+        show = _show(head=[HeadKeyframe(t=0.0, head_pitch=0.0, interp="smooth"), HeadKeyframe(t=2.0, head_pitch=1.0)])
+        s = Sampler(show, "lead")
+        self.assertAlmostEqual(s.at(1.0).head.head_pitch, 0.5)
+
     def test_smooth_endpoints_are_exact(self) -> None:
         show = _show(head=[HeadKeyframe(t=0.0, head_pitch=0.3, interp="smooth"), HeadKeyframe(t=2.0, head_pitch=0.9)])
         s = Sampler(show, "lead")

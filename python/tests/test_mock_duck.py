@@ -17,6 +17,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from mock_duck.errors import BUSY, PERMISSION_DENIED  # noqa: E402
 from mock_duck.server import run_server  # noqa: E402
 
 
@@ -232,6 +233,45 @@ class MockDuckTest(unittest.TestCase):
         finally:
             client.close()
 
+    def test_subscribe_stream_rate_matches_requested_hz(self) -> None:
+        # test_subscribe_streams_state_at_requested_rate above checks
+        # message *shape* only; a mock that ignored `hz` and streamed at
+        # some fixed rate would still pass it (F73). This measures actual
+        # inter-arrival time against the requested 10 Hz (100 ms period),
+        # generous enough for CI jitter but tight enough to catch a
+        # regression off by an order of magnitude.
+        client = RawClient(self.server.port)
+        try:
+            client.send({"jsonrpc": "2.0", "id": 3, "method": "robot.subscribe", "params": {"hz": 10}})
+            self.assertTrue(client.recv()["result"]["accepted"])
+            client.sock.settimeout(3.0)
+            times = []
+            for _ in range(6):
+                client.recv()
+                times.append(time.monotonic())
+            gaps = [times[i + 1] - times[i] for i in range(len(times) - 1)]
+            mean_gap = sum(gaps) / len(gaps)
+            self.assertAlmostEqual(mean_gap, 0.1, delta=0.06, msg=f"gaps={gaps}")
+        finally:
+            client.close()
+
+    def test_subscribe_falls_back_to_default_hz_when_omitted(self) -> None:
+        client = RawClient(self.server.port)
+        try:
+            client.send({"jsonrpc": "2.0", "id": 3, "method": "robot.subscribe", "params": {}})
+            self.assertTrue(client.recv()["result"]["accepted"])
+            client.sock.settimeout(3.0)
+            times = []
+            for _ in range(4):
+                client.recv()
+                times.append(time.monotonic())
+            gaps = [times[i + 1] - times[i] for i in range(len(times) - 1)]
+            mean_gap = sum(gaps) / len(gaps)
+            # DEFAULT_SUBSCRIBE_HZ = 20 -> 50 ms nominal period.
+            self.assertAlmostEqual(mean_gap, 0.05, delta=0.035, msg=f"gaps={gaps}")
+        finally:
+            client.close()
+
     def test_unknown_method_and_robot_do_are_both_logged(self) -> None:
         # A method not found error should still have logged the inbound message.
         client = RawClient(self.server.port)
@@ -287,6 +327,69 @@ class MockDuckTest(unittest.TestCase):
         finally:
             client.close()
 
+    def test_mock_fail_next_injects_application_error_then_reverts(self) -> None:
+        """F32: the mock can be made to answer one call with a real JSON-RPC
+        application error (mock_duck was previously "deliberately
+        permissive" and never raised BUSY/PERMISSION_DENIED itself), so
+        RobotdClient/agent error-handling paths have something to test
+        against. One-shot: the following call to the same method dispatches
+        normally again.
+        """
+        client = RawClient(self.server.port)
+        try:
+            client.send(
+                {
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "mock.fail_next",
+                    "params": {"method": "robot.do", "code": PERMISSION_DENIED, "message": "disabled"},
+                }
+            )
+            self.assertEqual(client.recv()["result"], {})
+
+            client.send({"jsonrpc": "2.0", "id": 2, "method": "robot.do", "params": {"skill": "kick_left"}})
+            reply = client.recv()
+            self.assertEqual(reply["id"], 2)
+            self.assertNotIn("result", reply)
+            self.assertEqual(reply["error"]["code"], PERMISSION_DENIED)
+            self.assertEqual(reply["error"]["message"], "disabled")
+
+            # One-shot: the next robot.do dispatches normally again.
+            client.send({"jsonrpc": "2.0", "id": 3, "method": "robot.do", "params": {"skill": "kick_left"}})
+            reply = client.recv()
+            self.assertEqual(reply["id"], 3)
+            self.assertEqual(reply["result"], {})
+        finally:
+            client.close()
+
+    def test_mock_fail_next_defaults_to_busy_and_applies_to_notifications(self) -> None:
+        client = RawClient(self.server.port)
+        try:
+            client.send(
+                {"jsonrpc": "2.0", "id": 1, "method": "mock.fail_next", "params": {"method": "robot.stop"}}
+            )
+            self.assertEqual(client.recv()["result"], {})
+
+            client.send({"jsonrpc": "2.0", "id": 2, "method": "robot.stop", "params": {}})
+            reply = client.recv()
+            self.assertEqual(reply["error"]["code"], BUSY)
+
+            client.send(
+                {"jsonrpc": "2.0", "id": 3, "method": "mock.fail_next", "params": {"method": "robot.move"}}
+            )
+            self.assertEqual(client.recv()["result"], {})
+
+            # robot.move is a continuous intent (notification, no id): the
+            # injected error can't be replied, but it must still be
+            # consumed/skip dispatch rather than being applied to state.
+            client.send({"jsonrpc": "2.0", "method": "robot.move", "params": {"vx": 1.0, "vy": 0.0, "vyaw": 0.0}})
+
+            client.send({"jsonrpc": "2.0", "id": 4, "method": "mock.state", "params": {}})
+            reply = client.recv()
+            self.assertEqual(reply["result"]["last_intents"]["move"], {"vx": 0.0, "vy": 0.0, "vyaw": 0.0})
+        finally:
+            client.close()
+
     def test_sequential_connections_supported(self) -> None:
         client1 = RawClient(self.server.port)
         client1.send({"jsonrpc": "2.0", "id": 1, "method": "hello", "params": {"api_version": 16}})
@@ -299,6 +402,74 @@ class MockDuckTest(unittest.TestCase):
             self.assertEqual(client2.recv()["result"]["api_version"], 16)
         finally:
             client2.close()
+
+
+class ShutdownWithLiveConnectionTest(unittest.TestCase):
+    """F19: run_server's shutdown must complete promptly even while a
+    client stays connected (a reconnecting duck-agent would otherwise keep
+    it attached forever). Deliberately cancels only the top-level
+    run_server task -- like asyncio.run's SIGINT handling / Ctrl-C does --
+    rather than every task in the loop, since cancel-everything (as
+    MockDuckTest's own teardown does) would mask this bug by directly
+    cancelling handle_connection too.
+    """
+
+    def test_run_server_returns_promptly_with_client_still_connected(self) -> None:
+        tmpdir = tempfile.TemporaryDirectory()
+        try:
+            log_path = Path(tmpdir.name) / "intents.jsonl"
+            port = _free_port()
+            loop = asyncio.new_event_loop()
+            ready = threading.Event()
+            state: dict = {}
+
+            def _run() -> None:
+                asyncio.set_event_loop(loop)
+
+                async def _runner() -> None:
+                    state["task"] = asyncio.current_task()
+                    ready.set()
+                    try:
+                        await run_server(
+                            name="test-duck",
+                            tcp_addr=("127.0.0.1", port),
+                            unix_path=None,
+                            log_path=str(log_path),
+                        )
+                    except asyncio.CancelledError:
+                        pass
+                    state["done"] = True
+
+                loop.run_until_complete(_runner())
+
+            thread = threading.Thread(target=_run, daemon=True)
+            thread.start()
+            self.assertTrue(ready.wait(timeout=5))
+
+            client = None
+            for _ in range(50):
+                try:
+                    client = socket.create_connection(("127.0.0.1", port), timeout=0.1)
+                    break
+                except OSError:
+                    time.sleep(0.05)
+            self.assertIsNotNone(client, "mock_duck server did not start listening in time")
+            try:
+                # Give handle_connection a moment to register itself in
+                # ServerContext.connections before we cancel.
+                time.sleep(0.2)
+
+                loop.call_soon_threadsafe(state["task"].cancel)
+                thread.join(timeout=5)
+                self.assertFalse(
+                    thread.is_alive(),
+                    "run_server did not shut down within 5s while a client stayed connected (F19)",
+                )
+                self.assertTrue(state.get("done"))
+            finally:
+                client.close()
+        finally:
+            tmpdir.cleanup()
 
 
 if __name__ == "__main__":

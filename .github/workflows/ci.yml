@@ -1,0 +1,49 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  python:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.10", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Run Python tests
+        run: cd python && python3 -m unittest discover -s tests -v
+
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Run e2e demo
+        run: ./scripts/e2e_demo.sh
+
+  swift:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Cache .build
+        uses: actions/cache@v4
+        with:
+          path: SwarmLink/.build
+          key: ${{ runner.os }}-spm-${{ hashFiles('SwarmLink/Package.swift') }}
+          restore-keys: |
+            ${{ runner.os }}-spm-
+      - name: Swift build
+        run: swift build
+        working-directory: SwarmLink
+      - name: Swift test
+        run: swift test
+        working-directory: SwarmLink

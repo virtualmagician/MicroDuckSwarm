@@ -3,9 +3,11 @@
 
 Implements the master side of docs/swarmlink-protocol.md: a UDP socket
 bound to a well-known port that answers agent time_req exchanges,
-receives acks/telemetry, sends the 5 Hz transport state broadcast while
-a show is armed/playing, and drives the load/play/seek/stop/panic
-command handshake (send, repeat until ACKed, report per duck).
+receives acks/telemetry, sends the 5 Hz transport state broadcast
+unconditionally (including "stopped", which doubles as master discovery
+for agents started without --master-host), and drives the
+load/play/seek/stop/panic command handshake (send, repeat until ACKed,
+report per duck).
 
 Single file, stdlib only (see CLAUDE.md).
 
@@ -25,6 +27,7 @@ import argparse
 import hashlib
 import json
 import logging
+import queue
 import socket
 import sys
 import threading
@@ -43,6 +46,13 @@ DEFAULT_LEAD_MS = 1500
 DEFAULT_CMD_RETRIES = 5
 DEFAULT_CMD_TIMEOUT_MS = 100
 MAX_DATAGRAM_BYTES = 1200
+# docs/swarmlink-protocol.md section 4: "Master marks a duck lost after 5 s
+# without telemetry." Mirrors SwarmLink/Sources/SwarmLink/SwarmMaster.swift's
+# telemetryLostThresholdSeconds.
+TELEMETRY_LOST_THRESHOLD_S = 5.0
+# Console output is diagnostic only and must never block protocol handling;
+# a stalled/closed stdout consumer just starts losing the oldest queued lines.
+PRINT_QUEUE_MAXSIZE = 2000
 
 
 def sha256_of_file(path: Path) -> str:
@@ -141,11 +151,20 @@ class SwarmMaster:
         self._stop_event = threading.Event()
         self._recv_thread: Optional[threading.Thread] = None
         self._state_thread: Optional[threading.Thread] = None
+        self._print_thread: Optional[threading.Thread] = None
+        # Bounded so a stalled/closed stdout consumer can never make the
+        # producer (recv thread) block -- see F23. Drop-oldest on overflow.
+        self._print_queue: "queue.Queue[Optional[str]]" = queue.Queue(maxsize=PRINT_QUEUE_MAXSIZE)
 
         self._lock = threading.Lock()
         self._pending: dict[tuple[str, str], threading.Event] = {}
         self._ack_results: dict[tuple[str, str], dict[str, Any]] = {}
         self.last_telemetry: dict[str, dict[str, Any]] = {}
+        # Lost-duck watchdog (docs/swarmlink-protocol.md section 4): last
+        # receipt time (monotonic ns) and current lost/not-lost membership,
+        # per duck id we have ever heard telemetry from.
+        self._last_telemetry_ns: dict[str, int] = {}
+        self._lost_ducks: set[str] = set()
 
         # Transport state
         self.transport = "stopped"  # "stopped" | "armed" | "playing"
@@ -158,6 +177,8 @@ class SwarmMaster:
 
     def start(self) -> None:
         self._stop_event.clear()
+        self._print_thread = threading.Thread(target=self._print_loop, daemon=True, name="showmaster-print")
+        self._print_thread.start()
         self._recv_thread = threading.Thread(target=self._recv_loop, daemon=True, name="showmaster-recv")
         self._recv_thread.start()
         self._state_thread = threading.Thread(target=self._state_loop, daemon=True, name="showmaster-state")
@@ -175,10 +196,52 @@ class SwarmMaster:
             self._recv_thread.join(timeout=2)
         if self._state_thread:
             self._state_thread.join(timeout=2)
+        if self._print_thread:
+            try:
+                self._print_queue.put_nowait(None)  # sentinel: wake a blocked get()
+            except queue.Full:
+                pass
+            self._print_thread.join(timeout=2)
         try:
             self.sock.close()
         except OSError:
             pass
+
+    # -- console output: decoupled from the recv/state threads (F23) --
+
+    def _emit(self, line: str) -> None:
+        """Queue a line of console output without ever blocking the caller.
+
+        Called from the recv thread (time_req/ack/telemetry handling) and
+        the state thread (lost/recovered watchdog), so a stalled or closed
+        stdout consumer (e.g. `showmaster.py monitor | head`) can never
+        block clock-sync or ACK processing.
+        """
+        try:
+            self._print_queue.put_nowait(line)
+        except queue.Full:
+            # Best-effort: drop the oldest queued line to make room rather
+            # than block the caller.
+            try:
+                self._print_queue.get_nowait()
+            except queue.Empty:
+                pass
+            try:
+                self._print_queue.put_nowait(line)
+            except queue.Full:
+                pass
+
+    def _print_loop(self) -> None:
+        while True:
+            line = self._print_queue.get()
+            if line is None:  # sentinel from close()
+                return
+            try:
+                print(line)
+            except (BrokenPipeError, OSError):
+                # stdout consumer went away; console output is best-effort,
+                # so keep draining the queue instead of dying/blocking.
+                pass
 
     def __enter__(self) -> "SwarmMaster":
         self.start()
@@ -253,14 +316,22 @@ class SwarmMaster:
         duck_id = msg.get("duck")
         if duck_id:
             self.last_telemetry[duck_id] = msg
-        print(
+            recovered = False
+            with self._lock:
+                self._last_telemetry_ns[duck_id] = time.monotonic_ns()
+                if duck_id in self._lost_ducks:
+                    self._lost_ducks.discard(duck_id)
+                    recovered = True
+            if recovered:
+                self._emit(f"[recovered] {duck_id}")
+        self._emit(
             f"[telemetry] duck={duck_id} state={msg.get('state')} "
             f"show_time={msg.get('show_time')} clock_offset_ms={msg.get('clock_offset_ms')}"
         )
         if self.on_telemetry:
             self.on_telemetry(msg)
 
-    # -- 5 Hz transport state broadcast while armed/playing --
+    # -- 5 Hz transport state broadcast (unconditional, incl. "stopped") --
 
     def _current_show_time(self) -> float:
         if self.transport == "playing" and self.play_epoch_ns is not None:
@@ -278,24 +349,60 @@ class SwarmMaster:
         period = 1.0 / STATE_HZ
         while not self._stop_event.is_set():
             self._maybe_advance_armed_to_playing()
-            if self.transport in ("armed", "playing"):
-                msg = {
-                    "v": PROTOCOL_VERSION,
-                    "type": "state",
-                    "seq": self._seq,
-                    "show": self.current_show_id,
-                    "transport": self.transport,
-                    "show_time": self._current_show_time(),
-                    "master_time": time.monotonic_ns(),
-                }
-                self._seq += 1
-                payload = json.dumps(msg).encode("utf-8")
-                for addr in self.roster.values():
-                    try:
-                        self.sock.sendto(payload, addr)
-                    except OSError:
-                        pass
+            # Sent unconditionally (including "stopped"), per
+            # docs/swarmlink-protocol.md section 2 ("5 Hz", transport
+            # "stopped"|"armed"|"playing"). This also doubles as
+            # discovery/liveness for an agent started without
+            # --master-host: agent.py only learns master_addr from an
+            # inbound packet, so the stream must exist before the first
+            # `load` too.
+            msg = {
+                "v": PROTOCOL_VERSION,
+                "type": "state",
+                "seq": self._seq,
+                "show": self.current_show_id,
+                "transport": self.transport,
+                "show_time": self._current_show_time(),
+                "master_time": time.monotonic_ns(),
+            }
+            self._seq += 1
+            payload = json.dumps(msg).encode("utf-8")
+            for addr in self.roster.values():
+                try:
+                    self.sock.sendto(payload, addr)
+                except OSError:
+                    pass
+            self._sweep_lost_ducks()
             self._stop_event.wait(period)
+
+    # -- lost-duck watchdog (docs/swarmlink-protocol.md section 4) --
+
+    def _sweep_lost_ducks(self) -> None:
+        """Mark ducks lost after TELEMETRY_LOST_THRESHOLD_S without telemetry.
+
+        Only ducks we have heard telemetry from at least once are tracked
+        (mirrors SwarmMaster.swift's sweepLostDucks, which only walks
+        lastTelemetryNs); a duck we have never heard from simply never
+        appears in last_telemetry, which preflight tooling can already
+        distinguish from "lost".
+        """
+        threshold_ns = int(TELEMETRY_LOST_THRESHOLD_S * 1e9)
+        now_ns = time.monotonic_ns()
+        newly_lost: list[str] = []
+        with self._lock:
+            for duck_id, last_ns in self._last_telemetry_ns.items():
+                if duck_id in self._lost_ducks:
+                    continue
+                if now_ns - last_ns > threshold_ns:
+                    self._lost_ducks.add(duck_id)
+                    newly_lost.append(duck_id)
+        for duck_id in newly_lost:
+            self._emit(f"[lost] {duck_id}: no telemetry for >{TELEMETRY_LOST_THRESHOLD_S:.0f}s")
+
+    def lost_ducks(self) -> list[str]:
+        """Ducks currently lost: no telemetry for >5 s (protocol section 4)."""
+        with self._lock:
+            return sorted(self._lost_ducks)
 
     # -- command send/retry/ack --
 

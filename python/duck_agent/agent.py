@@ -12,12 +12,33 @@ and the project brief:
     without touching the internal FSM value -- the duck is still,
     mechanically, PLAYING.
   * Any robotd problem (a discrete request failing, or the robotd link
-    dropping while ARMED/PLAYING) moves the FSM itself to "fault". From
-    "fault" only `load` and `panic` make progress; `play`/`seek`/`stop`
-    are NACKed until a fresh `load` proves the duck is healthy again.
-    While robotd is disconnected for *any* reason, telemetry also always
-    reports "fault" (even from IDLE/LOADED) so the master's preflight
-    view is never lying about whether this duck can be trusted.
+    dropping while ARMED/PLAYING) moves the FSM itself to "fault" via
+    `_enter_fault`, which also zeroes locomotion and sends `robot.stop`
+    (best-effort; if the link is down the stop is *owed* and re-sent the
+    moment robotd is back). From "fault" only `load` and `panic` make
+    progress; `play`/`seek`/`stop` are NACKed until a fresh `load`
+    proves the duck is healthy again. While robotd is disconnected for
+    *any* reason, telemetry also always reports "fault" (even from
+    IDLE/LOADED) so the master's preflight view is never lying about
+    whether this duck can be trusted.
+
+Show-night rules this module enforces on every exit from PLAYING (end of
+show, `stop`, a fresh `load`/`play`, fault): zero locomotion + `robot.stop`
+and release any held sounds, because robotd is last-value-wins and the
+local socket has no watchdog -- a duck that merely stops *sending*
+intents keeps walking at its last velocity.
+
+Scheduling: `play`/`seek` keep the *master-time* instant and re-derive
+the local start every 50 Hz tick from the current clock offset (the
+500 ms ARMED-phase time sync exists precisely to refine that), and the
+show clock is anchored at the scheduled instant, never at the tick that
+happened to notice it. A `seek` received while PLAYING is a true clock
+jump: the duck keeps performing the old position until the seek instant
+and re-bases then (no ARMED detour, no coasting with a stale velocity).
+
+`panic` resets the FSM synchronously (so the tick loop stops emitting
+immediately), ACKs at once, and performs its `robot.stop` / neutral pose
+from a dedicated thread -- its ACK must never wait on a robotd reply.
 
 This module owns three background threads (UDP receive, time sync,
 telemetry) plus the 50 Hz playback tick thread; `duckshow.Sampler` does
@@ -29,6 +50,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import math
 import socket
 import threading
 import time
@@ -54,6 +76,12 @@ TIME_SYNC_PERIOD_ARMED_S = 0.5
 TELEMETRY_PERIOD_IDLE_S = 1.0
 TELEMETRY_PERIOD_PLAYING_S = 0.2  # 5 Hz
 
+# The time-sync and telemetry loops sleep in short slices and re-evaluate
+# their cadence from the *current* state, so the switch to the ARMED
+# sync rate / the PLAYING telemetry rate lags a state change by at most
+# one slice instead of a whole idle period.
+LOOP_SLICE_S = 0.1
+
 # docs/swarmlink-protocol.md #3, `play`: "already > 0.25s past on arrival"
 # is the late-join threshold; ">= 2s late" is the missed-start cutoff.
 LATE_JOIN_IMMEDIATE_S = 0.25
@@ -63,11 +91,15 @@ LATE_JOIN_MAX_S = 2.0
 # of magnitude as the clock-offset slew (docs/swarmlink-protocol.md #1).
 SHOW_TIME_SLEW_S_PER_S = 0.005  # 5 ms/s
 
+ROBOTD_REQUEST_TIMEOUT_S = 1.0
+
 _MAX_CMD_CACHE = 512
 
 _NEUTRAL_HEAD = {"neck_pitch": 0.0, "head_pitch": 0.0, "head_yaw": 0.0, "head_roll": 0.0}
 _NEUTRAL_POSE = {"z": 0.0, "roll": 0.0, "pitch": 0.0, "active": False}
 _ZERO_MOVE = {"vx": 0.0, "vy": 0.0, "vyaw": 0.0}
+
+_ROBOTD_FAILURES = (RobotdError, RobotdDisconnected, RobotdTimeout)
 
 
 def _sha256_file(path: Path) -> str:
@@ -111,9 +143,14 @@ class DuckAgent:
 
         self.state: str = "idle"  # idle | loaded | armed | playing | fault
 
-        # play/seek scheduling + the running show clock
-        self._scheduled_start_local_ns: Optional[int] = None
+        # play/seek scheduling: the *master-time* instant is kept and the
+        # local start re-derived every tick from the current clock offset.
+        self._scheduled_at_master_ns: Optional[int] = None
         self._scheduled_from_show_time: float = 0.0
+        # seek received while PLAYING: (at_master_ns, target show_time),
+        # applied by the tick loop once the instant arrives.
+        self._pending_seek: Optional[tuple[int, float]] = None
+        # the running show clock
         self._play_epoch_local_ns: Optional[int] = None
         self._play_epoch_show_time: float = 0.0
         self._last_processed_show_time: float = 0.0
@@ -121,7 +158,11 @@ class DuckAgent:
         self._show_time_correction_target_s: float = 0.0
 
         self._playback_lock = threading.RLock()
-        self._pending_sound_timers: list[threading.Timer] = []
+        # tag -> (release timer, identity token) for sounds started with hold
+        self._held_sounds: dict[str, tuple[threading.Timer, object]] = {}
+        # A stop that could not be delivered (link down / request failed)
+        # is re-sent as soon as robotd is reachable again.
+        self._stop_owed: bool = False
 
         self.clock = Clock()
 
@@ -154,10 +195,12 @@ class DuckAgent:
 
     def stop(self) -> None:
         self._stop_event.set()
-        self._cancel_scheduled()
-        self._cancel_pending_sound_timers()
+        with self._playback_lock:
+            self._cancel_scheduled()
+            held = self._take_held_sounds_locked()
         for t in self._threads:
             t.join(timeout=2)
+        self._release_held_sounds(held)
         try:
             self.udp_sock.close()
         except OSError:
@@ -183,6 +226,7 @@ class DuckAgent:
     def _current_show_time(self, now_ns: Optional[int] = None) -> float:
         now_ns = now_ns if now_ns is not None else time.monotonic_ns()
         if self._play_epoch_local_ns is None:
+            # ARMED: `_arm` parks this at the scheduled from_show_time.
             return self._play_epoch_show_time
         raw = self._play_epoch_show_time + (now_ns - self._play_epoch_local_ns) / 1e9
         return raw + self._show_time_correction_s
@@ -213,12 +257,70 @@ class DuckAgent:
     def _on_robotd_state_change(self, connected: bool) -> None:
         if connected:
             logger.info("%s: robotd reconnected", self.duck_id)
+            with self._playback_lock:
+                owed = self._stop_owed or self.state == "fault"
+            if owed:
+                # The link came back after a fault/failed stop: robotd may
+                # still be executing the last velocity we ever sent it.
+                self._send_stop_sequence()
+                self._notify_neutral()
             return
+        if self._stop_event.is_set():
+            return  # our own shutdown closing the link, not a robotd failure
         logger.warning("%s: robotd disconnected", self.duck_id)
+        self._enter_fault("robotd disconnected")
+
+    # -- robotd helpers ------------------------------------------------------
+
+    def _send_stop_sequence(self, timeout: float = ROBOTD_REQUEST_TIMEOUT_S) -> Optional[str]:
+        """Zero locomotion, then `robot.stop`. Returns None on success or
+        the error text on failure; a failed stop is remembered as owed so
+        `_on_robotd_state_change(True)` re-sends it.
+        """
+        try:
+            self.robotd.notify("robot.move", dict(_ZERO_MOVE))
+            self.robotd.request("robot.stop", {}, timeout=timeout)
+        except _ROBOTD_FAILURES as exc:
+            with self._playback_lock:
+                self._stop_owed = True
+            return str(exc)
         with self._playback_lock:
-            if self.state in ("armed", "playing"):
-                self.state = "fault"
-                self.last_error = "robotd disconnected"
+            self._stop_owed = False
+        return None
+
+    def _notify_neutral(self) -> None:
+        try:
+            self.robotd.notify("robot.head", dict(_NEUTRAL_HEAD))
+            self.robotd.notify("robot.pose", dict(_NEUTRAL_POSE))
+        except RobotdDisconnected as exc:
+            logger.warning("%s: neutral head/pose notify failed: %s", self.duck_id, exc)
+
+    def _fault_locked(self, reason: str) -> None:
+        """FSM side of entering FAULT; caller holds _playback_lock."""
+        self._cancel_scheduled()
+        self._play_epoch_local_ns = None
+        self.state = "fault"
+        self.last_error = reason
+
+    def _enter_fault(self, reason: str) -> None:
+        """docs/swarmlink-protocol.md #5: "Any robotd error -> FAULT:
+        robot.stop, report last_error". Only ARMED/PLAYING can fault (a
+        duck that is idle/loaded has nothing in motion to protect); the
+        stop is best-effort and owed if robotd is unreachable.
+        """
+        with self._playback_lock:
+            if self.state not in ("armed", "playing"):
+                return
+            held = self._take_held_sounds_locked()
+            self._fault_locked(reason)
+        logger.warning("%s: entering fault: %s", self.duck_id, reason)
+        if not self.robotd.connected:
+            with self._playback_lock:
+                self._stop_owed = True
+            return
+        self._send_stop_sequence()
+        self._notify_neutral()
+        self._release_held_sounds(held)
 
     # -- UDP receive loop -------------------------------------------------
 
@@ -272,18 +374,28 @@ class DuckAgent:
         stamped with) and slew out any difference. This never *steps*
         the show clock -- only `play`/`seek` commands do that -- it just
         nudges the rate so small drift doesn't accumulate.
+
+        Only a master that is itself `playing` the same show carries a
+        meaningful show_time (while it is armed for a play/seek the value
+        is static), so anything else is ignored.
         """
         self._set_master_addr(addr)
-        if self.state != "playing":
+        transport = msg.get("transport")
+        if transport is not None and transport != "playing":
             return
         show_time = msg.get("show_time")
         master_time = msg.get("master_time")
         if show_time is None or master_time is None:
             return
+        master_show = msg.get("show")
         now_ns = time.monotonic_ns()
         est_master_now = self.clock.estimated_master_time(now_ns)
         predicted_show_time = float(show_time) + (est_master_now - int(master_time)) / 1e9
         with self._playback_lock:
+            if self.state != "playing" or self._pending_seek is not None:
+                return
+            if master_show is not None and self.show_id is not None and master_show != self.show_id:
+                return
             local_show_time = self._current_show_time(now_ns) - self._show_time_correction_s
             self._show_time_correction_target_s = predicted_show_time - local_show_time
 
@@ -291,6 +403,11 @@ class DuckAgent:
 
     def _handle_cmd_message(self, msg: dict[str, Any], addr: tuple[str, int]) -> None:
         self._set_master_addr(addr)
+        if self.clock.sample_count() == 0:
+            # No sync yet (first contact, or the first time_resp was
+            # lost): ask right away so a `play` that follows this `load`
+            # finds an offset instead of being NACKed "no time sync yet".
+            self._send_time_req()
         cmd_id = msg.get("cmd_id")
         cmd = msg.get("cmd")
         if not cmd_id or not cmd:
@@ -361,13 +478,18 @@ class DuckAgent:
         expected_sha256 = fields.get("sha256")
         if not show_id or not role:
             return False, "load command missing show or role"
+        if not isinstance(expected_sha256, str) or not expected_sha256:
+            # The hash check is what makes out-of-band show distribution
+            # safe (swarmlink-protocol.md #3); a load without one cannot
+            # prove every duck holds the same revision.
+            return False, "load command missing sha256"
 
         path = self._resolve_show_path(show_id)
         if path is None:
             return False, f"show file not found for id {show_id!r}"
 
         actual_sha256 = _sha256_file(path)
-        if expected_sha256 and actual_sha256 != expected_sha256:
+        if actual_sha256 != expected_sha256:
             return False, f"sha256 mismatch for show {show_id!r}"
 
         try:
@@ -384,8 +506,18 @@ class DuckAgent:
             extra = f" (+{len(errors) - 1} more)" if len(errors) > 1 else ""
             return False, f"validation failed: {errors[0].message}{extra}"
 
+        # meta.duration is the only end-of-show trigger (duckshow-format.md:
+        # "playback ends here regardless of track contents"); without it a
+        # show would hold its last locomotion keyframe forever.
+        duration = show.meta.duration
+        if duration is None or not duration > 0:
+            return False, "meta.duration missing or not positive"
+
         policies_ok, policy_error = self._check_policies(show)
         if not policies_ok:
+            with self._playback_lock:
+                self.policies_ok = False
+                self.last_error = policy_error
             return False, policy_error
 
         try:
@@ -394,44 +526,84 @@ class DuckAgent:
         except Exception as exc:  # noqa: BLE001 -- any sampler failure NACKs the load
             return False, f"sample-check failed: {exc}"
 
-        with self._playback_lock:
-            self._cancel_scheduled()
-            self._cancel_pending_sound_timers()
-            self.show = show
-            self.show_id = show_id
-            self.show_path = path
-            self.role = role
-            self.sampler = sampler
-            self.policies_ok = True
-            self.current_mode = None
-            self._play_epoch_local_ns = None
-            self._play_epoch_show_time = 0.0
-            self._last_processed_show_time = 0.0
-            self._show_time_correction_s = 0.0
-            self._show_time_correction_target_s = 0.0
-            self.state = "loaded"
-            self.last_error = None
+        held: list[str] = []
+        try:
+            with self._playback_lock:
+                self._cancel_scheduled()
+                held = self._take_held_sounds_locked()
+                if self.state in ("armed", "playing"):
+                    # Leaving PLAYING by any route zeroes locomotion and
+                    # sends robot.stop -- robotd would otherwise keep the
+                    # last velocity of the show we are replacing.
+                    err = self._send_stop_sequence()
+                    if err is not None:
+                        self._fault_locked(f"stop failed: {err}")
+                        return False, f"load rejected: {self.last_error}"
+                self.show = show
+                self.show_id = show_id
+                self.show_path = path
+                self.role = role
+                self.sampler = sampler
+                self.policies_ok = True
+                self.current_mode = None
+                self._play_epoch_local_ns = None
+                self._play_epoch_show_time = 0.0
+                self._last_processed_show_time = 0.0
+                self._show_time_correction_s = 0.0
+                self._show_time_correction_target_s = 0.0
+                self.state = "loaded"
+                self.last_error = None
+        finally:
+            self._release_held_sounds(held)
         return True, None
 
     # -- play / seek scheduling --------------------------------------------
 
     def _cancel_scheduled(self) -> None:
-        self._scheduled_start_local_ns = None
+        self._scheduled_at_master_ns = None
+        self._pending_seek = None
 
-    def _arm(self, local_start_ns: int, from_show_time: float) -> None:
+    def _arm(self, at_master_ns: int, from_show_time: float) -> None:
         self.state = "armed"
-        self._scheduled_start_local_ns = local_start_ns
+        self._scheduled_at_master_ns = at_master_ns
         self._scheduled_from_show_time = from_show_time
+        self._pending_seek = None
+        self._play_epoch_local_ns = None
+        self._play_epoch_show_time = from_show_time  # telemetry show_time while ARMED
+        self._show_time_correction_s = 0.0
+        self._show_time_correction_target_s = 0.0
 
-    def _start_playing_now(self, show_time: float, now_ns: int) -> None:
-        self._scheduled_start_local_ns = None
-        self._play_epoch_local_ns = now_ns
+    def _start_playing_now(self, show_time: float, epoch_local_ns: int) -> None:
+        """Anchor the show clock: show_time == `show_time` at local instant
+        `epoch_local_ns` (the *scheduled* instant, which may already be a
+        little in the past -- the first tick then lands at the correct
+        elapsed show time instead of restarting the clock at 'now').
+        """
+        self._scheduled_at_master_ns = None
+        self._pending_seek = None
+        self._play_epoch_local_ns = epoch_local_ns
         self._play_epoch_show_time = show_time
-        self._last_processed_show_time = show_time
+        # Open-left event window (sampler.events_between is (t0, t1]):
+        # seed strictly below the start so an event exactly *at* the
+        # start instant fires on the first tick (duckshow-format.md:
+        # "at the first 50 Hz tick >= t"), while earlier ones stay skipped.
+        self._last_processed_show_time = math.nextafter(show_time, -math.inf)
         self._show_time_correction_s = 0.0
         self._show_time_correction_target_s = 0.0
         self.state = "playing"
         self._apply_mode_for_show_time(show_time)
+
+    def _begin_playback(self, show_time: float, local_start_ns: int, now_ns: int) -> None:
+        """Start (or re-base, for seek) playback whose scheduled local
+        instant is `local_start_ns`. Within the 0.25 s 'on time' window the
+        clock is anchored at that instant; beyond it we join in progress at
+        the correct point (events in the gap are skipped, never replayed).
+        """
+        late_s = (now_ns - local_start_ns) / 1e9
+        if late_s <= LATE_JOIN_IMMEDIATE_S:
+            self._start_playing_now(show_time, local_start_ns)
+        else:
+            self._start_playing_now(show_time + late_s, now_ns)
 
     def _apply_mode_for_show_time(self, show_time: float) -> None:
         if self.sampler is None:
@@ -440,98 +612,120 @@ class DuckAgent:
         if mode is None or mode == self.current_mode:
             return
         try:
-            self.robotd.request("robot.setMode", {"mode": mode}, timeout=1.0)
+            self.robotd.request("robot.setMode", {"mode": mode}, timeout=ROBOTD_REQUEST_TIMEOUT_S)
             self.current_mode = mode
-        except (RobotdError, RobotdDisconnected, RobotdTimeout) as exc:
+        except _ROBOTD_FAILURES as exc:
             logger.warning("%s: setMode(%s) failed: %s", self.duck_id, mode, exc)
-            self.state = "fault"
-            self.last_error = f"setMode failed: {exc}"
+            self._enter_fault(f"setMode failed: {exc}")
 
     def _handle_play(self, fields: dict[str, Any]) -> tuple[bool, Optional[str]]:
-        if self.state == "fault":
-            return False, "duck is in fault state; reload required"
-        if self.show_id is None or fields.get("show") != self.show_id:
-            return False, f"show {fields.get('show')!r} not loaded"
         at_master_time = fields.get("at_master_time")
         if at_master_time is None:
             return False, "play command missing at_master_time"
         from_show_time = float(fields.get("from_show_time", 0.0))
 
-        now_ns = time.monotonic_ns()
-        local_start_ns = self.clock.local_time_for_master(int(at_master_time))
-        late_s = (now_ns - local_start_ns) / 1e9
+        # Use the freshest sample rather than whatever the last tick applied.
+        self.clock.update_applied_offset(playing=(self.state == "playing"))
 
-        with self._playback_lock:
-            self._cancel_scheduled()
-            if late_s <= LATE_JOIN_IMMEDIATE_S:
-                # On time (or early): arm normally, start exactly at from_show_time.
-                self._arm(local_start_ns, from_show_time)
+        held: list[str] = []
+        try:
+            with self._playback_lock:
+                if self.state == "fault":
+                    return False, "duck is in fault state; reload required"
+                if not self.robotd.connected:
+                    return False, "robotd not connected"
+                if self.show_id is None or fields.get("show") != self.show_id:
+                    return False, f"show {fields.get('show')!r} not loaded"
+                if self.clock.sample_count() == 0:
+                    # An offset of exactly 0.0 is not an estimate, it is the
+                    # absence of one; scheduling against it would be a
+                    # start at a random point of the master's uptime.
+                    return False, "no time sync yet"
+
+                now_ns = time.monotonic_ns()
+                local_start_ns = self.clock.local_time_for_master(int(at_master_time))
+                late_s = (now_ns - local_start_ns) / 1e9
+                if late_s >= LATE_JOIN_MAX_S:
+                    # >= 2s late: never improvise to catch up. Stay put
+                    # (an ARMED schedule or a running performance is left
+                    # untouched) and report missed_start.
+                    if self.state != "playing":
+                        self.last_error = "missed_start"
+                    return False, "missed_start"
+
+                self._cancel_scheduled()
+                held = self._take_held_sounds_locked()
+                if self.state in ("armed", "playing"):
+                    err = self._send_stop_sequence()
+                    if err is not None:
+                        self._fault_locked(f"stop failed: {err}")
+                        return False, f"play rejected: {self.last_error}"
+                # Arm on the master-time instant; the tick loop re-derives
+                # the local start from the live offset and starts exactly
+                # at (or, within the grace windows, correctly after) it.
+                self._arm(int(at_master_time), from_show_time)
                 self.last_error = None
-            elif late_s < LATE_JOIN_MAX_S:
-                # Late join within grace: seek straight into the right point.
-                self._start_playing_now(from_show_time + late_s, now_ns)
-                self.last_error = None
-            else:
-                # >= 2s late: never improvise to catch up. Sit this one out.
-                self.last_error = "missed_start"
+        finally:
+            self._release_held_sounds(held)
         return True, None
 
     def _handle_seek(self, fields: dict[str, Any]) -> tuple[bool, Optional[str]]:
-        if self.state == "fault":
-            return False, "duck is in fault state; reload required"
-        if self.state not in ("armed", "playing"):
-            return False, "cannot seek: not armed or playing"
         show_time = fields.get("show_time")
         at_master_time = fields.get("at_master_time")
         if show_time is None or at_master_time is None:
             return False, "seek command missing show_time or at_master_time"
 
-        now_ns = time.monotonic_ns()
-        local_target_ns = self.clock.local_time_for_master(int(at_master_time))
+        self.clock.update_applied_offset(playing=(self.state == "playing"))
 
         with self._playback_lock:
-            self._cancel_scheduled()
-            if local_target_ns <= now_ns:
-                self._start_playing_now(float(show_time), now_ns)
+            if self.state == "fault":
+                return False, "duck is in fault state; reload required"
+            if not self.robotd.connected:
+                return False, "robotd not connected"
+            if self.state not in ("armed", "playing"):
+                return False, "cannot seek: not armed or playing"
+            if self.clock.sample_count() == 0:
+                return False, "no time sync yet"
+            if self.state == "armed":
+                self._arm(int(at_master_time), float(show_time))
             else:
-                self._arm(local_target_ns, float(show_time))
+                # Keep performing until the seek instant, then jump
+                # (_play_tick); the duck never coasts on a stale velocity.
+                self._pending_seek = (int(at_master_time), float(show_time))
             self.last_error = None
         return True, None
 
     def _handle_stop(self, fields: dict[str, Any]) -> tuple[bool, Optional[str]]:
-        if self.state == "fault":
-            return False, "duck is in fault state; reload required"
+        error: Optional[str] = None
         with self._playback_lock:
+            if self.state == "fault":
+                return False, "duck is in fault state; reload required"
             self._cancel_scheduled()
-            self._cancel_pending_sound_timers()
+            held = self._take_held_sounds_locked()
             if self.state in ("armed", "playing"):
-                try:
-                    self.robotd.notify("robot.move", dict(_ZERO_MOVE))
-                    self.robotd.request("robot.stop", {}, timeout=1.0)
-                except (RobotdError, RobotdDisconnected, RobotdTimeout) as exc:
-                    self.state = "fault"
-                    self.last_error = f"stop failed: {exc}"
-                    return False, self.last_error
-                self.state = "loaded" if self.show is not None else "idle"
+                err = self._send_stop_sequence()
+                if err is not None:
+                    self._fault_locked(f"stop failed: {err}")
+                    error = self.last_error
+                else:
+                    self.state = "loaded" if self.show is not None else "idle"
             self._play_epoch_local_ns = None
+            self._play_epoch_show_time = 0.0
+        self._release_held_sounds(held)
+        if error is not None:
+            return False, error
         return True, None
 
     def _handle_panic(self, fields: dict[str, Any]) -> tuple[bool, Optional[str]]:
         # "Never NACKed" (swarmlink-protocol.md #3): always ACK true, even
-        # if the robotd calls below fail -- panic's job is to get the FSM
-        # back to a known-safe IDLE, which it does unconditionally.
+        # if the robotd calls fail -- panic's job is to get the FSM back
+        # to a known-safe IDLE, which it does unconditionally and
+        # synchronously (the tick loop stops emitting the moment the
+        # state flips). The robotd side runs on its own thread so the
+        # ACK never waits on a robotd reply (or on a hung one).
         with self._playback_lock:
             self._cancel_scheduled()
-            self._cancel_pending_sound_timers()
-            try:
-                self.robotd.request("robot.stop", {}, timeout=1.0)
-            except (RobotdError, RobotdDisconnected, RobotdTimeout) as exc:
-                logger.warning("%s: panic robot.stop failed: %s", self.duck_id, exc)
-            try:
-                self.robotd.notify("robot.head", dict(_NEUTRAL_HEAD))
-                self.robotd.notify("robot.pose", dict(_NEUTRAL_POSE))
-            except RobotdDisconnected as exc:
-                logger.warning("%s: panic neutral notify failed: %s", self.duck_id, exc)
+            held = self._take_held_sounds_locked()
             self.state = "idle"
             self.show = None
             self.show_id = None
@@ -540,29 +734,86 @@ class DuckAgent:
             self.sampler = None
             self.current_mode = None
             self._play_epoch_local_ns = None
+            self._play_epoch_show_time = 0.0
             self.last_error = None
+            # Zero locomotion right here, under the lock: a notification
+            # never waits on a reply, and ordering it after the FSM reset
+            # makes it provably the last robot.move robotd sees from us.
+            try:
+                self.robotd.notify("robot.move", dict(_ZERO_MOVE))
+            except RobotdDisconnected:
+                pass  # the owed stop below covers it once the link is back
+        threading.Thread(
+            target=self._execute_panic, args=(held,), daemon=True, name=f"{self.duck_id}-panic"
+        ).start()
         return True, None
+
+    def _execute_panic(self, held: list[str]) -> None:
+        try:
+            self.robotd.request("robot.stop", {}, timeout=ROBOTD_REQUEST_TIMEOUT_S)
+            with self._playback_lock:
+                self._stop_owed = False
+        except _ROBOTD_FAILURES as exc:
+            logger.warning("%s: panic robot.stop failed: %s", self.duck_id, exc)
+            with self._playback_lock:
+                self._stop_owed = True
+        self._notify_neutral()
+        self._release_held_sounds(held)
 
     # -- sound hold/release ------------------------------------------------
 
-    def _cancel_pending_sound_timers(self) -> None:
-        timers, self._pending_sound_timers = self._pending_sound_timers, []
-        for t in timers:
-            t.cancel()
+    def _register_held_sound_locked(self, tag: str, hold_s: float) -> None:
+        old = self._held_sounds.pop(tag, None)
+        if old is not None:
+            old[0].cancel()
+        token = object()
+        timer = threading.Timer(hold_s, self._release_sound, args=(tag, token))
+        timer.daemon = True
+        self._held_sounds[tag] = (timer, token)
+        timer.start()
 
-    def _release_sound(self, tag: str) -> None:
+    def _take_held_sounds_locked(self) -> list[str]:
+        """Cancel every pending release timer and hand back the tags that
+        are still sounding -- the caller must release them (a cancelled
+        timer alone would leave the loop running forever).
+        """
+        held, self._held_sounds = self._held_sounds, {}
+        for timer, _token in held.values():
+            timer.cancel()
+        return list(held.keys())
+
+    def _release_sound(self, tag: str, token: object) -> None:
+        with self._playback_lock:
+            entry = self._held_sounds.get(tag)
+            if entry is None or entry[1] is not token:
+                return  # already released (stop/panic/load) or re-held since
+            del self._held_sounds[tag]
+        self._send_sound_release(tag)
+
+    def _send_sound_release(self, tag: str) -> None:
         try:
-            self.robotd.request("robot.sound", {"tag": tag, "hold": False}, timeout=1.0)
-        except (RobotdError, RobotdDisconnected, RobotdTimeout) as exc:
+            self.robotd.request("robot.sound", {"tag": tag, "hold": False}, timeout=ROBOTD_REQUEST_TIMEOUT_S)
+        except _ROBOTD_FAILURES as exc:
             logger.warning("%s: release sound %r failed: %s", self.duck_id, tag, exc)
+
+    def _release_held_sounds(self, tags: list[str]) -> None:
+        for tag in tags:
+            self._send_sound_release(tag)
 
     # -- event firing ----------------------------------------------------
 
     def _fire_event(self, event: duckshow.Event) -> None:
+        """Runs on the tick thread *without* _playback_lock held across
+        the (blocking) robotd request, so a slow discrete call never
+        delays panic/stop. State is re-checked under the lock first.
+        """
         kind = event.action_kind()
+        with self._playback_lock:
+            if self.state != "playing":
+                return  # stop/panic/fault intervened since this tick was planned
         try:
             if kind == "do":
-                self.robotd.request("robot.do", {"skill": event.do}, timeout=1.0)
+                self.robotd.request("robot.do", {"skill": event.do}, timeout=ROBOTD_REQUEST_TIMEOUT_S)
             elif kind == "sound":
                 # duckshow-format.md's event `hold` is a *duration in
                 # seconds*; robotd-api.md's robot.sound `hold` is a
@@ -571,20 +822,24 @@ class DuckAgent:
                 # immediately, and a timer fires the release (hold=false)
                 # after `hold` seconds of real time.
                 if event.hold is not None:
-                    self.robotd.request("robot.sound", {"tag": event.sound, "hold": True}, timeout=1.0)
-                    timer = threading.Timer(event.hold, self._release_sound, args=(event.sound,))
-                    timer.daemon = True
-                    self._pending_sound_timers.append(timer)
-                    timer.start()
+                    self.robotd.request(
+                        "robot.sound", {"tag": event.sound, "hold": True}, timeout=ROBOTD_REQUEST_TIMEOUT_S
+                    )
+                    with self._playback_lock:
+                        if self.state == "playing":
+                            self._register_held_sound_locked(event.sound, event.hold)
+                            return
+                    # Playback ended while the sound was starting.
+                    self._send_sound_release(event.sound)
                 else:
-                    self.robotd.request("robot.sound", {"tag": event.sound}, timeout=1.0)
+                    self.robotd.request("robot.sound", {"tag": event.sound}, timeout=ROBOTD_REQUEST_TIMEOUT_S)
             elif kind == "mode":
-                self.robotd.request("robot.setMode", {"mode": event.mode}, timeout=1.0)
-                self.current_mode = event.mode
-        except (RobotdError, RobotdDisconnected, RobotdTimeout) as exc:
+                self.robotd.request("robot.setMode", {"mode": event.mode}, timeout=ROBOTD_REQUEST_TIMEOUT_S)
+                with self._playback_lock:
+                    self.current_mode = event.mode
+        except _ROBOTD_FAILURES as exc:
             logger.warning("%s: event %s at t=%s failed: %s", self.duck_id, kind, event.t, exc)
-            self.state = "fault"
-            self.last_error = f"event {kind} failed: {exc}"
+            self._enter_fault(f"event {kind} failed: {exc}")
 
     # -- 50 Hz playback tick loop ------------------------------------------
 
@@ -597,6 +852,8 @@ class DuckAgent:
 
             self.clock.update_applied_offset(playing=(self.state == "playing"), now_ns=now_ns)
 
+            events: list[duckshow.Event] = []
+            end_of_show = False
             with self._playback_lock:
                 self._show_time_correction_s = slew_towards(
                     self._show_time_correction_s,
@@ -607,16 +864,53 @@ class DuckAgent:
                 if self.state == "armed":
                     self._maybe_start_from_armed(now_ns)
                 if self.state == "playing":
-                    self._play_tick(now_ns)
+                    events, end_of_show = self._play_tick(now_ns)
+
+            # Discrete robotd requests happen outside the lock.
+            for event in events:
+                self._fire_event(event)
+            if end_of_show:
+                self._end_of_show()
 
             self._stop_event.wait(TICK_PERIOD_S)
 
     def _maybe_start_from_armed(self, now_ns: int) -> None:
-        if self._scheduled_start_local_ns is not None and now_ns >= self._scheduled_start_local_ns:
-            self._start_playing_now(self._scheduled_from_show_time, now_ns)
+        if self._scheduled_at_master_ns is None:
+            return
+        # Re-derived every tick: the clock steps to the refined offset
+        # while ARMED, so the start tracks the best estimate up to the
+        # instant it fires.
+        local_start_ns = self.clock.local_time_for_master(self._scheduled_at_master_ns)
+        if now_ns < local_start_ns:
+            return
+        late_s = (now_ns - local_start_ns) / 1e9
+        if late_s >= LATE_JOIN_MAX_S:
+            # The offset moved under us by seconds (or we were asleep):
+            # never improvise to catch up. Sit this one out.
+            logger.warning("%s: scheduled start is %.2fs in the past; sitting out", self.duck_id, late_s)
+            self._cancel_scheduled()
+            self._play_epoch_show_time = 0.0
+            self.state = "loaded"
+            self.last_error = "missed_start"
+            return
+        self._begin_playback(self._scheduled_from_show_time, local_start_ns, now_ns)
 
-    def _play_tick(self, now_ns: int) -> None:
+    def _play_tick(self, now_ns: int) -> tuple[list[duckshow.Event], bool]:
+        """Emit this tick's continuous intents; return the discrete events
+        that became due and whether the show just ended (both handled by
+        the caller after releasing _playback_lock).
+        """
         assert self.sampler is not None
+
+        if self._pending_seek is not None:
+            at_master_ns, target_show_time = self._pending_seek
+            target_local_ns = self.clock.local_time_for_master(at_master_ns)
+            if now_ns >= target_local_ns:
+                self._pending_seek = None
+                self._begin_playback(target_show_time, target_local_ns, now_ns)
+                if self.state != "playing":
+                    return [], False  # setMode at the seek point faulted us
+
         show_time = self._current_show_time(now_ns)
         duration = self.sampler.show.meta.duration
 
@@ -640,32 +934,45 @@ class DuckAgent:
             if frame.mouth is not None:
                 self.robotd.notify("robot.mouth", {"open": frame.mouth.open})
         except RobotdDisconnected:
-            pass  # playback pauses intent emission while disconnected; telemetry reports "fault"
+            # The link is gone mid-number: this is terminal for the number
+            # (a duck never resumes into the middle of it when robotd
+            # returns); the stop is owed and sent on reconnect.
+            self._enter_fault("robotd disconnected")
+            return [], False
 
-        for event in self.sampler.events_between(self._last_processed_show_time, show_time):
-            self._fire_event(event)
+        events = self.sampler.events_between(self._last_processed_show_time, show_time)
         self._last_processed_show_time = show_time
 
-        if duration is not None and show_time >= duration:
-            self._end_of_show()
+        return events, (duration is not None and show_time >= duration)
 
     def _end_of_show(self) -> None:
-        self._cancel_pending_sound_timers()
-        try:
-            self.robotd.notify("robot.move", dict(_ZERO_MOVE))
-            self.robotd.request("robot.stop", {}, timeout=1.0)
-        except (RobotdError, RobotdDisconnected, RobotdTimeout) as exc:
-            logger.warning("%s: end-of-show robot.stop failed: %s", self.duck_id, exc)
-        self._play_epoch_local_ns = None
-        self.state = "loaded"
+        with self._playback_lock:
+            if self.state != "playing":
+                return  # an event failure / stop / panic already handled the exit
+            held = self._take_held_sounds_locked()
+            err = self._send_stop_sequence()
+            if err is not None:
+                # Any robotd error -> FAULT, reported -- never a silent
+                # "loaded" for a duck whose robotd never acknowledged the stop.
+                logger.warning("%s: end-of-show robot.stop failed: %s", self.duck_id, err)
+                self._fault_locked(f"end-of-show stop failed: {err}")
+            else:
+                self._play_epoch_local_ns = None
+                self._play_epoch_show_time = 0.0
+                self.state = "loaded"
+        self._release_held_sounds(held)
 
     # -- time sync / telemetry sender loops --------------------------------
 
     def _time_sync_loop(self) -> None:
+        last_sent: Optional[float] = None
         while not self._stop_event.is_set():
-            self._send_time_req()
+            now = time.monotonic()
             period = TIME_SYNC_PERIOD_ARMED_S if self.state == "armed" else TIME_SYNC_PERIOD_S
-            self._stop_event.wait(period)
+            if last_sent is None or now - last_sent >= period:
+                self._send_time_req()
+                last_sent = now
+            self._stop_event.wait(LOOP_SLICE_S)
 
     def _send_time_req(self) -> None:
         addr = self.master_addr
@@ -678,10 +985,14 @@ class DuckAgent:
             pass
 
     def _telemetry_loop(self) -> None:
+        last_sent: Optional[float] = None
         while not self._stop_event.is_set():
-            self._send_telemetry()
+            now = time.monotonic()
             period = TELEMETRY_PERIOD_PLAYING_S if self.state == "playing" else TELEMETRY_PERIOD_IDLE_S
-            self._stop_event.wait(period)
+            if last_sent is None or now - last_sent >= period:
+                self._send_telemetry()
+                last_sent = now
+            self._stop_event.wait(LOOP_SLICE_S)
 
     def _send_telemetry(self) -> None:
         addr = self.master_addr

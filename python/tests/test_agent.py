@@ -251,6 +251,20 @@ class DuckAgentIntegrationTest(unittest.TestCase):
             time.sleep(0.02)
         return False
 
+    def _wait_for_connected(self, timeout: float = 3.0) -> bool:
+        # `robotd.connected` flips only after the agent's reader thread has
+        # received and parsed the hello *reply* -- three thread handoffs
+        # after FakeRobotd has merely recorded the hello line it was sent.
+        # Polling this (rather than asserting immediately once the hello
+        # shows up in FakeRobotd._received) avoids a real, reproducible
+        # TOCTOU race on a loaded/descheduled CI runner (F65).
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if self.agent.robotd.connected:
+                return True
+            time.sleep(0.01)
+        return self.agent.robotd.connected
+
     def _load_demo_show(self, role: str = "lead") -> tuple[str, dict]:
         cmd_id = self.master.send_cmd(self.agent_addr, "load", show="demo", sha256=DEMO_SHA256, role=role)
         acks = self.master.wait_for_ack(cmd_id)
@@ -263,7 +277,8 @@ class DuckAgentIntegrationTest(unittest.TestCase):
         hellos = self.robotd.wait_for_method("hello")
         self.assertEqual(len(hellos), 1)
         self.assertEqual(hellos[0]["params"], {"api_version": 16})
-        self.assertTrue(self.agent.robotd.connected)
+        self.assertTrue(self._wait_for_connected(), "agent.robotd.connected never became true")
+        self.assertEqual(self.agent.robotd.hello_reply["api_version"], 16)
 
     # -- load --------------------------------------------------------------
 

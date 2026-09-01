@@ -1,0 +1,11 @@
+{
+  "format": "duckshow/1",
+  "meta": { "name": "Fixture: vx exceeds the validation limit", "duration": 10.0 },
+  "requires": { "policies": [] },
+  "cast": [ { "role": "lead" } ],
+  "tracks": {
+    "lead": {
+      "locomotion": [ { "t": 0.0, "vx": 0.5 } ]
+    }
+  }
+}

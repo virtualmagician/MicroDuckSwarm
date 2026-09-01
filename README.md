@@ -1,5 +1,7 @@
 # MicroDuckSwarm
 
+[![CI](https://github.com/virtualmagician/MicroDuckSwarm/actions/workflows/ci.yml/badge.svg)](https://github.com/virtualmagician/MicroDuckSwarm/actions/workflows/ci.yml)
+
 Choreography authoring and playback for a flock of [Pollen Robotics MicroDucks](https://pollen-robotics.com/microduck/) — synchronized to music and video, built for live keynote stages.
 
 A duck show is authored once, compiled to a `.duckshow` file, and pre-loaded onto every duck. On show night the WiFi carries only a shared clock, start/stop triggers, and telemetry — each duck performs its part locally at 50 Hz against MicroDuck's `robotd` daemon, so a network dropout mid-number costs nothing. The pattern is borrowed from drone light shows and Disney's BDX droids: **pre-load the show, sync only clocks, never stream the performance.**
@@ -50,7 +52,7 @@ cd python && python -m pytest 2>/dev/null || python -m unittest discover -s test
 cd SwarmLink && swift build && swift test
 ```
 
-Zero third-party dependencies (Network.framework for UDP). Designed to embed into [StageWizard](https://github.com/virtualmagician/StageWizard) as a `robotShow` cue type, with `swarmctl` as the standalone CLI for rigs that trigger over OSC instead.
+Zero third-party dependencies (Network.framework for UDP). `swarmctl` is the standalone show-master CLI; an OSC facade for external rigs is next. Embedding into [StageWizard](https://github.com/virtualmagician/StageWizard) as a `robotShow` cue type is planned once hardware is in hand.
 
 ## License
 

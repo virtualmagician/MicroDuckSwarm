@@ -1,0 +1,11 @@
+{
+  "format": "duckshow/1",
+  "meta": { "name": "Fixture: events out of time order", "duration": 10.0 },
+  "requires": { "policies": [] },
+  "cast": [ { "role": "lead" } ],
+  "tracks": {
+    "lead": {
+      "events": [ { "t": 2.0, "sound": "chirp" }, { "t": 1.0, "sound": "coo" } ]
+    }
+  }
+}

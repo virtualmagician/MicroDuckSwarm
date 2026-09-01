@@ -145,6 +145,12 @@ class RobotdClient:
                 self._stop_event.wait(backoff)
                 backoff = min(backoff * 2, self.backoff_max)
                 continue
+            except Exception:  # noqa: BLE001 -- the reconnect loop must never die on show night
+                logger.exception("robotd connector to %s raised; retrying in %.2fs", self.target, backoff)
+                self._close_socket()
+                self._stop_event.wait(backoff)
+                backoff = min(backoff * 2, self.backoff_max)
+                continue
 
             # _connect_once only returns once the reader thread has exited
             # (EOF or a socket error), i.e. the connection dropped.
@@ -182,11 +188,25 @@ class RobotdClient:
             reply = self._raw_request("hello", {"api_version": API_VERSION}, timeout=self.connect_timeout)
             self.hello_reply = reply
             logger.info("robotd hello reply: %s", reply)
-        except (RobotdTimeout, RobotdError, OSError) as exc:
+        except (RobotdTimeout, RobotdError, RobotdDisconnected, OSError) as exc:
+            # RobotdDisconnected is what _write_line raises when the peer
+            # accepts and immediately drops the connection (EPIPE, or the
+            # reader's EOF nulling the socket first) -- it must feed the
+            # same reconnect/backoff path as any other failed handshake.
             logger.warning("robotd hello handshake failed: %s", exc)
             self._close_socket()
             reader_thread.join(timeout=2)
             raise OSError(str(exc)) from exc
+
+        daemon_api = reply.get("api_version") if isinstance(reply, dict) else None
+        if daemon_api != API_VERSION:
+            # docs/robotd-api.md: "Version mismatch is reported, not refused."
+            logger.warning(
+                "robotd api_version %s != expected %s (daemon_version=%s); proceeding, expect method/param mismatches",
+                daemon_api,
+                API_VERSION,
+                reply.get("daemon_version") if isinstance(reply, dict) else None,
+            )
 
         self._set_connected(True)
 
@@ -230,12 +250,16 @@ class RobotdClient:
                 sock.close()
             except OSError:
                 pass
-        # Wake up anyone blocked in request() with a disconnect.
+        # Wake up anyone blocked in request() with a disconnect. Done
+        # entirely under _id_lock so it cannot race _raw_request's cleanup
+        # (a timed-out waiter popping its id) or a second concurrent
+        # closer: only ids that are *still* pending get a reply injected.
         with self._id_lock:
-            pending_ids = list(self._pending.keys())
-        for mid in pending_ids:
-            self._replies[mid] = {"error": {"code": -1, "message": "disconnected"}}
-            self._pending[mid].set()
+            pending = list(self._pending.items())
+            self._pending.clear()
+            for mid, event in pending:
+                self._replies[mid] = {"error": {"code": -1, "message": "disconnected"}}
+                event.set()
 
     # -- reader loop ---------------------------------------------------------
 

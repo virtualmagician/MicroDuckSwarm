@@ -1,0 +1,37 @@
+{
+  "_comment": "Expected python/duckshow validate() results for the fixtures in this directory (python/duckshow is the canonical validator -- docs/architecture.md, CLAUDE.md). Loaded by python/tests/test_validator.py and (for the subset that also fully matches spec in Swift today) SwarmLink/Tests/SwarmLinkTests/DuckShowFixtureTests.swift. See F67 for the two fixtures (prefixed 'divergent-'/tracked separately) where SwarmLink's Show.validate() currently disagrees with this reference -- that is a known gap tracked against DuckShow.swift, not something a tests-only change can close.",
+  "valid-baseline": {
+    "errors": 0,
+    "warnings": 0
+  },
+  "invalid-missing-tracks-entry": {
+    "errors": 1,
+    "warnings": 0,
+    "error_substr": "no tracks entry"
+  },
+  "divergent-unsorted-events": {
+    "errors": 0,
+    "warnings": 0,
+    "note": "docs/duckshow-format.md only requires sorting for curve tracks (locomotion/head/pose/mouth), not the point-event track, so python/duckshow correctly raises nothing here. SwarmLink's Show.validate() currently raises an error for this file (stricter than the doc) -- see F67."
+  },
+  "invalid-two-action-keys": {
+    "errors": 1,
+    "warnings": 0,
+    "error_substr": "more than one action key"
+  },
+  "invalid-vx-over-limit": {
+    "errors": 1,
+    "warnings": 0,
+    "error_substr": "vx=0.5"
+  },
+  "invalid-events-too-dense": {
+    "errors": 1,
+    "warnings": 0,
+    "error_substr": "less than"
+  },
+  "warn-undeclared-mode": {
+    "errors": 0,
+    "warnings": 1,
+    "warning_substr": "not declared"
+  }
+}

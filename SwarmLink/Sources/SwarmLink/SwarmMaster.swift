@@ -8,8 +8,18 @@
 // Designed to be the engine behind a future StageWizard `RobotSwarmPlayer:
 // MediaPlayback` (docs/architecture.md): `load` does all the heavy lifting
 // (parse show, verify roster, open sockets, pre-arm every duck) so that
-// `play`/`stop`/`panic` are cheap, fire-and-forget-safe calls a transport
-// button can call directly.
+// `play`/`stop`/`panic` are cheap calls a transport button can call
+// directly. Each transport command issues its datagrams *before* its first
+// suspension point and then reports the per-duck ACK/NACK/timeout outcome
+// (≤ commandMaxAttempts × commandRetryIntervalMs later) — callers that do
+// not care can discard the result (`Task { try await master.play() }`).
+//
+// Ordering guarantees (show-night invariants):
+//  - The newest transport command wins: issuing play/seek/stop/panic/load
+//    stops the retries of every earlier in-flight command (a stale `play`
+//    retry can never re-arm a duck after the operator hit stop).
+//  - `stop`/`panic` reset the cue point; `seek` while stopped sets it.
+//  - `panic` needs nothing loaded — only a connected roster.
 
 import Foundation
 @preconcurrency import Network
@@ -22,20 +32,35 @@ public struct LoadOutcome: Sendable, Equatable {
         case nacked(String)
         case timeout
         case connectionFailed(String)
+        /// A newer command (play/seek/stop/panic/load) was issued before
+        /// this one was ACKed; its remaining retries were abandoned so the
+        /// newer command is the one the duck ends up acting on.
+        case superseded
     }
 
     public var status: Status
 
+    public init(status: Status) {
+        self.status = status
+    }
+
     public var isOK: Bool { status == .ok }
 }
+
+/// Per-duck outcome of one transport command (`play`/`seek`/`stop`/`panic`).
+public typealias CommandStatus = LoadOutcome.Status
 
 public struct DuckTelemetry: Sendable, Equatable {
     public var duck: DuckID
     public var state: AgentState
     public var show: String?
     public var showTime: Double
-    public var clockOffsetMs: Double
-    public var clockRttMs: Double
+    /// Milliseconds; `nil` until the duck's first successful time-sync
+    /// exchange (docs/swarmlink-protocol.md §4) — never treat `nil` here as 0.
+    public var clockOffsetMs: Double?
+    /// Milliseconds; `nil` until the duck's first successful time-sync
+    /// exchange — see `clockOffsetMs`.
+    public var clockRttMs: Double?
     public var policiesOk: Bool
     public var batteryPct: Double?
     public var rssiDbm: Double?
@@ -51,12 +76,15 @@ public struct DuckTelemetry: Sendable, Equatable {
 
 public enum TelemetryEvent: Sendable, Equatable {
     case updated(DuckTelemetry)
+    /// The duck has sent no telemetry for `telemetryLostThresholdSeconds`
+    /// — including a roster duck that never reported at all since the last
+    /// `load()`/`connect()` (see `lostDucks`).
     case lost(DuckID)
 }
 
-/// Errors surfaced synchronously from `load` (i.e. before any per-duck fan
-/// out — malformed inputs, not per-duck network failures, which show up as
-/// `LoadOutcome.Status` instead).
+/// Errors surfaced synchronously from `load`/`play` (i.e. before any
+/// per-duck fan out — malformed inputs, not per-duck network failures,
+/// which show up as `LoadOutcome.Status` instead).
 public enum SwarmMasterError: Error, Sendable, Equatable, CustomStringConvertible {
     case notLoaded
 
@@ -83,7 +111,19 @@ public enum SwarmMasterError: Error, Sendable, Equatable, CustomStringConvertibl
 /// than demuxing listener-side flows.
 public actor SwarmMaster {
     private let masterPort: UInt16
+    private let telemetryLostThresholdSeconds: Double
     private let networkQueue = DispatchQueue(label: "SwarmLink.SwarmMaster.network")
+
+    /// Backoff before re-dialing a per-duck connection that reported
+    /// `.failed` or a receive error.
+    private let redialBackoffNs: UInt64 = 500_000_000
+
+    /// How many telemetry events a `telemetryEvents()` subscriber may fall
+    /// behind before the oldest are dropped. Telemetry is a lossy
+    /// latest-state feed and `telemetry` always holds the authoritative
+    /// snapshot, so an idle subscriber must never make the master grow
+    /// without bound (10 ducks × 5 Hz × ~5 s).
+    private let telemetryStreamBuffer = 256
 
     private var connections: [DuckID: NWConnection] = [:]
     private var roster: [DuckID: RosterEntry] = [:]
@@ -95,21 +135,42 @@ public actor SwarmMaster {
     private var clock = MasterClock()
     private var transport: Transport = .stopped
     private var stateSeq: Int = 0
-    /// Show-time to resume from on the next `play()`; set by `seek()` while
-    /// not playing, consumed (and reset to 0) by the next `play()`.
+    /// Show-time to start from on the next `play()`; set by `seek()` while
+    /// stopped, consumed (and reset to 0) by the next `play()`, and reset
+    /// to 0 by `stop()`/`panic()`/`load()`.
     private var cueShowTime: Double = 0.0
 
     private var telemetryStore: [DuckID: DuckTelemetry] = [:]
     private var lastTelemetryNs: [DuckID: Int64] = [:]
+    /// Roster ducks the watchdog has flagged lost before they ever sent a
+    /// telemetry datagram (so there is no `telemetryStore` entry to mark).
+    private var neverReportedLost: Set<DuckID> = []
     private var telemetryContinuations: [UUID: AsyncStream<TelemetryEvent>.Continuation] = [:]
 
     private var pendingAcks: [String: (AckMessage?) -> Void] = [:]
+    /// Bumped by every fan-out; a retry loop whose generation is no longer
+    /// current abandons its remaining attempts (`.superseded`).
+    private var commandGeneration: Int = 0
+    /// Bumped by play/seek/stop/panic so a scheduled `beginPlaying` from an
+    /// earlier `play()` cannot clobber the clock epoch of a newer command.
+    private var playGeneration: Int = 0
 
     private var stateLoopTask: Task<Void, Never>?
+    private var stateLoopGeneration: Int = 0
     private var housekeepingTask: Task<Void, Never>?
 
-    public init(masterPort: UInt16 = SwarmLinkInfo.defaultMasterPort) {
+    /// - Parameters:
+    ///   - masterPort: local UDP port every per-duck connection is pinned
+    ///     to (0 = ephemeral, for tests).
+    ///   - telemetryLostThresholdSeconds: seconds without telemetry after
+    ///     which a duck is marked lost (protocol default 5 s; injectable so
+    ///     tests need not wait that long).
+    public init(
+        masterPort: UInt16 = SwarmLinkInfo.defaultMasterPort,
+        telemetryLostThresholdSeconds: Double = SwarmLinkInfo.telemetryLostThresholdSeconds
+    ) {
         self.masterPort = masterPort
+        self.telemetryLostThresholdSeconds = max(0.05, telemetryLostThresholdSeconds)
     }
 
     deinit {
@@ -119,7 +180,35 @@ public actor SwarmMaster {
         for connection in connections.values { connection.cancel() }
     }
 
-    // MARK: Public API
+    // MARK: Public API — roster / connections
+
+    /// Dials one UDP connection per roster duck *without* loading a show,
+    /// so time sync, telemetry and the transport commands that need no
+    /// show (`stop`, `panic`, `seek`) work — e.g. a standalone CLI that
+    /// only wants to kill the flock. Replaces any previous connections
+    /// (a playing show is stopped first, see `load`). `load()` does this
+    /// itself; `play()` still requires a loaded show.
+    public func connect(roster rosterURL: URL) async throws {
+        let entries = try [RosterEntry].load(contentsOf: rosterURL)
+        try await connect(roster: entries)
+    }
+
+    /// Same as `connect(roster:)` for an in-memory roster.
+    public func connect(roster entries: [RosterEntry]) async throws {
+        var seen = Set<DuckID>()
+        for entry in entries where !seen.insert(entry.id).inserted {
+            throw RosterError.duplicateDuckID(entry.id)
+        }
+        await stopIfTransportActive()
+        rewire(entries: entries)
+    }
+
+    /// Ducks currently dialed (the roster of the last `load()`/`connect()`).
+    public var connectedDucks: Set<DuckID> {
+        Set(connections.keys)
+    }
+
+    // MARK: Public API — show / transport
 
     /// Parses `showURL`, loads the roster from `rosterURL`, opens one UDP
     /// connection per duck (pinned to `masterPort`), and fans out `load`
@@ -128,32 +217,29 @@ public actor SwarmMaster {
     /// ACK/NACK/timeout. This is the "heavy" call: by the time it returns,
     /// every reachable duck is pre-armed and `play()` only has to send one
     /// more small unicast per duck.
+    ///
+    /// If a show is armed/playing, `stop` is fanned out (and awaited) first
+    /// so no duck is left running its last commanded velocity while the
+    /// master silently switches shows.
     public func load(show showURL: URL, roster rosterURL: URL) async throws -> [DuckID: LoadOutcome] {
         let decodedShow = try Show.load(contentsOf: showURL)
         let sha = try Show.sha256(of: showURL)
         let entries = try [RosterEntry].load(contentsOf: rosterURL)
 
-        teardownConnections()
+        await stopIfTransportActive()
+        rewire(entries: entries)
 
         self.show = decodedShow
         self.showID = showURL.deletingPathExtension().deletingPathExtension().lastPathComponent
         self.showSHA256 = sha
-        self.roster = entries.indexedByID()
         self.transport = .stopped
         self.stateSeq = 0
         self.cueShowTime = 0
+        self.playGeneration += 1
         clock.stop()
 
         let castRoles = Set(decodedShow.cast.map(\.role))
-
-        for entry in entries {
-            let connection = makeConnection(for: entry)
-            connections[entry.id] = connection
-            lastTelemetryNs[entry.id] = nil
-            startReceiving(duckID: entry.id, connection: connection)
-        }
-        startHousekeepingIfNeeded()
-
+        let generation = supersedeInFlightCommands()
         let cmdID = UUID().uuidString
         let showIDForLoad = self.showID
         var results: [DuckID: LoadOutcome] = [:]
@@ -168,7 +254,7 @@ public actor SwarmMaster {
                         cmdID: cmdID,
                         payload: .load(show: showIDForLoad, sha256: sha, role: entry.role)
                     )
-                    let status = await self.sendWithRetry(message, to: entry.id)
+                    let status = await self.sendWithRetry(message, to: entry.id, generation: generation)
                     return (entry.id, LoadOutcome(status: status))
                 }
             }
@@ -181,56 +267,71 @@ public actor SwarmMaster {
 
     /// Schedules playback to start `leadTimeNs` in the future (giving the
     /// `play` command time to be delivered/retried before it's due), sends
-    /// `play` to every duck, and returns immediately — it does not await
-    /// ACKs. Resumes from the show-time set by a prior `seek()`, if any,
-    /// else from 0.
-    public func play(at leadTimeNs: Int64 = 300_000_000) {
-        guard show != nil else { return }
+    /// `play` to every duck, and returns each duck's ACK outcome once every
+    /// retry loop has finished. Starts from the show-time set by a prior
+    /// `seek()` while stopped, if any, else from 0. Throws
+    /// `SwarmMasterError.notLoaded` when no show has been loaded in this
+    /// instance (the agents need the show id).
+    @discardableResult
+    public func play(at leadTimeNs: Int64 = 300_000_000) async throws -> [DuckID: CommandStatus] {
+        guard show != nil else { throw SwarmMasterError.notLoaded }
         let now = MasterClock.nowNanoseconds()
         let atMasterTime = now + max(0, leadTimeNs)
         let fromShowTime = cueShowTime
         cueShowTime = 0
 
         transport = .armed
+        clock.stop()
+        playGeneration += 1
+        let generation = playGeneration
         startStateLoopIfNeeded()
-
-        fanOutFireAndForget(payload: .play(show: showID, atMasterTime: atMasterTime, fromShowTime: fromShowTime))
 
         let delayNs = atMasterTime - now
         Task { [weak self] in
             if delayNs > 0 {
                 try? await Task.sleep(nanoseconds: UInt64(delayNs))
             }
-            await self?.beginPlaying(atMasterTime: atMasterTime, fromShowTime: fromShowTime)
+            await self?.beginPlaying(generation: generation, atMasterTime: atMasterTime, fromShowTime: fromShowTime)
         }
+
+        return await fanOut(.play(show: showID, atMasterTime: atMasterTime, fromShowTime: fromShowTime))
     }
 
-    /// Immediately re-anchors the local and every duck's show clock to
-    /// `showTime`. If not currently playing, the position is remembered and
-    /// used by the next `play()` instead.
-    public func seek(to showTime: Double) {
+    /// Re-anchors every duck's show clock to `showTime` right now. While
+    /// armed or playing the master clock follows immediately (agents start
+    /// playing from `showTime` on arrival, so a pending scheduled start is
+    /// discarded). While stopped, the position is remembered as the cue
+    /// for the next `play()`; the `seek` is still sent so a standalone
+    /// master can steer ducks it did not start (they NACK if not playing).
+    @discardableResult
+    public func seek(to showTime: Double) async -> [DuckID: CommandStatus] {
         let now = MasterClock.nowNanoseconds()
-        cueShowTime = showTime
-        if transport != .stopped {
+        switch transport {
+        case .stopped:
+            cueShowTime = showTime
+        case .armed, .playing:
+            playGeneration += 1
             clock.seek(to: showTime, atMasterTimeNs: now)
+            transport = .playing
+            startStateLoopIfNeeded()
         }
-        fanOutFireAndForget(payload: .seek(showTime: showTime, atMasterTime: now))
+        return await fanOut(.seek(showTime: showTime, atMasterTime: now))
     }
 
-    /// Graceful stop: fans out `stop` and returns immediately
-    /// (fire-and-forget safe — never throws, never blocks on ACKs).
-    public func stop() {
-        transport = .stopped
-        clock.stop()
-        fanOutFireAndForget(payload: .stop)
+    /// Graceful stop: fans out `stop` and reports each duck's ACK outcome.
+    /// Resets the cue point, so the next `play()` starts from 0.
+    @discardableResult
+    public func stop() async -> [DuckID: CommandStatus] {
+        haltTransport()
+        return await fanOut(.stop)
     }
 
     /// Highest-priority stop, valid from any state, never NACKed by agents.
-    /// Fire-and-forget, same as `stop()`.
-    public func panic() {
-        transport = .stopped
-        clock.stop()
-        fanOutFireAndForget(payload: .panic)
+    /// Needs no loaded show — only connections (`connect(roster:)`).
+    @discardableResult
+    public func panic() async -> [DuckID: CommandStatus] {
+        haltTransport()
+        return await fanOut(.panic)
     }
 
     /// Snapshot of the last known telemetry per duck.
@@ -238,12 +339,20 @@ public actor SwarmMaster {
         telemetryStore
     }
 
+    /// Every duck the watchdog currently considers lost: those whose last
+    /// telemetry is older than the threshold *and* roster ducks that have
+    /// not reported at all since the last `load()`/`connect()`.
+    public var lostDucks: Set<DuckID> {
+        Set(telemetryStore.filter { $0.value.lost }.keys).union(neverReportedLost)
+    }
+
     /// A live feed of telemetry updates and lost-duck transitions. Each
     /// call returns an independent stream; finishing/cancelling it
-    /// unregisters cleanly.
+    /// unregisters cleanly. Buffered with `.bufferingNewest` — a subscriber
+    /// that stops iterating only ever holds the most recent events.
     public func telemetryEvents() -> AsyncStream<TelemetryEvent> {
         let id = UUID()
-        return AsyncStream { continuation in
+        return AsyncStream(TelemetryEvent.self, bufferingPolicy: .bufferingNewest(telemetryStreamBuffer)) { continuation in
             telemetryContinuations[id] = continuation
             continuation.onTermination = { [weak self] _ in
                 Task { await self?.removeTelemetryContinuation(id) }
@@ -257,20 +366,67 @@ public actor SwarmMaster {
         transport
     }
 
-    /// Master's own show-time estimate right now, if playing/armed.
+    /// Number of live `telemetryEvents()` subscribers (test hook).
+    var telemetrySubscriberCount: Int {
+        telemetryContinuations.count
+    }
+
+    /// Master's own show-time estimate right now, if playing.
     public func currentShowTime() -> Double? {
         clock.showTime()
     }
 
     // MARK: Playback epoch
 
-    private func beginPlaying(atMasterTime: Int64, fromShowTime: Double) {
-        guard transport == .armed else { return } // stopped/panicked/seeked away before start
+    private func beginPlaying(generation: Int, atMasterTime: Int64, fromShowTime: Double) {
+        // Only the most recent play() may establish the epoch; a seek(),
+        // second play(), stop() or panic() issued during the lead time
+        // bumped playGeneration (and/or left .armed) and wins.
+        guard generation == playGeneration, transport == .armed else { return }
         clock.play(at: atMasterTime, fromShowTime: fromShowTime)
         transport = .playing
     }
 
+    private func haltTransport() {
+        transport = .stopped
+        clock.stop()
+        cueShowTime = 0
+        playGeneration += 1
+        stopStateLoop()
+    }
+
+    /// `load()`/`connect()` while a show is armed/playing: send `stop` and
+    /// wait for the ACKs/timeouts before the connections are torn down.
+    private func stopIfTransportActive() async {
+        guard transport != .stopped else { return }
+        _ = await stop()
+    }
+
     // MARK: Connection lifecycle
+
+    private func rewire(entries: [RosterEntry]) {
+        teardownConnections()
+        let now = MasterClock.nowNanoseconds()
+        let ids = Set(entries.map(\.id))
+        // Forget ducks that are no longer on the roster...
+        for stale in Set(lastTelemetryNs.keys).union(telemetryStore.keys).union(neverReportedLost).subtracting(ids) {
+            lastTelemetryNs[stale] = nil
+            telemetryStore[stale] = nil
+            neverReportedLost.remove(stale)
+        }
+        roster = entries.indexedByID()
+        for entry in entries {
+            let connection = makeConnection(for: entry)
+            connections[entry.id] = connection
+            // ...and restart the watchdog for everyone on it: a duck that
+            // never reports after this point is `lost` after the threshold
+            // even though it has no telemetry entry yet.
+            lastTelemetryNs[entry.id] = now
+            neverReportedLost.remove(entry.id)
+            startReceiving(duckID: entry.id, connection: connection)
+        }
+        startHousekeepingIfNeeded()
+    }
 
     private func makeConnection(for entry: RosterEntry) -> NWConnection {
         let params = NWParameters.udp
@@ -283,37 +439,66 @@ public actor SwarmMaster {
         let port = NWEndpoint.Port(rawValue: entry.port)
             ?? NWEndpoint.Port(rawValue: SwarmLinkInfo.defaultAgentPort)!
         let connection = NWConnection(host: host, port: port, using: params)
+        let duckID = entry.id
+        connection.stateUpdateHandler = { [weak self, weak connection] state in
+            guard let self, let connection, case .failed = state else { return }
+            Task { await self.scheduleRedial(duckID: duckID, replacing: connection) }
+        }
         connection.start(queue: networkQueue)
         return connection
     }
 
     private func teardownConnections() {
-        stateLoopTask?.cancel()
-        stateLoopTask = nil
+        stopStateLoop()
+        _ = supersedeInFlightCommands()
         for connection in connections.values { connection.cancel() }
         connections.removeAll()
     }
 
-    private func startReceiving(duckID: DuckID, connection: NWConnection) {
-        connection.receiveMessage { [weak self] data, _, _, error in
-            guard let self else { return }
-            Task { await self.onReceive(duckID: duckID, connection: connection, data: data, error: error) }
+    /// A per-duck connection reported `.failed` or a receive error: replace
+    /// it after a short backoff, provided it is still the one on file (a
+    /// `load()`/`connect()` in between already replaced or cancelled it).
+    private func scheduleRedial(duckID: DuckID, replacing failed: NWConnection) {
+        guard connections[duckID] === failed else { return }
+        Task { [weak self] in
+            try? await Task.sleep(nanoseconds: self?.redialBackoffNs ?? 0)
+            await self?.redial(duckID: duckID, replacing: failed)
         }
     }
 
-    private func onReceive(duckID: DuckID, connection: NWConnection, data: Data?, error: NWError?) {
+    private func redial(duckID: DuckID, replacing failed: NWConnection) {
+        guard connections[duckID] === failed, let entry = roster[duckID] else { return }
+        failed.cancel()
+        let fresh = makeConnection(for: entry)
+        connections[duckID] = fresh
+        startReceiving(duckID: duckID, connection: fresh)
+    }
+
+    private func startReceiving(duckID: DuckID, connection: NWConnection) {
+        connection.receiveMessage { [weak self] data, _, _, error in
+            // Stamp arrival here, on the network queue, so actor scheduling
+            // latency is not counted as network delay in time_resp.t1.
+            let rxNs = MasterClock.nowNanoseconds()
+            guard let self else { return }
+            Task { await self.onReceive(duckID: duckID, connection: connection, data: data, error: error, rxNs: rxNs) }
+        }
+    }
+
+    private func onReceive(duckID: DuckID, connection: NWConnection, data: Data?, error: NWError?, rxNs: Int64) {
         // Only keep pumping this connection's receive loop while it's still
         // the one on file for this duck (load() may have torn it down).
         guard connections[duckID] === connection else { return }
         if let data, !data.isEmpty {
-            handleDatagram(data, from: duckID)
+            handleDatagram(data, from: duckID, rxNs: rxNs)
         }
         if error == nil {
             startReceiving(duckID: duckID, connection: connection)
+        } else {
+            // Receive errors accompany terminal conditions on a UDP
+            // NWConnection; re-dial rather than go deaf to this duck for
+            // the rest of the show.
+            scheduleRedial(duckID: duckID, replacing: connection)
         }
-        // On error: stop pumping this connection. The 5 s telemetry
-        // watchdog will surface the duck as lost; a future load()/retry
-        // will redial.
     }
 
     private func send(_ data: Data, on connection: NWConnection) {
@@ -322,11 +507,11 @@ public actor SwarmMaster {
 
     // MARK: Inbound message handling
 
-    private func handleDatagram(_ data: Data, from duckID: DuckID) {
+    private func handleDatagram(_ data: Data, from duckID: DuckID, rxNs: Int64) {
         guard let envelope = SwarmMessage.decode(data) else { return }
         switch envelope {
         case .timeRequest(let request):
-            respond(to: request, duckID: duckID)
+            respond(to: request, duckID: duckID, rxNs: rxNs)
         case .ack(let ack):
             resolveAck(ack, key: ackKey(cmdID: ack.cmdID, duck: duckID))
         case .telemetry(let telemetry):
@@ -336,10 +521,9 @@ public actor SwarmMaster {
         }
     }
 
-    private func respond(to request: TimeRequest, duckID: DuckID) {
+    private func respond(to request: TimeRequest, duckID: DuckID, rxNs: Int64) {
         guard let connection = connections[duckID] else { return }
-        let t1 = MasterClock.nowNanoseconds()
-        let response = TimeResponse(t0: request.t0, t1: t1, t2: MasterClock.nowNanoseconds())
+        let response = TimeResponse(t0: request.t0, t1: rxNs, t2: MasterClock.nowNanoseconds())
         guard let data = try? JSONEncoder().encode(response) else { return }
         send(data, on: connection)
     }
@@ -347,6 +531,7 @@ public actor SwarmMaster {
     private func ingest(_ message: TelemetryMessage, duckID: DuckID) {
         let now = MasterClock.nowNanoseconds()
         lastTelemetryNs[duckID] = now
+        neverReportedLost.remove(duckID)
         let entry = DuckTelemetry(
             duck: duckID,
             state: message.state,
@@ -369,38 +554,61 @@ public actor SwarmMaster {
 
     private func ackKey(cmdID: String, duck: DuckID) -> String { "\(cmdID)|\(duck.raw)" }
 
-    private func fanOutFireAndForget(payload: CommandMessage.Payload) {
+    /// Starts a new command generation: every retry loop still waiting on
+    /// an ACK is woken and abandons its remaining attempts, so the command
+    /// being issued now is the one every duck ends up acting on.
+    private func supersedeInFlightCommands() -> Int {
+        commandGeneration += 1
+        let waiting = pendingAcks
+        pendingAcks.removeAll()
+        for handler in waiting.values { handler(nil) }
+        return commandGeneration
+    }
+
+    /// Sends `payload` to every connected duck (one fresh `cmd_id` shared by
+    /// all of them) and returns once each duck's retry loop has ended.
+    private func fanOut(_ payload: CommandMessage.Payload) async -> [DuckID: CommandStatus] {
+        let generation = supersedeInFlightCommands()
         let message = CommandMessage(cmdID: UUID().uuidString, payload: payload)
-        for duckID in connections.keys {
-            Task { [weak self] in
-                _ = await self?.sendWithRetry(message, to: duckID)
+        let targets = Array(connections.keys)
+        var results: [DuckID: CommandStatus] = [:]
+        await withTaskGroup(of: (DuckID, CommandStatus).self) { group in
+            for duckID in targets {
+                group.addTask {
+                    (duckID, await self.sendWithRetry(message, to: duckID, generation: generation))
+                }
+            }
+            for await (id, status) in group {
+                results[id] = status
             }
         }
+        return results
     }
 
     /// Sends `message` to `duckID`, retrying up to
     /// `SwarmLinkInfo.commandMaxAttempts` times at
-    /// `SwarmLinkInfo.commandRetryIntervalMs` until an ACK/NACK arrives.
-    /// The same `cmd_id` is reused across every attempt, matching the
-    /// protocol's "agents deduplicate by cmd_id" contract.
-    private func sendWithRetry(_ message: CommandMessage, to duckID: DuckID) async -> LoadOutcome.Status {
-        guard let connection = connections[duckID] else {
-            return .connectionFailed("no connection for duck \(duckID)")
-        }
+    /// `SwarmLinkInfo.commandRetryIntervalMs` until an ACK/NACK arrives or
+    /// a newer command supersedes this one. The same `cmd_id` is reused
+    /// across every attempt, matching the protocol's "agents deduplicate
+    /// by cmd_id" contract.
+    private func sendWithRetry(_ message: CommandMessage, to duckID: DuckID, generation: Int) async -> CommandStatus {
         guard let data = try? JSONEncoder().encode(message) else {
             return .connectionFailed("failed to encode command")
         }
         let key = ackKey(cmdID: message.cmdID, duck: duckID)
-        for attempt in 1...SwarmLinkInfo.commandMaxAttempts {
+        for _ in 1...SwarmLinkInfo.commandMaxAttempts {
+            guard generation == commandGeneration else { return .superseded }
+            // Look the connection up per attempt: a redial may have
+            // replaced it since the last one.
+            guard let connection = connections[duckID] else {
+                return .connectionFailed("no connection for duck \(duckID)")
+            }
             send(data, on: connection)
             if let ack = await waitForAck(key: key, timeoutMs: SwarmLinkInfo.commandRetryIntervalMs) {
                 return ack.ok ? .ok : .nacked(ack.error ?? "nack")
             }
-            if attempt == SwarmLinkInfo.commandMaxAttempts {
-                return .timeout
-            }
         }
-        return .timeout
+        return generation == commandGeneration ? .timeout : .superseded
     }
 
     private func waitForAck(key: String, timeoutMs: UInt64) async -> AckMessage? {
@@ -429,26 +637,42 @@ public actor SwarmMaster {
 
     private func startStateLoopIfNeeded() {
         guard stateLoopTask == nil else { return }
+        stateLoopGeneration += 1
+        let generation = stateLoopGeneration
+        let intervalNs = UInt64(1_000_000_000.0 / SwarmLinkInfo.stateBroadcastHz)
         stateLoopTask = Task { [weak self] in
-            while true {
+            while !Task.isCancelled {
                 guard let self else { return }
                 let shouldContinue = await self.publishStateTick()
                 if !shouldContinue { break }
-                let intervalNs = UInt64(1_000_000_000.0 / SwarmLinkInfo.stateBroadcastHz)
-                try? await Task.sleep(nanoseconds: intervalNs)
+                do {
+                    try await Task.sleep(nanoseconds: intervalNs)
+                } catch {
+                    break // cancelled: never spin on a throwing sleep
+                }
             }
-            await self?.finishStateLoop()
+            await self?.finishStateLoop(generation: generation)
         }
     }
 
-    private func finishStateLoop() {
+    private func stopStateLoop() {
+        stateLoopTask?.cancel()
         stateLoopTask = nil
+    }
+
+    /// Only the loop that owns `stateLoopTask` may clear it — a loop that
+    /// exits after a `play()` already started a newer one must not orphan
+    /// that newer loop's handle.
+    private func finishStateLoop(generation: Int) {
+        if stateLoopGeneration == generation {
+            stateLoopTask = nil
+        }
     }
 
     /// Sends one `state` tick to every duck; returns whether the loop
     /// should keep running (only while armed/playing, per the API contract).
     private func publishStateTick() -> Bool {
-        guard transport == .armed || transport == .playing else { return false }
+        guard !Task.isCancelled, transport == .armed || transport == .playing else { return false }
         stateSeq += 1
         let message = StateMessage(
             seq: stateSeq,
@@ -462,13 +686,18 @@ public actor SwarmMaster {
         return true
     }
 
-    // MARK: Housekeeping (5 s lost watchdog)
+    // MARK: Housekeeping (lost watchdog)
 
     private func startHousekeepingIfNeeded() {
         guard housekeepingTask == nil else { return }
+        let sweepIntervalNs = UInt64(min(1.0, telemetryLostThresholdSeconds / 2) * 1_000_000_000)
         housekeepingTask = Task { [weak self] in
             while !Task.isCancelled {
-                try? await Task.sleep(nanoseconds: 1_000_000_000)
+                do {
+                    try await Task.sleep(nanoseconds: sweepIntervalNs)
+                } catch {
+                    return
+                }
                 guard let self else { return }
                 await self.sweepLostDucks()
             }
@@ -477,13 +706,17 @@ public actor SwarmMaster {
 
     private func sweepLostDucks() {
         let now = MasterClock.nowNanoseconds()
-        let thresholdNs = Int64(SwarmLinkInfo.telemetryLostThresholdSeconds * 1_000_000_000)
-        for (duckID, lastSeen) in lastTelemetryNs {
-            guard now - lastSeen > thresholdNs else { continue }
-            guard var entry = telemetryStore[duckID], !entry.lost else { continue }
-            entry.lost = true
-            telemetryStore[duckID] = entry
-            publish(.lost(duckID))
+        let thresholdNs = Int64(telemetryLostThresholdSeconds * 1_000_000_000)
+        for (duckID, lastSeen) in lastTelemetryNs where now - lastSeen > thresholdNs {
+            if var entry = telemetryStore[duckID] {
+                guard !entry.lost else { continue }
+                entry.lost = true
+                telemetryStore[duckID] = entry
+                publish(.lost(duckID))
+            } else if !neverReportedLost.contains(duckID) {
+                neverReportedLost.insert(duckID)
+                publish(.lost(duckID))
+            }
         }
     }
 
