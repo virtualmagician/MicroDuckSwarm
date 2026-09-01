@@ -226,6 +226,12 @@ class StateLoopTest(unittest.TestCase):
         )
         master.start()
         stop = threading.Event()
+        # Record state broadcasts from the very first datagram: on a slow
+        # runner the whole ARMED phase can elapse while play() is still
+        # waiting on ACKs, so collecting only after play() returns would
+        # miss it (observed on a 2-vCPU CI runner).
+        states: list[dict] = []
+        states_lock = threading.Lock()
 
         def auto_ack() -> None:
             while not stop.is_set():
@@ -240,30 +246,30 @@ class StateLoopTest(unittest.TestCase):
                 if msg.get("type") == "cmd":
                     ack = {"v": 1, "type": "ack", "duck": "duck-01", "cmd_id": msg["cmd_id"], "ok": True, "error": None}
                     sock.sendto(json.dumps(ack).encode("utf-8"), a)
+                elif msg.get("type") == "state":
+                    with states_lock:
+                        states.append(msg)
 
         responder = threading.Thread(target=auto_ack, daemon=True)
         responder.start()
         try:
-            result = master.play(DEMO_SHOW_PATH, lead_ms=250, from_show_time=0.0)
+            result = master.play(DEMO_SHOW_PATH, lead_ms=600, from_show_time=0.0)
             self.assertEqual(result, {"duck-01": True})
-            # Stop competing with the state-collection loop below for
-            # datagrams on this one socket -- play() is already ACKed, so
-            # nothing more needs a responder.
+
+            # Wait until we have seen the ARMED phase and a few PLAYING
+            # broadcasts (or give up after a generous deadline and let the
+            # assertions below explain what was actually observed).
+            deadline = time.monotonic() + 4.0
+            while time.monotonic() < deadline:
+                with states_lock:
+                    transports_so_far = [s["transport"] for s in states]
+                if "armed" in transports_so_far and transports_so_far.count("playing") >= 3:
+                    break
+                time.sleep(0.05)
             stop.set()
             responder.join(timeout=2)
-
-            states: list[dict] = []
-            deadline = time.monotonic() + 1.3
-            sock.settimeout(0.3)
-            while time.monotonic() < deadline and len(states) < 10:
-                try:
-                    data, _ = sock.recvfrom(65536)
-                except socket.timeout:
-                    continue
-                msg = json.loads(data.decode("utf-8"))
-                if msg.get("type") == "state":
-                    states.append(msg)
-
+            with states_lock:
+                states = list(states)
             self.assertGreaterEqual(len(states), 4, "expected ~5 Hz state broadcasts")
             seqs = [s["seq"] for s in states]
             self.assertEqual(seqs, sorted(seqs), "seq must be non-decreasing")
@@ -273,10 +279,20 @@ class StateLoopTest(unittest.TestCase):
             self.assertIn("armed", transports, "must observe the ARMED phase before the epoch")
             self.assertIn("playing", transports, "must auto-advance to PLAYING at the epoch")
             first_playing = transports.index("playing")
+            first_armed = transports.index("armed")
+            # Broadcasts start with the master's resting "stopped" state; that
+            # is only allowed *before* ARMED. From ARMED on, the sequence must
+            # be armed... then playing..., never stopped and never playing
+            # before armed.
             self.assertTrue(
-                all(t == "armed" for t in transports[:first_playing]),
+                all(t == "stopped" for t in transports[:first_armed]),
+                f"only 'stopped' may precede the ARMED phase: {transports}",
+            )
+            self.assertTrue(
+                all(t == "armed" for t in transports[first_armed:first_playing]),
                 f"transport must not report playing before armed: {transports}",
             )
+            self.assertNotIn("stopped", transports[first_armed:], f"no 'stopped' after ARMED: {transports}")
             show_times = [s["show_time"] for s in states]
             self.assertTrue(
                 all(b >= a - 1e-6 for a, b in zip(show_times, show_times[1:])),

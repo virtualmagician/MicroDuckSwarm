@@ -406,6 +406,21 @@ class DuckAgentIntegrationTest(unittest.TestCase):
         self.assertTrue(acks and acks[0]["ok"])
         self.assertTrue(self._wait_for_state("idle"))
 
+        # Panic itself sends one final zero-velocity robot.move (ordered after
+        # the FSM reset, under the playback lock). On a slow runner that
+        # datagram can land after we observe "idle", so wait for it, then
+        # assert that nothing follows it.
+        def _last_move_is_zero() -> bool:
+            moves = self.robotd.by_method("robot.move")
+            if not moves:
+                return False
+            p = moves[-1].get("params", {})
+            return all(abs(p.get(k, 1.0)) < 1e-9 for k in ("vx", "vy", "vyaw"))
+
+        deadline = time.monotonic() + 2.0
+        while time.monotonic() < deadline and not _last_move_is_zero():
+            time.sleep(0.02)
+        self.assertTrue(_last_move_is_zero(), "panic must end with a zero-velocity robot.move")
         moves_at_panic = len(self.robotd.by_method("robot.move"))
         time.sleep(0.3)  # several tick periods
         moves_after = len(self.robotd.by_method("robot.move"))
