@@ -1,0 +1,67 @@
+{
+  "format": "duckshow/1",
+  "meta": {
+    "name": "Demo Waddle",
+    "author": "Marco Tempest",
+    "created": "2026-09-01",
+    "duration": 20.0,
+    "music": { "file": "demo.wav", "bpm": 120.0, "beat_offset": 0.0 }
+  },
+  "requires": { "policies": [] },
+  "cast": [
+    { "role": "lead", "notes": "front center mark" },
+    { "role": "wing", "notes": "stage left mark" }
+  ],
+  "tracks": {
+    "lead": {
+      "head": [
+        { "t": 0.0, "neck_pitch": 0.0, "head_pitch": 0.0, "head_yaw": 0.0, "head_roll": 0.0, "interp": "smooth" },
+        { "t": 1.0, "neck_pitch": 0.0, "head_pitch": -0.3, "head_yaw": 0.0, "head_roll": 0.0, "interp": "smooth" },
+        { "t": 1.5, "neck_pitch": 0.0, "head_pitch": 0.2, "head_yaw": 0.0, "head_roll": 0.0, "interp": "smooth" },
+        { "t": 2.0, "neck_pitch": 0.0, "head_pitch": -0.3, "head_yaw": 0.0, "head_roll": 0.0, "interp": "smooth" },
+        { "t": 2.5, "neck_pitch": 0.0, "head_pitch": 0.0, "head_yaw": 0.0, "head_roll": 0.0, "interp": "smooth" },
+        { "t": 6.0, "neck_pitch": 0.0, "head_pitch": 0.0, "head_yaw": 0.6, "head_roll": 0.0, "interp": "smooth" },
+        { "t": 7.0, "neck_pitch": 0.0, "head_pitch": 0.0, "head_yaw": -0.6, "head_roll": 0.0, "interp": "smooth" },
+        { "t": 8.0, "neck_pitch": 0.0, "head_pitch": 0.0, "head_yaw": 0.0, "head_roll": 0.0 }
+      ],
+      "locomotion": [
+        { "t": 3.0, "vx": 0.0, "vy": 0.0, "vyaw": 0.0, "interp": "linear" },
+        { "t": 3.5, "vx": 0.1, "vy": 0.0, "vyaw": 0.0, "interp": "step" },
+        { "t": 5.5, "vx": 0.1, "vy": 0.0, "vyaw": 0.0, "interp": "linear" },
+        { "t": 6.0, "vx": 0.0, "vy": 0.0, "vyaw": 0.0 }
+      ],
+      "mouth": [
+        { "t": 9.0, "open": 0.0, "interp": "smooth" },
+        { "t": 9.3, "open": 1.0, "interp": "smooth" },
+        { "t": 9.8, "open": 0.0 }
+      ],
+      "events": [
+        { "t": 4.0, "sound": "chirp" },
+        { "t": 9.2, "sound": "greet" },
+        { "t": 12.0, "do": "kick_left" },
+        { "t": 16.0, "do": "sit_toggle" }
+      ]
+    },
+    "wing": {
+      "head": [
+        { "t": 0.5, "neck_pitch": 0.0, "head_pitch": 0.0, "head_yaw": 0.0, "head_roll": 0.0, "interp": "smooth" },
+        { "t": 1.5, "neck_pitch": 0.0, "head_pitch": -0.3, "head_yaw": 0.0, "head_roll": 0.0, "interp": "smooth" },
+        { "t": 2.0, "neck_pitch": 0.0, "head_pitch": 0.2, "head_yaw": 0.0, "head_roll": 0.0, "interp": "smooth" },
+        { "t": 2.5, "neck_pitch": 0.0, "head_pitch": 0.0, "head_yaw": 0.0, "head_roll": 0.0, "interp": "smooth" },
+        { "t": 6.0, "neck_pitch": 0.0, "head_pitch": 0.0, "head_yaw": -0.6, "head_roll": 0.0, "interp": "smooth" },
+        { "t": 7.0, "neck_pitch": 0.0, "head_pitch": 0.0, "head_yaw": 0.6, "head_roll": 0.0, "interp": "smooth" },
+        { "t": 8.0, "neck_pitch": 0.0, "head_pitch": 0.0, "head_yaw": 0.0, "head_roll": 0.0 }
+      ],
+      "pose": [
+        { "t": 10.0, "z": 0.0, "roll": 0.0, "pitch": 0.0, "active": true, "interp": "smooth" },
+        { "t": 10.5, "z": -0.03, "roll": 0.0, "pitch": 0.1, "active": true, "interp": "smooth" },
+        { "t": 11.5, "z": 0.0, "roll": 0.0, "pitch": 0.0, "active": false }
+      ],
+      "events": [
+        { "t": 4.5, "sound": "coo" },
+        { "t": 12.0, "do": "kick_right" },
+        { "t": 16.0, "do": "sit_toggle" }
+      ]
+    }
+  }
+}

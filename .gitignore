@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+*.egg-info/
+
+# Swift
+.build/
+.swiftpm/
+xcuserdata/
+DerivedData/
+
+# macOS / Dropbox
+.DS_Store
+.dropbox
+
+# Local run artifacts
+*.intents.jsonl
+/tmp/
