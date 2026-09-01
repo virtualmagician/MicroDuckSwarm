@@ -11,4 +11,4 @@ Hard rules:
 5. **Show-night invariants:** no multicast for must-arrive messages; commands idempotent by `cmd_id`; a duck never improvises to catch up (late > 2 s = sit out); panic always works from any state.
 6. This repo is public. No venue details, client names, or credentials in code, comments, or fixtures.
 
-Run before committing: `cd python && python3 -m unittest discover -s tests` and (if SwarmLink touched) `cd SwarmLink && swift build && swift test`.
+Run before committing: `cd python && python3 -m unittest discover -s tests` and (if SwarmLink touched) `cd SwarmLink && swift build && swift test`. On this machine `swift test` needs `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer` (xcode-select points at CommandLineTools, which lacks XCTest); `swift build` works either way. `./scripts/e2e_demo.sh` is the integration gate.
