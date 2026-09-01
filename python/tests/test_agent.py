@@ -407,24 +407,34 @@ class DuckAgentIntegrationTest(unittest.TestCase):
         self.assertTrue(self._wait_for_state("idle"))
 
         # Panic itself sends one final zero-velocity robot.move (ordered after
-        # the FSM reset, under the playback lock). On a slow runner that
-        # datagram can land after we observe "idle", so wait for it, then
-        # assert that nothing follows it.
-        def _last_move_is_zero() -> bool:
-            moves = self.robotd.by_method("robot.move")
-            if not moves:
-                return False
-            p = moves[-1].get("params", {})
-            return all(abs(p.get(k, 1.0)) < 1e-9 for k in ("vx", "vy", "vyaw"))
+        # the FSM reset, under the playback lock), and the fake robotd's
+        # reader thread may still be parsing in-flight lines when the ACK
+        # arrives. So: wait for the move stream to go quiet, then assert it
+        # STAYS quiet and that the last move was the zero one. (The demo
+        # show's own early moves are zero as well -- locomotion holds its
+        # first keyframe -- so the value alone cannot identify panic's move.)
+        def _move_count() -> int:
+            return len(self.robotd.by_method("robot.move"))
 
-        deadline = time.monotonic() + 2.0
-        while time.monotonic() < deadline and not _last_move_is_zero():
+        deadline = time.monotonic() + 3.0
+        last = _move_count()
+        quiet_since = time.monotonic()
+        while time.monotonic() < deadline:
             time.sleep(0.02)
-        self.assertTrue(_last_move_is_zero(), "panic must end with a zero-velocity robot.move")
-        moves_at_panic = len(self.robotd.by_method("robot.move"))
-        time.sleep(0.3)  # several tick periods
-        moves_after = len(self.robotd.by_method("robot.move"))
+            now = _move_count()
+            if now != last:
+                last, quiet_since = now, time.monotonic()
+            elif time.monotonic() - quiet_since >= 0.3:  # ~15 tick periods of silence
+                break
+        moves_at_panic = _move_count()
+        time.sleep(0.3)  # several more tick periods
+        moves_after = _move_count()
         self.assertEqual(moves_after, moves_at_panic, "no further robot.move notifications after panic")
+        last_move = self.robotd.by_method("robot.move")[-1].get("params", {})
+        self.assertTrue(
+            all(abs(last_move.get(k, 1.0)) < 1e-9 for k in ("vx", "vy", "vyaw")),
+            f"panic must end with a zero-velocity robot.move, got {last_move}",
+        )
 
         stop_reqs = self.robotd.by_method("robot.stop")
         self.assertTrue(stop_reqs, "expected a robot.stop request from panic")

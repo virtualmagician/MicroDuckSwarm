@@ -134,8 +134,7 @@ final class SwarmMasterTransportTests: XCTestCase {
         let (master, duck, show, roster) = try await rig()
         _ = try await master.load(show: show, roster: roster)
         _ = try await master.play(at: 20_000_000)
-        await Task.sleepMs(80)
-        let playing = await master.currentTransport
+        let playing = await waitForTransport(master, .playing)
         XCTAssertEqual(playing, .playing)
 
         _ = await master.seek(to: 45.0)
@@ -150,9 +149,11 @@ final class SwarmMasterTransportTests: XCTestCase {
         XCTAssertEqual(plays.count, 2)
         guard plays.count == 2, case .play(_, _, let fromShowTime) = plays[1].payload else { return XCTFail("\(plays)") }
         XCTAssertEqual(fromShowTime, 0.0, "a stop must reset the rehearsal seek point")
-        await Task.sleepMs(60)
+        let reached = await waitForTransport(master, .playing)
+        XCTAssertEqual(reached, .playing)
         let secondShowTime = await master.currentShowTime() ?? -1
-        XCTAssertEqual(secondShowTime, 0.05, accuracy: 0.2)
+        XCTAssertGreaterThanOrEqual(secondShowTime, 0.0, "second play must start from 0, not the rehearsal seek point")
+        XCTAssertLessThan(secondShowTime, 1.0)
         _ = await master.stop()
         await duck.stop()
     }
@@ -168,9 +169,11 @@ final class SwarmMasterTransportTests: XCTestCase {
         let play = try XCTUnwrap(plays.first)
         guard case .play(_, _, let fromShowTime) = play.payload else { return XCTFail("\(play.payload)") }
         XCTAssertEqual(fromShowTime, 12.0)
-        await Task.sleepMs(60)
+        let reached = await waitForTransport(master, .playing)
+        XCTAssertEqual(reached, .playing)
         let showTime = await master.currentShowTime() ?? -1
-        XCTAssertEqual(showTime, 12.05, accuracy: 0.2)
+        XCTAssertGreaterThanOrEqual(showTime, 12.0, "play after a stopped seek must start at the cued point")
+        XCTAssertLessThan(showTime, 13.0)
         _ = await master.stop()
         await duck.stop()
     }
@@ -205,7 +208,8 @@ final class SwarmMasterTransportTests: XCTestCase {
         XCTAssertEqual(transport, .playing)
         await Task.sleepMs(400) // past the original at_master_time
         let showTime = await master.currentShowTime() ?? -1
-        XCTAssertEqual(showTime, 45.4, accuracy: 0.25, "the stale scheduled start must not reset the epoch to 0")
+        XCTAssertGreaterThanOrEqual(showTime, 45.3, "the stale scheduled start must not reset the epoch to 0")
+        XCTAssertLessThan(showTime, 46.5, "the stale scheduled start must not reset the epoch to 0")
         _ = await master.stop()
         await duck.stop()
     }
@@ -222,7 +226,7 @@ final class SwarmMasterTransportTests: XCTestCase {
         let transport = await master.currentTransport
         XCTAssertEqual(transport, .playing)
         let showTime = await master.currentShowTime() ?? -1
-        XCTAssertEqual(showTime, elapsed - 0.3, accuracy: 0.08, "the master epoch must follow the second play, like the agents do")
+        XCTAssertEqual(showTime, elapsed - 0.3, accuracy: 0.2, "the master epoch must follow the second play, like the agents do")
         _ = await master.stop()
         await duck.stop()
     }
@@ -273,8 +277,7 @@ final class SwarmMasterTransportTests: XCTestCase {
         let (master, duck, show, roster) = try await rig()
         _ = try await master.load(show: show, roster: roster)
         _ = try await master.play(at: 10_000_000)
-        await Task.sleepMs(50)
-        let playing = await master.currentTransport
+        let playing = await waitForTransport(master, .playing)
         XCTAssertEqual(playing, .playing)
 
         let outcomes = try await master.load(show: show, roster: roster)

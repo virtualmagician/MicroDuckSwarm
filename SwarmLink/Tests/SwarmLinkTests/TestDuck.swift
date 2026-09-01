@@ -209,6 +209,21 @@ enum Fixtures {
     }
 }
 
+
+/// Poll a SwarmMaster until its transport reaches `target` (or the timeout
+/// elapses). Replaces fixed sleeps in transport tests: the armed→playing
+/// transition is a scheduled task whose lag varies wildly on loaded CI
+/// runners (observed: -1.0 show time = still armed 60 ms after a 20 ms lead).
+func waitForTransport(_ master: SwarmMaster, _ target: Transport, timeoutMs: Int = 3000) async -> Transport {
+    let deadline = DispatchTime.now().uptimeNanoseconds + UInt64(timeoutMs) * 1_000_000
+    while DispatchTime.now().uptimeNanoseconds < deadline {
+        let t = await master.currentTransport
+        if t == target { return t }
+        await Task.sleepMs(10)
+    }
+    return await master.currentTransport
+}
+
 extension Task where Success == Never, Failure == Never {
     static func sleepMs(_ ms: Int) async {
         try? await Task.sleep(nanoseconds: UInt64(ms) * 1_000_000)
