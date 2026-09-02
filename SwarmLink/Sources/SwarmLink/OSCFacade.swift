@@ -21,13 +21,17 @@
 // delays a `panic` arriving behind it — panic always works, from any
 // state.
 //
-// Flows: UDP has no close, so a flow the listener spawned for a one-shot
-// sender (an `osc_send.py` invocation, a readiness poll, a rig that
-// restarted on a new source port) would otherwise live for ever. Flows
-// idle for longer than the subscriber TTL are hung up on, and when the
-// table is nevertheless full the least-recently-heard flow is evicted for
-// the newcomer — a sender is never refused, so a `/duckswarm/panic` from a
-// socket the facade has never seen is always heard.
+// Flows: UDP has no close, so the listener keeps one flow per source
+// port. Flows are deliberately NOT hung up on for being idle: after the
+// facade cancels an inbound UDP flow, Network.framework does not reliably
+// spawn a fresh one for the next datagram from the same source port
+// (observed on CI), and a real rig such as QLab talks from one fixed port
+// with long gaps — its next `/duckswarm/go` must never be the datagram
+// that gets black-holed. The table is bounded instead: at the 64-flow cap
+// the least-recently-heard non-subscriber is evicted for the newcomer, so
+// a sender is never refused and a `/duckswarm/panic` from a socket the
+// facade has never seen is always heard. Rigs that want their flow
+// protected from eviction simply ping (subscribers are evicted last).
 
 import Foundation
 @preconcurrency import Network
@@ -432,19 +436,6 @@ public actor OSCFacade {
         victim.value.connection.cancel()
     }
 
-    /// Flows silent for longer than the subscriber TTL are hung up on
-    /// (from the status loop). A sender that talks again simply gets a
-    /// fresh flow from the listener; a live subscriber is by definition
-    /// heard within the TTL, so its flow is never touched.
-    private func pruneIdleFlows() {
-        let now = MasterClock.nowNanoseconds()
-        let idleNs = Int64(configuration.subscriberTTLSeconds * 1_000_000_000)
-        for (key, flow) in flows where now - flow.lastHeardNs > idleNs {
-            flows.removeValue(forKey: key)
-            flow.connection.cancel()
-        }
-    }
-
     /// Only the connection the key was registered for may remove it: a
     /// late `.cancelled` from a flow that was already replaced must not
     /// evict its successor.
@@ -751,7 +742,6 @@ public actor OSCFacade {
                     return // cancelled
                 }
                 await self.pushStatusToSubscribers()
-                await self.pruneIdleFlows()
             }
         }
     }

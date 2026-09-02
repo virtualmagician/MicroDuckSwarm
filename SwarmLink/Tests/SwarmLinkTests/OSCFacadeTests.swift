@@ -558,25 +558,27 @@ final class OSCFacadeTests: XCTestCase {
         await rig.close()
     }
 
-    func testIdleFlowsArePrunedAndAReturningSenderIsHeard() async throws {
+    /// A rig like QLab sends from one fixed source port with long gaps.
+    /// Its flow must survive idleness (only the cap evicts), and its next
+    /// datagram must be answered on the same flow — hanging up on idle
+    /// flows was observed to black-hole the returning sender on CI.
+    func testIdleFlowsAreKeptSoAFixedPortRigIsAlwaysHeard() async throws {
         let rig = try await rig(idleStatusHz: 10, subscriberTTL: 0.3)
         await rig.client.send(OSCMessage(address: "/duckswarm/status"))
         let first = await rig.client.waitFor("/duckswarm/status/transport")
         XCTAssertEqual(first.count, 1)
-        var tracked = await rig.facade.trackedFlowCount
+        let tracked = await rig.facade.trackedFlowCount
         XCTAssertEqual(tracked, 1)
 
-        for _ in 0..<150 where tracked > 0 {
-            await Task.sleepMs(10)
-            tracked = await rig.facade.trackedFlowCount
-        }
-        XCTAssertEqual(tracked, 0, "a one-shot sender's flow is hung up on once it has been silent for the TTL")
+        await Task.sleepMs(800)  // well past the 0.3 s subscriber TTL
+        let stillTracked = await rig.facade.trackedFlowCount
+        XCTAssertEqual(stillTracked, 1, "an idle flow is never hung up on; only the cap evicts")
 
         await rig.client.send(OSCMessage(address: "/duckswarm/status"))
         let second = await rig.client.waitFor("/duckswarm/status/transport", count: 2)
-        XCTAssertEqual(second.count, 2, "the same socket talking again gets a fresh flow and its reply")
+        XCTAssertEqual(second.count, 2, "the same socket talking again after a long gap is answered")
         let again = await rig.facade.trackedFlowCount
-        XCTAssertEqual(again, 1)
+        XCTAssertEqual(again, 1, "same source port, same flow")
         await rig.close()
     }
 

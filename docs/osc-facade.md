@@ -48,6 +48,8 @@ Sent to every address that pinged within the last 5 s, at **2 Hz** while armed/p
 
 One `/duckswarm/status/duck` message per roster duck per push. Everything fits in single datagrams; bundles are not used.
 
+Flows: the facade keeps one UDP flow per sender source port and never hangs up on an idle one (a rig such as QLab talks from one fixed port with long gaps, and its next `/duckswarm/go` must not be lost); the table is bounded at 64 flows, evicting the least-recently-heard *non-subscriber* when full. A rig that pings is a subscriber and is evicted last — ping if you want your flow protected.
+
 The transport returns to `stopped` on its own when the master's show clock reaches the show's `meta.duration`: the agents end playback there themselves (→ LOADED, docs/swarmlink-protocol.md §5), the master mirrors it within one 5 Hz state tick, and the change is pushed like any other — a rig sees `playing` → `stopped` (show_time `0.0`) without sending `/duckswarm/stop`.
 
 ## OSC codec
