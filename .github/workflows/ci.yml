@@ -31,9 +31,26 @@ jobs:
       - name: Run e2e demo
         run: ./scripts/e2e_demo.sh
 
+  editor:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    strategy:
+      fail-fast: false
+      matrix:
+        # 20: directory argument = search for *.test.mjs; 22: directory
+        # argument = one test file, resolved to editor/tests/index.js.
+        node-version: [20, 22]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+      - name: Run editor tests
+        run: node --test editor/tests
+
   swift:
     runs-on: macos-latest
-    timeout-minutes: 8
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -55,3 +72,6 @@ jobs:
       - name: OSC e2e
         timeout-minutes: 5
         run: ./scripts/e2e_osc.sh
+      - name: Record e2e
+        timeout-minutes: 5
+        run: ./scripts/e2e_record.sh

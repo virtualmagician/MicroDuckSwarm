@@ -19,12 +19,24 @@ If the connection drops, a background thread reconnects with capped
 exponential backoff. While disconnected, `notify()`/`request()` raise
 RobotdDisconnected so callers (duck_agent.agent) can pause intent
 emission and surface state "fault" until the socket is back.
+
+Writes are bounded: a robotd that stops *reading* but keeps the socket
+open (deadlocked, SIGSTOPped, starved) would otherwise fill the kernel
+send buffer and park the caller inside `sendall` forever -- on the agent
+that is the 50 Hz tick thread holding its playback lock, so panic could
+neither ACK nor reach robotd. `_write_line` therefore waits at most
+`SEND_TIMEOUT_S` (notifications) / the request's own timeout for the
+socket to become writable; if it does not, the link is treated as dead:
+the socket is closed (the reconnect loop takes over, and the agent's
+owed-stop logic re-sends `robot.stop` on reconnect) and
+RobotdDisconnected is raised.
 """
 
 from __future__ import annotations
 
 import json
 import logging
+import select
 import socket
 import threading
 import time
@@ -34,6 +46,12 @@ logger = logging.getLogger("duck_agent.robotd_client")
 
 API_VERSION = 16
 _RECV_BUFSIZE = 65536
+
+# Longest a notification may wait for the socket to accept it (module
+# docstring). Ten tick periods: far longer than a healthy robotd ever
+# needs to drain a few hundred bytes, short enough that a panic queued
+# behind it still ACKs promptly.
+SEND_TIMEOUT_S = 0.2
 
 
 class RobotdError(Exception):
@@ -311,7 +329,14 @@ class RobotdClient:
 
     # -- write path ------------------------------------------------------
 
-    def _write_line(self, obj: dict[str, Any]) -> None:
+    def _write_line(self, obj: dict[str, Any], send_timeout: float = SEND_TIMEOUT_S) -> None:
+        """Write one NDJSON line, waiting at most `send_timeout` for the
+        socket to accept it (module docstring). A socket that stays
+        unwritable that long is a robotd that stopped reading: the link is
+        closed so the reconnect path takes over, and RobotdDisconnected is
+        raised. Lines are far below the socket's low-water mark, so once
+        select() reports writable the sendall() below does not block.
+        """
         with self._state_lock:
             sock = self._sock
         if sock is None:
@@ -319,13 +344,23 @@ class RobotdClient:
         line = (json.dumps(obj) + "\n").encode("utf-8")
         with self._write_lock:
             try:
+                _, writable, _ = select.select([], [sock], [], send_timeout)
+            except (OSError, ValueError) as exc:  # closed under us
+                raise RobotdDisconnected(str(exc)) from exc
+            if not writable:
+                logger.warning(
+                    "robotd at %s has not drained its socket for %.2fs; dropping the link", self.target, send_timeout
+                )
+                self._close_socket()
+                raise RobotdDisconnected(f"robotd at {self.target} stopped reading (send timed out)")
+            try:
                 sock.sendall(line)
             except OSError as exc:
                 raise RobotdDisconnected(str(exc)) from exc
 
     def notify(self, method: str, params: Optional[dict[str, Any]] = None) -> None:
         """Fire-and-forget continuous intent (robot.move/head/pose/mouth):
-        no `id`, no reply expected.
+        no `id`, no reply expected. Never blocks longer than SEND_TIMEOUT_S.
         """
         self._write_line({"jsonrpc": "2.0", "method": method, "params": params or {}})
 
@@ -336,7 +371,7 @@ class RobotdClient:
             event = threading.Event()
             self._pending[mid] = event
         try:
-            self._write_line({"jsonrpc": "2.0", "id": mid, "method": method, "params": params or {}})
+            self._write_line({"jsonrpc": "2.0", "id": mid, "method": method, "params": params or {}}, send_timeout=timeout)
             got = event.wait(timeout)
             if not got:
                 raise RobotdTimeout(f"robotd request {method!r} (id={mid}) timed out after {timeout}s")

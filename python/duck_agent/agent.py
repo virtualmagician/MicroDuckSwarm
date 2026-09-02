@@ -40,9 +40,59 @@ and re-bases then (no ARMED detour, no coasting with a stale velocity).
 immediately), ACKs at once, and performs its `robot.stop` / neutral pose
 from a dedicated thread -- its ACK must never wait on a robotd reply.
 
-This module owns three background threads (UDP receive, time sync,
-telemetry) plus the 50 Hz playback tick thread; `duckshow.Sampler` does
-the actual curve math.
+Puppet channel (docs/swarmlink-protocol.md #6, docs/authoring.md #1):
+`"type": "puppet"` datagrams on the same UDP socket feed a
+`puppet.PuppetChannel` (seq dedup, clamping, 250 ms per-channel deadman).
+The tick loop is the only consumer:
+
+  * IDLE/LOADED ("puppet mode"): fresh move/head/pose/mouth are forwarded
+    as the corresponding robot.* notification every tick, last value
+    wins. When the move channel goes stale (or the FSM leaves a
+    puppet-eligible state under a live stream, e.g. `play` -> ARMED),
+    locomotion is zeroed exactly once and forwarding stops.
+  * PLAYING ("nudge layer"): puppet move is *added* to the sampled
+    timeline locomotion (clamped); puppet head/pose/mouth *override* the
+    timeline's; stale -> the timeline resumes. A role without a
+    locomotion track is nudged from zero and zeroed once on staleness.
+  * ARMED and FAULT ignore puppet values; queued do/sound are discarded.
+  * do/sound fire once per accepted seq through the same request path
+    timeline events use, but from a dedicated puppet-action thread fed by
+    a short bounded queue (never under _playback_lock, never on the
+    receive thread, never on the tick thread): a slow or hung robot.do
+    must delay neither a panic cmd queued behind a puppet packet nor the
+    tick loop itself -- the 250 ms deadman and the timeline run on that
+    thread, and a sender that violates #6 (a `do` in every packet) must
+    not be able to stretch the tick period. Actions that do not fit the
+    queue are dropped with a warning (robotd would answer BUSY anyway).
+    A JSON-RPC error reply (e.g. BUSY) is logged, not faulted: an
+    operator's extra kick must never take the duck out of a number; a
+    timeout/disconnect faults like an event.
+  * panic and stop mute the channel until the stream has been quiet for
+    one deadman period, so a sender that keeps streaming cannot re-drive
+    the duck 20 ms after a panic. load leaves it alone. Muting also bumps
+    the channel's epoch; an action taken off the queue under an older
+    epoch is never delivered, so a `do` drained just before a panic/stop
+    cannot land after their robot.stop (the FSM lands in IDLE/LOADED,
+    which are puppet-eligible states, so a state check alone cannot tell
+    "before the panic" from "after it").
+  * The master address is never learned from puppet packets: the puppet
+    sender (tools/puppet.py, `swarmctl record`) may be a different
+    process than the master, and telemetry/time sync must keep going to
+    the master.
+
+Shutdown (`stop()`, reached from SIGINT/SIGTERM in __main__): if the
+duck is in motion -- ARMED/PLAYING, or a puppet stream is driving it --
+the same zero move + `robot.stop` + neutral head/pose as any other exit
+from motion goes out before the robotd link is closed. Nothing else can
+run the deadman or accept a panic once the agent process is gone.
+
+This module owns four background threads (UDP receive, time sync,
+telemetry, puppet actions) plus the 50 Hz playback tick thread;
+`duckshow.Sampler` does the actual curve math. The UDP receive loop
+never lets a handler exception escape: a datagram that trips a bug is
+logged and dropped, because that thread is the only reader of cmd
+datagrams and a dead reader would leave a duck that ignores panic while
+its telemetry still looks healthy.
 """
 
 from __future__ import annotations
@@ -51,6 +101,7 @@ import hashlib
 import json
 import logging
 import math
+import queue
 import socket
 import threading
 import time
@@ -61,6 +112,7 @@ from typing import Any, Optional
 import duckshow
 
 from .clock import Clock, slew_towards
+from .puppet import PuppetChannel, PuppetPacketError, PuppetValues, nudge_move, parse_puppet_packet
 from .robotd_client import RobotdClient, RobotdDisconnected, RobotdError, RobotdTimeout
 
 logger = logging.getLogger("duck_agent.agent")
@@ -92,6 +144,11 @@ LATE_JOIN_MAX_S = 2.0
 SHOW_TIME_SLEW_S_PER_S = 0.005  # 5 ms/s
 
 ROBOTD_REQUEST_TIMEOUT_S = 1.0
+
+# Puppet do/sound waiting for the puppet-action thread (module docstring):
+# one `do` plus one `sound` is what a single packet can carry; anything
+# beyond that is a sender out of spec, and is dropped rather than queued.
+PUPPET_ACTION_QUEUE_MAX = 2
 
 _MAX_CMD_CACHE = 512
 
@@ -164,6 +221,17 @@ class DuckAgent:
         # is re-sent as soon as robotd is reachable again.
         self._stop_owed: bool = False
 
+        # Puppet channel (module docstring). `_puppet_move_applied` is
+        # whether the last robot.move we emitted carried puppet influence,
+        # so the tick that first sees the stream stale (or the FSM leave a
+        # puppet-eligible state) can zero locomotion exactly once. Mutated
+        # only under _playback_lock; the channel itself has its own lock.
+        self._puppet = PuppetChannel()
+        self._puppet_move_applied: bool = False
+        # (kind, name, channel epoch) handed from the tick loop to the
+        # puppet-action thread.
+        self._puppet_actions: "queue.Queue[tuple[str, str, int]]" = queue.Queue(maxsize=PUPPET_ACTION_QUEUE_MAX)
+
         self.clock = Clock()
 
         self._cmd_lock = threading.Lock()
@@ -189,17 +257,36 @@ class DuckAgent:
             threading.Thread(target=self._time_sync_loop, daemon=True, name=f"{self.duck_id}-timesync"),
             threading.Thread(target=self._telemetry_loop, daemon=True, name=f"{self.duck_id}-telemetry"),
             threading.Thread(target=self._tick_loop, daemon=True, name=f"{self.duck_id}-tick"),
+            threading.Thread(target=self._puppet_action_loop, daemon=True, name=f"{self.duck_id}-puppet-actions"),
         ]
         for t in self._threads:
             t.start()
 
     def stop(self) -> None:
+        """Shut the agent down; idempotent. See the module docstring on
+        why a duck in motion gets its stop sequence first.
+        """
+        if self._stop_event.is_set():
+            return
         self._stop_event.set()
         with self._playback_lock:
             self._cancel_scheduled()
             held = self._take_held_sounds_locked()
         for t in self._threads:
             t.join(timeout=2)
+        # The emitters are gone now; whatever robotd is holding is the last
+        # thing we sent it, and it is last-value-wins with no local watchdog.
+        with self._playback_lock:
+            in_motion = (
+                self.state in ("armed", "playing")
+                or self._puppet_move_applied
+                or self._puppet.is_fresh(time.monotonic_ns())
+            )
+        if in_motion:
+            err = self._send_stop_sequence()
+            if err is not None:
+                logger.warning("%s: robot.stop on shutdown failed: %s", self.duck_id, err)
+            self._notify_neutral()
         self._release_held_sounds(held)
         try:
             self.udp_sock.close()
@@ -232,6 +319,7 @@ class DuckAgent:
         return raw + self._show_time_correction_s
 
     def build_telemetry(self, now_ns: Optional[int] = None) -> dict[str, Any]:
+        now_ns = now_ns if now_ns is not None else time.monotonic_ns()
         show_time = 0.0
         if self.state in ("armed", "playing"):
             show_time = self._current_show_time(now_ns)
@@ -250,6 +338,7 @@ class DuckAgent:
             "battery_pct": None,
             "rssi_dbm": None,
             "last_error": self.last_error,
+            "puppet": self._puppet.is_fresh(now_ns),
         }
 
     # -- robotd link ---------------------------------------------------
@@ -277,6 +366,10 @@ class DuckAgent:
         the error text on failure; a failed stop is remembered as owed so
         `_on_robotd_state_change(True)` re-sends it.
         """
+        with self._playback_lock:
+            # Whatever happens below, the puppet's last velocity is no
+            # longer what robotd holds (zeroed here, or owed on reconnect).
+            self._puppet_move_applied = False
         try:
             self.robotd.notify("robot.move", dict(_ZERO_MOVE))
             self.robotd.request("robot.stop", {}, timeout=timeout)
@@ -339,13 +432,31 @@ class DuckAgent:
             if not isinstance(msg, dict):
                 continue
             mtype = msg.get("type")
-            if mtype == "time_resp":
-                self._on_time_resp(msg, addr)
-            elif mtype == "state":
-                self._on_state_msg(msg, addr)
-            elif mtype == "cmd":
-                self._handle_cmd_message(msg, addr)
-            # unknown type: dropped silently (swarmlink-protocol.md #3)
+            try:
+                if mtype == "time_resp":
+                    self._on_time_resp(msg, addr)
+                elif mtype == "state":
+                    self._on_state_msg(msg, addr)
+                elif mtype == "cmd":
+                    self._handle_cmd_message(msg, addr)
+                elif mtype == "puppet":
+                    self._on_puppet_msg(msg)
+                # unknown type: dropped silently (swarmlink-protocol.md #3)
+            except Exception:  # noqa: BLE001 -- no datagram may kill the only cmd reader (module docstring)
+                logger.exception("%s: dropping %r datagram from %s that raised", self.duck_id, mtype, addr)
+
+    def _on_puppet_msg(self, msg: dict[str, Any]) -> None:
+        """docs/swarmlink-protocol.md #6. Parse + clamp, then offer to the
+        channel; the tick loop does the forwarding. Deliberately does
+        *not* call _set_master_addr (module docstring).
+        """
+        try:
+            packet = parse_puppet_packet(msg)
+        except PuppetPacketError as exc:
+            logger.debug("%s: dropping malformed puppet packet: %s", self.duck_id, exc)
+            return
+        if not self._puppet.offer(packet, time.monotonic_ns()):
+            logger.debug("%s: dropping puppet packet seq=%s (stale seq or muted)", self.duck_id, packet.seq)
 
     def _set_master_addr(self, addr: tuple[str, int]) -> None:
         """Learn/refresh the master's address from any inbound packet's
@@ -431,7 +542,11 @@ class DuckAgent:
             logger.warning("%s: unknown cmd %r", self.duck_id, cmd)
             return
 
-        ok, error = handler(msg)
+        try:
+            ok, error = handler(msg)
+        except Exception as exc:  # noqa: BLE001 -- a malformed field (e.g. a non-numeric time) is a NACK, not a crash
+            logger.exception("%s: cmd %r raised", self.duck_id, cmd)
+            ok, error = False, f"{cmd} rejected: {exc}"
         with self._cmd_lock:
             self._cmd_results[cmd_id] = {"ok": ok, "error": error}
             while len(self._cmd_results) > _MAX_CMD_CACHE:
@@ -702,12 +817,16 @@ class DuckAgent:
                 return False, "duck is in fault state; reload required"
             self._cancel_scheduled()
             held = self._take_held_sounds_locked()
-            if self.state in ("armed", "playing"):
+            # stop wins over a live puppet stream (module docstring): mute
+            # it, and if the puppet was driving locomotion in IDLE/LOADED
+            # that motion is stopped exactly like a playing show's.
+            self._puppet.mute()
+            if self.state in ("armed", "playing") or self._puppet_move_applied:
                 err = self._send_stop_sequence()
                 if err is not None:
                     self._fault_locked(f"stop failed: {err}")
                     error = self.last_error
-                else:
+                elif self.state in ("armed", "playing"):
                     self.state = "loaded" if self.show is not None else "idle"
             self._play_epoch_local_ns = None
             self._play_epoch_show_time = 0.0
@@ -721,8 +840,10 @@ class DuckAgent:
         # if the robotd calls fail -- panic's job is to get the FSM back
         # to a known-safe IDLE, which it does unconditionally and
         # synchronously (the tick loop stops emitting the moment the
-        # state flips). The robotd side runs on its own thread so the
-        # ACK never waits on a robotd reply (or on a hung one).
+        # state flips). Every robotd write, the zero move included, runs
+        # on its own thread so the ACK never waits on robotd at all -- not
+        # on a reply, not on a hung one, not on a socket it stopped
+        # draining.
         with self._playback_lock:
             self._cancel_scheduled()
             held = self._take_held_sounds_locked()
@@ -736,27 +857,23 @@ class DuckAgent:
             self._play_epoch_local_ns = None
             self._play_epoch_show_time = 0.0
             self.last_error = None
-            # Zero locomotion right here, under the lock: a notification
-            # never waits on a reply, and ordering it after the FSM reset
-            # makes it provably the last robot.move robotd sees from us.
-            try:
-                self.robotd.notify("robot.move", dict(_ZERO_MOVE))
-            except RobotdDisconnected:
-                pass  # the owed stop below covers it once the link is back
+            # Panic wins over a live puppet stream too: mute it until it
+            # goes quiet (module docstring). The panic thread's zero move
+            # covers whatever puppet velocity robotd was holding; with the
+            # FSM already reset and the channel muted, the tick loop has
+            # nothing left to emit, so that zero move is the last
+            # robot.move robotd sees from us.
+            self._puppet.mute()
+            self._puppet_move_applied = False
         threading.Thread(
             target=self._execute_panic, args=(held,), daemon=True, name=f"{self.duck_id}-panic"
         ).start()
         return True, None
 
     def _execute_panic(self, held: list[str]) -> None:
-        try:
-            self.robotd.request("robot.stop", {}, timeout=ROBOTD_REQUEST_TIMEOUT_S)
-            with self._playback_lock:
-                self._stop_owed = False
-        except _ROBOTD_FAILURES as exc:
-            logger.warning("%s: panic robot.stop failed: %s", self.duck_id, exc)
-            with self._playback_lock:
-                self._stop_owed = True
+        err = self._send_stop_sequence()
+        if err is not None:
+            logger.warning("%s: panic robot.stop failed: %s", self.duck_id, err)
         self._notify_neutral()
         self._release_held_sounds(held)
 
@@ -841,6 +958,30 @@ class DuckAgent:
             logger.warning("%s: event %s at t=%s failed: %s", self.duck_id, kind, event.t, exc)
             self._enter_fault(f"event {kind} failed: {exc}")
 
+    def _fire_puppet_action(self, kind: str, name: str, epoch: int) -> None:
+        """A puppet `do`/`sound`: same request path as `_fire_event`, on
+        the puppet-action thread, outside _playback_lock. State and the
+        channel epoch are re-checked first so an action drained just
+        before a panic/stop (epoch moved) or a fault/arm (state) never
+        fires -- the state check alone cannot catch panic/stop, whose
+        landing states IDLE/LOADED are puppet-eligible.
+        """
+        with self._playback_lock:
+            if self.state not in ("idle", "loaded", "playing") or self._puppet.epoch != epoch:
+                return
+        try:
+            if kind == "do":
+                self.robotd.request("robot.do", {"skill": name}, timeout=ROBOTD_REQUEST_TIMEOUT_S)
+            else:
+                self.robotd.request("robot.sound", {"tag": name}, timeout=ROBOTD_REQUEST_TIMEOUT_S)
+        except RobotdError as exc:
+            # A refused operator input (e.g. BUSY mid-skill) is not a duck
+            # health problem -- never take a duck out of a number for it.
+            logger.warning("%s: puppet %s %r refused by robotd: %s", self.duck_id, kind, name, exc)
+        except (RobotdDisconnected, RobotdTimeout) as exc:
+            logger.warning("%s: puppet %s %r failed: %s", self.duck_id, kind, name, exc)
+            self._enter_fault(f"puppet {kind} failed: {exc}")
+
     # -- 50 Hz playback tick loop ------------------------------------------
 
     def _tick_loop(self) -> None:
@@ -854,6 +995,8 @@ class DuckAgent:
 
             events: list[duckshow.Event] = []
             end_of_show = False
+            puppet_actions: list[tuple[str, str]] = []
+            puppet_epoch = 0
             with self._playback_lock:
                 self._show_time_correction_s = slew_towards(
                     self._show_time_correction_s,
@@ -865,14 +1008,66 @@ class DuckAgent:
                     self._maybe_start_from_armed(now_ns)
                 if self.state == "playing":
                     events, end_of_show = self._play_tick(now_ns)
+                else:
+                    self._puppet_tick(now_ns)
+                # Queued do/sound are drained every tick; outside
+                # IDLE/LOADED/PLAYING they are discarded (never fired late).
+                # The epoch is read under the same lock panic/stop mute
+                # under, so it is exactly the one these actions were
+                # accepted under (_fire_puppet_action).
+                puppet_actions = self._puppet.take_actions()
+                puppet_epoch = self._puppet.epoch
+                if self.state not in ("idle", "loaded", "playing"):
+                    puppet_actions = []
 
-            # Discrete robotd requests happen outside the lock.
+            # Discrete robotd requests happen outside the lock; puppet
+            # actions go to their own thread so this loop's period never
+            # depends on a robot.do round trip (module docstring).
             for event in events:
                 self._fire_event(event)
+            for kind, name in puppet_actions:
+                try:
+                    self._puppet_actions.put_nowait((kind, name, puppet_epoch))
+                except queue.Full:
+                    logger.warning("%s: puppet %s %r dropped: robotd is still busy with earlier puppet actions", self.duck_id, kind, name)
             if end_of_show:
                 self._end_of_show()
 
             self._stop_event.wait(TICK_PERIOD_S)
+
+    def _puppet_action_loop(self) -> None:
+        while not self._stop_event.is_set():
+            try:
+                kind, name, epoch = self._puppet_actions.get(timeout=LOOP_SLICE_S)
+            except queue.Empty:
+                continue
+            self._fire_puppet_action(kind, name, epoch)
+
+    def _puppet_tick(self, now_ns: int) -> None:
+        """Puppet mode (IDLE/LOADED): forward fresh values; caller holds
+        _playback_lock. In ARMED/FAULT nothing is forwarded, but a
+        locomotion the puppet was driving is still zeroed once.
+        """
+        values = self._puppet.values(now_ns) if self.state in ("idle", "loaded") else PuppetValues()
+        try:
+            if values.move is not None:
+                self.robotd.notify("robot.move", dict(values.move))
+            elif self._puppet_move_applied:
+                self.robotd.notify("robot.move", dict(_ZERO_MOVE))
+            if values.head is not None:
+                self.robotd.notify("robot.head", dict(values.head))
+            if values.pose is not None:
+                self.robotd.notify("robot.pose", dict(values.pose))
+            if values.mouth is not None:
+                self.robotd.notify("robot.mouth", dict(values.mouth))
+        except RobotdDisconnected:
+            if self._puppet_move_applied or values.move is not None:
+                # robotd may still be executing the last velocity it got
+                # from us; the stop is owed and sent on reconnect.
+                self._stop_owed = True
+            self._puppet_move_applied = False
+            return
+        self._puppet_move_applied = values.move is not None
 
     def _maybe_start_from_armed(self, now_ns: int) -> None:
         if self._scheduled_at_master_ns is None:
@@ -918,27 +1113,61 @@ class DuckAgent:
         servo = self.sampler.servo_at(show_time)
         locomotion_frozen = servo is not None and servo.mode == "hold"
 
-        try:
-            if frame.locomotion is not None and not locomotion_frozen:
+        # Nudge layer (module docstring): puppet move adds to the timeline's
+        # locomotion, puppet head/pose/mouth replace the timeline's while
+        # fresh. A servo hold owns locomotion outright (no nudge either).
+        puppet = self._puppet.values(now_ns)
+        move_out: Optional[dict[str, float]] = None
+        puppet_applied = False
+        if not locomotion_frozen:
+            if frame.locomotion is not None:
                 v = frame.locomotion
-                self.robotd.notify("robot.move", {"vx": v.vx, "vy": v.vy, "vyaw": v.vyaw})
-            if frame.head is not None:
-                h = frame.head
-                self.robotd.notify(
-                    "robot.head",
-                    {"neck_pitch": h.neck_pitch, "head_pitch": h.head_pitch, "head_yaw": h.head_yaw, "head_roll": h.head_roll},
-                )
-            if frame.pose is not None:
-                p = frame.pose
-                self.robotd.notify("robot.pose", {"z": p.z, "roll": p.roll, "pitch": p.pitch, "active": p.active})
-            if frame.mouth is not None:
-                self.robotd.notify("robot.mouth", {"open": frame.mouth.open})
+                move_out = {"vx": v.vx, "vy": v.vy, "vyaw": v.vyaw}
+                if puppet.move is not None:
+                    move_out = nudge_move(move_out, puppet.move)
+                    puppet_applied = True
+            elif puppet.move is not None:
+                move_out = dict(puppet.move)  # no locomotion track: nudged from standing
+                puppet_applied = True
+        if move_out is None and self._puppet_move_applied:
+            move_out = dict(_ZERO_MOVE)  # the puppet's velocity would otherwise be held forever
+
+        head_out: Optional[dict[str, Any]] = None
+        if puppet.head is not None:
+            head_out = dict(puppet.head)
+        elif frame.head is not None:
+            h = frame.head
+            head_out = {"neck_pitch": h.neck_pitch, "head_pitch": h.head_pitch, "head_yaw": h.head_yaw, "head_roll": h.head_roll}
+
+        pose_out: Optional[dict[str, Any]] = None
+        if puppet.pose is not None:
+            pose_out = dict(puppet.pose)
+        elif frame.pose is not None:
+            p = frame.pose
+            pose_out = {"z": p.z, "roll": p.roll, "pitch": p.pitch, "active": p.active}
+
+        mouth_out: Optional[dict[str, Any]] = None
+        if puppet.mouth is not None:
+            mouth_out = dict(puppet.mouth)
+        elif frame.mouth is not None:
+            mouth_out = {"open": frame.mouth.open}
+
+        try:
+            if move_out is not None:
+                self.robotd.notify("robot.move", move_out)
+            if head_out is not None:
+                self.robotd.notify("robot.head", head_out)
+            if pose_out is not None:
+                self.robotd.notify("robot.pose", pose_out)
+            if mouth_out is not None:
+                self.robotd.notify("robot.mouth", mouth_out)
         except RobotdDisconnected:
             # The link is gone mid-number: this is terminal for the number
             # (a duck never resumes into the middle of it when robotd
             # returns); the stop is owed and sent on reconnect.
             self._enter_fault("robotd disconnected")
             return [], False
+        self._puppet_move_applied = puppet_applied
 
         events = self.sampler.events_between(self._last_processed_show_time, show_time)
         self._last_processed_show_time = show_time

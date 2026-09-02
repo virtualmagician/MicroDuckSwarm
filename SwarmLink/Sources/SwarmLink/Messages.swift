@@ -335,11 +335,17 @@ public struct TelemetryMessage: Sendable, Equatable {
     public var batteryPct: Double?
     public var rssiDbm: Double?
     public var lastError: String?
+    /// True while a puppet stream to this duck is fresh (docs/swarmlink-
+    /// protocol.md §6: "Telemetry adds `puppet: true|false`") — the one
+    /// flag that explains a duck walking off its mark under a forgotten
+    /// puppet sender. Decodes as `false` when the key is absent (an agent
+    /// without the puppet channel).
+    public var puppet: Bool
 
     public init(
         v: Int = SwarmLinkInfo.protocolVersion, duck: DuckID, seq: Int, state: AgentState, show: String?,
         showTime: Double, clockOffsetMs: Double?, clockRttMs: Double?, policiesOk: Bool,
-        batteryPct: Double? = nil, rssiDbm: Double? = nil, lastError: String? = nil
+        batteryPct: Double? = nil, rssiDbm: Double? = nil, lastError: String? = nil, puppet: Bool = false
     ) {
         self.v = v
         self.duck = duck
@@ -353,6 +359,7 @@ public struct TelemetryMessage: Sendable, Equatable {
         self.batteryPct = batteryPct
         self.rssiDbm = rssiDbm
         self.lastError = lastError
+        self.puppet = puppet
     }
 }
 
@@ -366,6 +373,7 @@ extension TelemetryMessage: Codable {
         case batteryPct = "battery_pct"
         case rssiDbm = "rssi_dbm"
         case lastError = "last_error"
+        case puppet
     }
 
     public init(from decoder: Decoder) throws {
@@ -382,6 +390,7 @@ extension TelemetryMessage: Codable {
         batteryPct = try c.decodeIfPresent(Double.self, forKey: .batteryPct)
         rssiDbm = try c.decodeIfPresent(Double.self, forKey: .rssiDbm)
         lastError = try c.decodeIfPresent(String.self, forKey: .lastError)
+        puppet = try c.decodeIfPresent(Bool.self, forKey: .puppet) ?? false
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -404,6 +413,180 @@ extension TelemetryMessage: Codable {
         try c.encodeIfPresent(batteryPct, forKey: .batteryPct)
         try c.encodeIfPresent(rssiDbm, forKey: .rssiDbm)
         try c.encodeIfPresent(lastError, forKey: .lastError)
+        // Always on the wire, like the Python agent's `build_telemetry`.
+        try c.encode(puppet, forKey: .puppet)
+    }
+}
+
+// MARK: - puppet (§6)
+
+/// `"move": {"vx", "vy", "vyaw"}` — trunk-frame velocity the puppeteer
+/// asserts this tick (m/s, m/s, rad/s). Missing members decode as 0, the
+/// same leniency as the show model's keyframes.
+public struct PuppetMove: Codable, Sendable, Equatable {
+    public var vx: Double
+    public var vy: Double
+    public var vyaw: Double
+
+    private enum CodingKeys: String, CodingKey { case vx, vy, vyaw }
+
+    public init(vx: Double = 0, vy: Double = 0, vyaw: Double = 0) {
+        self.vx = vx; self.vy = vy; self.vyaw = vyaw
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        vx = try c.decodeIfPresent(Double.self, forKey: .vx) ?? 0
+        vy = try c.decodeIfPresent(Double.self, forKey: .vy) ?? 0
+        vyaw = try c.decodeIfPresent(Double.self, forKey: .vyaw) ?? 0
+    }
+}
+
+/// `"head": {"neck_pitch", "head_pitch", "head_yaw", "head_roll"}` (rad).
+public struct PuppetHead: Codable, Sendable, Equatable {
+    public var neckPitch: Double
+    public var headPitch: Double
+    public var headYaw: Double
+    public var headRoll: Double
+
+    private enum CodingKeys: String, CodingKey {
+        case neckPitch = "neck_pitch"
+        case headPitch = "head_pitch"
+        case headYaw = "head_yaw"
+        case headRoll = "head_roll"
+    }
+
+    public init(neckPitch: Double = 0, headPitch: Double = 0, headYaw: Double = 0, headRoll: Double = 0) {
+        self.neckPitch = neckPitch; self.headPitch = headPitch; self.headYaw = headYaw; self.headRoll = headRoll
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        neckPitch = try c.decodeIfPresent(Double.self, forKey: .neckPitch) ?? 0
+        headPitch = try c.decodeIfPresent(Double.self, forKey: .headPitch) ?? 0
+        headYaw = try c.decodeIfPresent(Double.self, forKey: .headYaw) ?? 0
+        headRoll = try c.decodeIfPresent(Double.self, forKey: .headRoll) ?? 0
+    }
+}
+
+/// `"pose": {"z", "roll", "pitch", "active"}` (m, rad, rad, bool).
+public struct PuppetPose: Codable, Sendable, Equatable {
+    public var z: Double
+    public var roll: Double
+    public var pitch: Double
+    public var active: Bool
+
+    private enum CodingKeys: String, CodingKey { case z, roll, pitch, active }
+
+    public init(z: Double = 0, roll: Double = 0, pitch: Double = 0, active: Bool = false) {
+        self.z = z; self.roll = roll; self.pitch = pitch; self.active = active
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        z = try c.decodeIfPresent(Double.self, forKey: .z) ?? 0
+        roll = try c.decodeIfPresent(Double.self, forKey: .roll) ?? 0
+        pitch = try c.decodeIfPresent(Double.self, forKey: .pitch) ?? 0
+        active = try c.decodeIfPresent(Bool.self, forKey: .active) ?? false
+    }
+}
+
+/// `"mouth": {"open"}` (0…1).
+public struct PuppetMouth: Codable, Sendable, Equatable {
+    public var open: Double
+
+    private enum CodingKeys: String, CodingKey { case open }
+
+    public init(open: Double = 0) {
+        self.open = open
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        open = try c.decodeIfPresent(Double.self, forKey: .open) ?? 0
+    }
+}
+
+/// `master → one agent`, unicast, ≤ 50 Hz, unacknowledged
+/// (docs/swarmlink-protocol.md §6):
+/// `{"v":1,"type":"puppet","seq":1042,"master_time":<ns>,"move":{…},"head":{…},"pose":{…},"mouth":{…},"do":"kick_left","sound":"chirp"}`
+///
+/// Every field except `seq` is optional — a packet carries only what the
+/// sender wants to assert this tick. `SwarmMaster.puppet(duck:frame:)`
+/// stamps `seq` (monotonic per duck) and `masterTime` itself, so callers
+/// building frames (the recorder's `ControllerMap`) leave both at their
+/// defaults. `do` is `skill` here because `do` is a Swift keyword; the wire
+/// key is `"do"`.
+public struct PuppetFrame: Sendable, Equatable {
+    public static let type = "puppet"
+
+    public var v: Int
+    public var seq: Int
+    /// Master-monotonic nanoseconds at send time; stamped by the master.
+    public var masterTime: Int64?
+    public var move: PuppetMove?
+    public var head: PuppetHead?
+    public var pose: PuppetPose?
+    public var mouth: PuppetMouth?
+    /// `"do"`: a skill name (docs/robotd-api.md Skill enum), fired once per `seq`.
+    public var skill: String?
+    /// `"sound"`: a sound tag (SoundTag enum), fired once per `seq`.
+    public var sound: String?
+
+    public init(
+        v: Int = SwarmLinkInfo.protocolVersion, seq: Int = 0, masterTime: Int64? = nil,
+        move: PuppetMove? = nil, head: PuppetHead? = nil, pose: PuppetPose? = nil, mouth: PuppetMouth? = nil,
+        skill: String? = nil, sound: String? = nil
+    ) {
+        self.v = v
+        self.seq = seq
+        self.masterTime = masterTime
+        self.move = move
+        self.head = head
+        self.pose = pose
+        self.mouth = mouth
+        self.skill = skill
+        self.sound = sound
+    }
+
+    /// True when the frame carries a discrete `do` or `sound`.
+    public var hasEvent: Bool { skill != nil || sound != nil }
+}
+
+extension PuppetFrame: Codable {
+    enum CodingKeys: String, CodingKey {
+        case v, type, seq
+        case masterTime = "master_time"
+        case move, head, pose, mouth
+        case skill = "do"
+        case sound
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        v = try c.decode(Int.self, forKey: .v)
+        seq = try c.decode(Int.self, forKey: .seq)
+        masterTime = try c.decodeIfPresent(Int64.self, forKey: .masterTime)
+        move = try c.decodeIfPresent(PuppetMove.self, forKey: .move)
+        head = try c.decodeIfPresent(PuppetHead.self, forKey: .head)
+        pose = try c.decodeIfPresent(PuppetPose.self, forKey: .pose)
+        mouth = try c.decodeIfPresent(PuppetMouth.self, forKey: .mouth)
+        skill = try c.decodeIfPresent(String.self, forKey: .skill)
+        sound = try c.decodeIfPresent(String.self, forKey: .sound)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(v, forKey: .v)
+        try c.encode(Self.type, forKey: .type)
+        try c.encode(seq, forKey: .seq)
+        try c.encodeIfPresent(masterTime, forKey: .masterTime)
+        try c.encodeIfPresent(move, forKey: .move)
+        try c.encodeIfPresent(head, forKey: .head)
+        try c.encodeIfPresent(pose, forKey: .pose)
+        try c.encodeIfPresent(mouth, forKey: .mouth)
+        try c.encodeIfPresent(skill, forKey: .skill)
+        try c.encodeIfPresent(sound, forKey: .sound)
     }
 }
 
@@ -417,6 +600,7 @@ public enum Envelope: Sendable, Equatable {
     case cmd(CommandMessage)
     case ack(AckMessage)
     case telemetry(TelemetryMessage)
+    case puppet(PuppetFrame)
 }
 
 /// Decodes and dispatches on `"type"`. Per docs/swarmlink-protocol.md §3:
@@ -441,6 +625,8 @@ public enum SwarmMessage {
             return (try? decoder.decode(AckMessage.self, from: data)).map(Envelope.ack)
         case TelemetryMessage.type:
             return (try? decoder.decode(TelemetryMessage.self, from: data)).map(Envelope.telemetry)
+        case PuppetFrame.type:
+            return (try? decoder.decode(PuppetFrame.self, from: data)).map(Envelope.puppet)
         default:
             return nil
         }
@@ -455,6 +641,7 @@ public enum SwarmMessage {
         case .cmd(let m): return try encoder.encode(m)
         case .ack(let m): return try encoder.encode(m)
         case .telemetry(let m): return try encoder.encode(m)
+        case .puppet(let m): return try encoder.encode(m)
         }
     }
 }

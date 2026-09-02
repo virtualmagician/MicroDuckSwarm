@@ -84,6 +84,10 @@ public struct DuckTelemetry: Sendable, Equatable {
     public var batteryPct: Double?
     public var rssiDbm: Double?
     public var lastError: String?
+    /// True while a puppet stream to this duck is fresh (docs/swarmlink-
+    /// protocol.md §6) — a duck under a live (or forgotten) puppet sender
+    /// is indistinguishable from one on the timeline without it.
+    public var puppet: Bool
     /// Master-monotonic ns at which this snapshot was last refreshed by an
     /// actual telemetry datagram.
     public var lastSeenMasterNs: Int64
@@ -110,11 +114,14 @@ public enum SwarmMasterError: Error, Sendable, Equatable, CustomStringConvertibl
     /// stopping the previous one, or fanning out): arming now would arm
     /// whichever show happened to be current mid-load.
     case loadInProgress
+    /// `puppet(duck:frame:)` for a duck that is not on the dialed roster.
+    case notConnected(DuckID)
 
     public var description: String {
         switch self {
         case .notLoaded: return "no show is loaded"
         case .loadInProgress: return "a load is in progress"
+        case .notConnected(let duck): return "duck \(duck) is not connected (not on the dialed roster)"
         }
     }
 }
@@ -222,6 +229,25 @@ public actor SwarmMaster {
     private var stateLoopTask: Task<Void, Never>?
     private var stateLoopGeneration: Int = 0
     private var housekeepingTask: Task<Void, Never>?
+
+    /// Last puppet `seq` stamped per duck (docs/swarmlink-protocol.md §6:
+    /// agents drop packets with a `seq` ≤ the last one seen, and only
+    /// forget it after 2 s of silence). Seeded from the *wall-clock*
+    /// millisecond on first use — the same seed `python/tools/puppet.py`
+    /// uses — so a stream started by either sender within 2 s of the
+    /// other's last packet is not locked out as stale: every sender's
+    /// first `seq` is comparable across processes and machines. (An uptime
+    /// clock, ~1e8 ms after days of uptime, sits far below the Python
+    /// tool's ~1.8e12 and every frame would be dropped.) This is a
+    /// sequence seed, not a protocol time: rule 4's "wall clocks are never
+    /// trusted" is about timestamps, which stay on the monotonic clock.
+    private var puppetSeq: [DuckID: Int] = [:]
+
+    /// The puppet `seq` seed for a duck this master has not streamed to
+    /// yet: milliseconds since the Unix epoch, never below 1.
+    static func puppetSeqSeed(now: Date = Date()) -> Int {
+        max(1, Int((now.timeIntervalSince1970 * 1000).rounded(.down)))
+    }
 
     /// - Parameters:
     ///   - masterPort: local UDP port every per-duck connection is pinned
@@ -359,11 +385,22 @@ public actor SwarmMaster {
     /// `SwarmMasterError.loadInProgress` while a `load()` is under way.
     @discardableResult
     public func play(at leadTimeNs: Int64 = 300_000_000) async throws -> [DuckID: CommandStatus] {
+        try await play(atMasterTime: MasterClock.nowNanoseconds() + max(0, leadTimeNs))
+    }
+
+    /// `play(at:)` with the start instant chosen by the caller: the show
+    /// begins at master-monotonic `atMasterTime` (the `at_master_time` every
+    /// duck receives), so a caller that must line other work up with the
+    /// play epoch — the recorder streaming puppet frames "from the play
+    /// epoch", a cue player syncing media — shares the exact instant
+    /// instead of re-deriving it. An instant already in the past starts at
+    /// once (the agents join in progress within their 2 s grace).
+    @discardableResult
+    public func play(atMasterTime: Int64) async throws -> [DuckID: CommandStatus] {
         guard loadsInProgress == 0 else { throw SwarmMasterError.loadInProgress }
         guard show != nil else { throw SwarmMasterError.notLoaded }
         _ = issueCommand()
         let now = MasterClock.nowNanoseconds()
-        let atMasterTime = now + max(0, leadTimeNs)
         let fromShowTime = cueShowTime
         cueShowTime = 0
 
@@ -424,6 +461,32 @@ public actor SwarmMaster {
         _ = issueCommand()
         haltTransport()
         return await fanOut(.panic)
+    }
+
+    // MARK: Public API — puppet stream (docs/swarmlink-protocol.md §6)
+
+    /// Sends one puppet datagram to `duck` on its existing connection —
+    /// unicast, unacknowledged, never retried (the next frame comes in
+    /// 20 ms; the agent's 250 ms deadman covers a gap). `seq` is stamped
+    /// monotonic per duck and `master_time` with the master's clock; the
+    /// stamped frame is returned. Independent of the transport: works in
+    /// every state (puppet mode while idle/loaded, the nudge layer while
+    /// playing) and never interferes with commands — panic, stop and load
+    /// keep their priority on the agent. Throws `notConnected` for a duck
+    /// that is not on the dialed roster (`connect(roster:)` / `load`).
+    @discardableResult
+    public func puppet(duck: DuckID, frame: PuppetFrame) throws -> PuppetFrame {
+        guard let connection = connections[duck] else { throw SwarmMasterError.notConnected(duck) }
+        let now = MasterClock.nowNanoseconds()
+        let seq = (puppetSeq[duck] ?? Self.puppetSeqSeed()) + 1
+        puppetSeq[duck] = seq
+        var stamped = frame
+        stamped.v = SwarmLinkInfo.protocolVersion
+        stamped.seq = seq
+        stamped.masterTime = now
+        let data = try JSONEncoder().encode(stamped)
+        send(data, on: connection)
+        return stamped
     }
 
     /// Snapshot of the last known telemetry per duck.
@@ -699,7 +762,7 @@ public actor SwarmMaster {
             resolveAck(ack, key: ackKey(cmdID: ack.cmdID, duck: duckID))
         case .telemetry(let telemetry):
             ingest(telemetry, duckID: duckID)
-        case .timeResponse, .state, .cmd:
+        case .timeResponse, .state, .cmd, .puppet:
             break // master never receives these; ignore per "unknown/unexpected is dropped"
         }
     }
@@ -726,6 +789,7 @@ public actor SwarmMaster {
             batteryPct: message.batteryPct,
             rssiDbm: message.rssiDbm,
             lastError: message.lastError,
+            puppet: message.puppet,
             lastSeenMasterNs: now,
             lost: false
         )

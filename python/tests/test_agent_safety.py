@@ -27,7 +27,7 @@ from typing import Optional
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from duck_agent.agent import DuckAgent  # noqa: E402
-from duck_agent.robotd_client import RobotdClient  # noqa: E402
+from duck_agent.robotd_client import RobotdClient, RobotdDisconnected  # noqa: E402
 from tests.test_agent import DEMO_SHA256, SHOWS_DIR, FakeMaster, FakeRobotd  # noqa: E402
 
 NS = 1_000_000_000
@@ -39,6 +39,13 @@ def _sha256_file(path: Path) -> str:
         for chunk in iter(lambda: f.read(65536), b""):
             h.update(chunk)
     return h.hexdigest()
+
+
+def _swallow_oserror(fn, *args) -> None:
+    try:
+        fn(*args)
+    except OSError:
+        pass
 
 
 def _rst_close(conn: socket.socket) -> None:
@@ -56,19 +63,23 @@ def _rst_close(conn: socket.socket) -> None:
 class ScriptedRobotd(FakeRobotd):
     """FakeRobotd with failure injection: `fail` maps a method to a
     JSON-RPC error (code, message); `hang` names methods that never get
-    a reply; `hello_api_version` fakes a version mismatch; `sever()`
-    hard-drops every live connection (and, with refuse_new, every later
-    one too, so the agent stays disconnected).
+    a reply; `delay` maps a method to seconds its (successful) reply is
+    held back without blocking the connection's reader (a slow actuator,
+    not a stalled daemon); `hello_api_version` fakes a version mismatch;
+    `sever()` hard-drops every live connection (and, with refuse_new,
+    every later one too, so the agent stays disconnected).
     """
 
     def __init__(
         self,
         fail: Optional[dict[str, tuple[int, str]]] = None,
         hang: Optional[set[str]] = None,
+        delay: Optional[dict[str, float]] = None,
         hello_api_version: int = 16,
     ) -> None:
         self.fail = dict(fail or {})
         self.hang = set(hang or ())
+        self.delay = dict(delay or {})
         self.hello_api_version = hello_api_version
         self.refuse_new = False
         super().__init__()
@@ -86,6 +97,12 @@ class ScriptedRobotd(FakeRobotd):
             _rst_close(conn)
             return
         f = conn.makefile("rb")
+        send_lock = threading.Lock()  # delayed replies come from timer threads
+
+        def send(resp: dict) -> None:
+            with send_lock:
+                conn.sendall((json.dumps(resp) + "\n").encode("utf-8"))
+
         try:
             while not self._stop.is_set():
                 line = f.readline()
@@ -112,8 +129,13 @@ class ScriptedRobotd(FakeRobotd):
                     elif method == "robot.mode":
                         result = "idle"
                     resp = {"jsonrpc": "2.0", "id": msg["id"], "result": result}
+                if method in self.delay:
+                    timer = threading.Timer(self.delay[method], lambda r=resp: _swallow_oserror(send, r))
+                    timer.daemon = True
+                    timer.start()
+                    continue
                 try:
-                    conn.sendall((json.dumps(resp) + "\n").encode("utf-8"))
+                    send(resp)
                 except OSError:
                     break
         except (OSError, json.JSONDecodeError):
@@ -673,6 +695,68 @@ class RobotdClientRobustnessTest(unittest.TestCase):
         self.assertNotIn(7, client._replies, "must not resurrect a reply nobody will ever pop")
         self.assertEqual(client._replies[8]["error"]["message"], "disconnected")
         self.assertEqual(client._pending, {})
+
+    def test_notify_bounds_its_block_when_robotd_stops_reading(self) -> None:
+        """A robotd that accepts, answers hello, and then stops draining
+        the socket (SIGSTOP/deadlock/starvation) but keeps the fd open
+        must not be able to block notify() forever: on the agent, notify()
+        runs on the 50 Hz tick thread while _playback_lock is held, so an
+        unbounded block there would also block panic (finding A3).
+        `_write_line` must give up after SEND_TIMEOUT_S and drop the link.
+        """
+        with tempfile.TemporaryDirectory() as d:
+            sock_path = str(Path(d) / "robotd.sock")
+            srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            srv.bind(sock_path)
+            srv.listen(1)
+            self.addCleanup(srv.close)
+            accepted = threading.Event()
+
+            def serve_hello_then_stall() -> None:
+                try:
+                    conn, _addr = srv.accept()
+                except OSError:
+                    return
+                accepted.set()
+                f = conn.makefile("rb")
+                line = f.readline()
+                msg = json.loads(line)
+                resp = {"jsonrpc": "2.0", "id": msg["id"], "result": {"api_version": 16, "daemon_version": "x", "revision": "y"}}
+                conn.sendall((json.dumps(resp) + "\n").encode())
+                time.sleep(5)  # never read again; the fd stays open (no EOF)
+
+            threading.Thread(target=serve_hello_then_stall, daemon=True).start()
+
+            client = RobotdClient(sock_path)
+            client.start()
+            self.addCleanup(client.stop)
+            self.assertTrue(accepted.wait(timeout=2.0), "server never accepted")
+            deadline = time.monotonic() + 3.0
+            while time.monotonic() < deadline and not client.connected:
+                time.sleep(0.02)
+            self.assertTrue(client.connected)
+
+            # Flood notify() (as the tick thread would) until the send
+            # buffer is full and the bounded wait gives up.
+            t0 = time.monotonic()
+            raised = False
+            deadline = time.monotonic() + 5.0
+            while time.monotonic() < deadline:
+                try:
+                    client.notify("robot.move", {"vx": 0.1, "vy": 0.0, "vyaw": 0.0})
+                except RobotdDisconnected:
+                    raised = True
+                    break
+            dt = time.monotonic() - t0
+            self.assertTrue(raised, "notify() never gave up on a robotd that stopped reading")
+            self.assertLess(dt, 5.0, f"notify() took {dt:.2f}s to give up; not bounded")
+            # _write_line() closes the socket synchronously with the raise, but
+            # `connected` only flips once the reader thread notices the close
+            # and the connector loop catches up -- poll for it.
+            deadline = time.monotonic() + 2.0
+            while time.monotonic() < deadline and client.connected:
+                time.sleep(0.02)
+            self.assertFalse(client.connected, "the link must be dropped once the send times out")
 
     def test_api_version_mismatch_is_logged_as_warning(self) -> None:
         robotd = ScriptedRobotd(hello_api_version=15)

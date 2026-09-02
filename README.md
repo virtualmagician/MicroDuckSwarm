@@ -19,13 +19,15 @@ Pre-hardware development (M0). MicroDuck units ship late 2026; everything here r
 | `docs/swarmlink-protocol.md` | Clock sync, triggers, telemetry over UDP |
 | `docs/robotd-api.md` | Verified MicroDuck `robotd` JSON-RPC surface |
 | `docs/osc-facade.md` | OSC 1.0 control surface of `swarmctl serve` for external rigs |
+| `docs/authoring.md` | Puppeteering, `swarmctl record`, and the timeline editor |
 | `python/duckshow/` | Format library: parse, validate, sample at 50 Hz |
-| `python/duck_agent/` | On-duck show agent: clock discipline, local playback, telemetry |
+| `python/duck_agent/` | On-duck show agent: clock discipline, local playback, telemetry, puppet channel |
 | `python/mock_duck/` | Protocol-faithful mock `robotd` for development without hardware |
 | `python/tools/` | Reference show master CLI, stdlib OSC send/listen tool |
-| `SwarmLink/` | Swift package: show-master engine, `swarmctl` CLI, OSC facade (`swarmctl serve`) |
+| `SwarmLink/` | Swift package: show-master engine, `swarmctl` CLI (incl. `record`), OSC facade (`swarmctl serve`) |
+| `editor/` | Single-file, zero-dependency `.duckshow` timeline editor (beat grid, validation, top-down preview) |
 | `shows/` | Example choreographies |
-| `scripts/` | End-to-end demos (`e2e_demo.sh` Python master, `e2e_osc.sh` Swift master over OSC) |
+| `scripts/` | End-to-end demos (`e2e_demo.sh` Python master, `e2e_osc.sh` Swift master over OSC, `e2e_record.sh` puppet-channel recorder) |
 
 ## Quick start (no hardware needed)
 
@@ -62,6 +64,25 @@ python3 python/tools/osc_send.py 127.0.0.1:53300 /duckswarm/go
 ```
 
 Commands: `/duckswarm/{load,play,go,seek,stop,panic,ping,status}`; status feedback is pushed to any address that pinged in the last 5 s — the same contract as StageWizard ↔ StageWand. Full table in `docs/osc-facade.md`. Embedding into [StageWizard](https://github.com/virtualmagician/StageWizard) as a `robotShow` cue type is planned once hardware is in hand.
+
+## Authoring
+
+Full contract in `docs/authoring.md`. Three ways to get choreography into a `.duckshow` file:
+
+- **Puppet with a gamepad.** `swarmctl record` streams a connected controller's input to one duck over the live puppet channel (`docs/swarmlink-protocol.md` §6) and captures the intent stream as that role's tracks — the Disney BDX workflow, one role at a time:
+
+  ```bash
+  swarmctl record --roster roster.json --duck duck-01 --role lead \
+    --out shows/mine/mine.duckshow.json --input gamepad --bpm 120
+  ```
+
+  Add `--show shows/mine/mine.duckshow.json` to layer a role onto an existing show — the rest of the cast plays back while you puppeteer the new one.
+
+- **Scripted recordings.** `--input script:<file.json>` replays a JSON list of timed input frames instead of reading a live controller — reproducible, so this is also how CI exercises the recorder (`scripts/e2e_record.sh`).
+
+- **The timeline editor.** Open `editor/duckshow-editor.html` in a browser (no build step, no CDN; serve the checkout with `python3 -m http.server` for Chrome/Safari, which refuse ES-module imports from `file://` — Firefox opens it directly) to load a `.duckshow` file, edit keyframes and events on a beat-gridded timeline, and preview every role's dead-reckoned path top-down. Tests: `node --test editor/tests`.
+
+The puppet channel doubles as the show-night nudge layer: puppeteering a duck that is mid-playback *adds* to its locomotion and *overrides* its head/pose/mouth while the packets stay fresh (250 ms deadman), then hands control straight back to the timeline.
 
 ## License
 

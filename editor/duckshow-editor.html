@@ -1,0 +1,1497 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>duckshow editor</title>
+<style>
+  :root {
+    color-scheme: dark light;
+    --bg: #15171c; --bg2: #1c1f26; --bg3: #242832; --bg4: #2c313c;
+    --line: #333945; --fg: #e7e9ee; --fg2: #9ba3b1; --fg3: #6b7381;
+    --accent: #4da3ff; --sel: #ffd166; --err: #ff5d5d; --warn: #f0b429; --ok: #3ecf8e;
+    --lane: #181b21; --lane-alt: #1b1f26; --group: #22262f;
+    --grid: #262b34; --beat: #333a48; --bar: #48516a; --zero: #3a4150;
+    --playhead: #ff7a59; --after-end: rgba(255, 93, 93, 0.06);
+    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  }
+  @media (prefers-color-scheme: light) {
+    :root {
+      --bg: #f4f5f7; --bg2: #ffffff; --bg3: #eceef2; --bg4: #e1e4ea;
+      --line: #d3d7de; --fg: #1a1d23; --fg2: #4d5563; --fg3: #7c8493;
+      --accent: #1f6fd6; --sel: #c98a00; --err: #d12f2f; --warn: #b47b00; --ok: #178f5f;
+      --lane: #fbfbfc; --lane-alt: #f3f4f7; --group: #e6e8ee;
+      --grid: #e6e8ee; --beat: #cfd4de; --bar: #a9b1c2; --zero: #c2c8d4;
+      --playhead: #e0552f; --after-end: rgba(209, 47, 47, 0.06);
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    font: 12px/1.35 var(--sans); color: var(--fg); background: var(--bg);
+    display: grid; grid-template-rows: auto auto 1fr auto; overflow: hidden;
+  }
+  button, input, select {
+    font: inherit; color: var(--fg); background: var(--bg3); border: 1px solid var(--line);
+    border-radius: 4px; padding: 3px 7px; min-height: 24px;
+  }
+  button { cursor: pointer; white-space: nowrap; }
+  button:hover { background: var(--bg4); }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button.danger:hover { border-color: var(--err); color: var(--err); }
+  button.toggle[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
+  input[type="number"], input[type="text"] { padding: 2px 5px; }
+  input[type="number"] { font-family: var(--mono); }
+  input:focus, select:focus, button:focus-visible { outline: 2px solid var(--accent); outline-offset: -1px; }
+  label { color: var(--fg2); white-space: nowrap; }
+  .field { display: inline-flex; align-items: center; gap: 4px; }
+  .field input { width: 6.5em; }
+  .field input.wide { width: 12em; }
+  kbd { font-family: var(--mono); font-size: 11px; background: var(--bg3); border: 1px solid var(--line); border-radius: 3px; padding: 0 4px; }
+  .sep { width: 1px; height: 20px; background: var(--line); margin: 0 4px; }
+  .hidden { display: none !important; }
+
+  #topbar, #toolbar {
+    display: flex; align-items: center; gap: 6px; padding: 5px 8px; flex-wrap: wrap;
+    background: var(--bg2); border-bottom: 1px solid var(--line);
+  }
+  #topbar .brand { font-weight: 600; letter-spacing: 0.02em; margin-right: 6px; }
+  #topbar .brand small { color: var(--fg3); font-weight: 400; margin-left: 4px; }
+  #file-name { color: var(--fg2); font-family: var(--mono); }
+  #file-name.dirty::after { content: " •"; color: var(--warn); }
+  #save-note { color: var(--fg3); }
+  #time { font-family: var(--mono); font-size: 14px; min-width: 9.5em; }
+  #time small { color: var(--fg3); font-size: 11px; }
+
+  #main { display: grid; grid-template-columns: 1fr 340px; min-height: 0; }
+  #timeline { display: flex; flex-direction: column; min-width: 0; min-height: 0; border-right: 1px solid var(--line); }
+  #ruler-row { display: flex; height: 26px; flex: none; background: var(--bg2); border-bottom: 1px solid var(--line); }
+  #ruler-spacer { width: 220px; flex: none; display: flex; align-items: center; justify-content: space-between; padding: 0 6px; border-right: 1px solid var(--line); }
+  #ruler { flex: 1; min-width: 0; height: 26px; cursor: col-resize; display: block; }
+  #lanes-scroll { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; position: relative; }
+  #lanes-inner { display: flex; position: relative; }
+  #lane-headers { width: 220px; flex: none; border-right: 1px solid var(--line); background: var(--bg2); }
+  #lanes { flex: 1; min-width: 0; position: sticky; top: 0; display: block; cursor: crosshair; }
+  #hscroll { flex: none; height: 14px; overflow-x: scroll; overflow-y: hidden; background: var(--bg2); border-top: 1px solid var(--line); margin-left: 220px; }
+  #hscroll > div { height: 1px; }
+
+  .lane-head { display: flex; flex-direction: column; justify-content: center; padding: 0 6px; border-bottom: 1px solid var(--line); overflow: hidden; }
+  .lane-head.group { flex-direction: row; align-items: center; gap: 6px; background: var(--group); font-weight: 600; }
+  .lane-head.group .name { flex: 1; overflow: hidden; text-overflow: ellipsis; }
+  .lane-head.group button { min-height: 18px; padding: 0 5px; font-size: 11px; }
+  .lane-head .title { color: var(--fg2); font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; }
+  .lane-head .readout { font-family: var(--mono); font-size: 11px; display: flex; flex-wrap: wrap; gap: 0 8px; margin-top: 2px; }
+  .lane-head .readout span { white-space: nowrap; }
+  .lane-head .readout b { font-weight: 500; }
+
+  #side { display: flex; flex-direction: column; min-height: 0; background: var(--bg2); overflow: hidden; }
+  #side > section { border-bottom: 1px solid var(--line); display: flex; flex-direction: column; min-height: 0; }
+  #side h2 { font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--fg2); margin: 0; padding: 6px 8px 4px; display: flex; align-items: center; gap: 6px; }
+  #side h2 .count { margin-left: auto; font-weight: 500; }
+  #inspector { flex: none; }
+  #inspector-body { padding: 2px 8px 8px; display: grid; grid-template-columns: max-content 1fr; gap: 4px 8px; align-items: center; }
+  #inspector-body .full { grid-column: 1 / -1; }
+  #inspector-body .hint { color: var(--fg3); }
+  #inspector-body input[type="number"], #inspector-body input[type="text"], #inspector-body select { width: 100%; }
+  #validation { flex: 1 1 35%; }
+  #issues { list-style: none; margin: 0; padding: 0 0 6px; overflow-y: auto; flex: 1; min-height: 60px; }
+  #issues li { padding: 3px 8px; cursor: pointer; display: grid; grid-template-columns: 14px 1fr; gap: 6px; border-top: 1px solid transparent; }
+  #issues li:hover { background: var(--bg3); }
+  #issues li .where { font-family: var(--mono); color: var(--fg2); font-size: 11px; }
+  #issues li .sev { width: 8px; height: 8px; border-radius: 50%; margin-top: 4px; }
+  #issues li.error .sev { background: var(--err); }
+  #issues li.warning .sev { background: var(--warn); }
+  #issues li.ok { color: var(--ok); cursor: default; grid-template-columns: 1fr; }
+  #stage-section { flex: 1 1 45%; }
+  #stage { width: 100%; flex: 1; min-height: 160px; display: block; cursor: default; }
+  #stage-legend { padding: 0 8px 6px; color: var(--fg2); font-size: 11px; display: flex; flex-wrap: wrap; gap: 4px 10px; }
+  #stage-legend i { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 4px; vertical-align: middle; }
+
+  #status { display: flex; gap: 12px; align-items: center; padding: 4px 8px; background: var(--bg2); border-top: 1px solid var(--line); color: var(--fg2); min-height: 24px; }
+  #status .msg { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #status .msg.error { color: var(--err); }
+  #status .msg.ok { color: var(--ok); }
+  #status .summary { font-family: var(--mono); }
+  #status .summary .e { color: var(--err); } #status .summary .w { color: var(--warn); } #status .summary .k { color: var(--ok); }
+  #status .hint { color: var(--fg3); white-space: nowrap; }
+
+  #banner {
+    position: fixed; inset: auto 12px 36px 12px; z-index: 10; background: var(--bg3); border: 1px solid var(--warn);
+    border-radius: 6px; padding: 10px 14px; box-shadow: 0 6px 24px rgba(0,0,0,0.35); max-width: 760px; margin: 0 auto;
+  }
+  #banner code { font-family: var(--mono); background: var(--bg4); padding: 0 4px; border-radius: 3px; }
+  #banner button { float: right; margin-left: 12px; }
+  #drop-hint { position: fixed; inset: 0; background: rgba(77,163,255,0.12); border: 3px dashed var(--accent); z-index: 20; pointer-events: none; display: none; }
+  body.dropping #drop-hint { display: block; }
+</style>
+</head>
+<body>
+<div id="drop-hint"></div>
+<div id="banner" class="hidden">
+  <button onclick="this.parentNode.classList.add('hidden')">dismiss</button>
+  <b>The editor module did not load.</b>
+  <div id="banner-text">This page imports <code>./duckshow-core.js</code> as an ES module. When the file is opened from <code>file://</code>, Chrome and Safari refuse module imports (Firefox allows them).
+  Serve the repo instead: run <code>python3 -m http.server 8000</code> in the repo root and open <code>http://localhost:8000/editor/duckshow-editor.html</code>.</div>
+</div>
+
+<header id="topbar">
+  <span class="brand">duckshow editor <small>duckshow/1</small></span>
+  <button id="btn-new" title="New empty show">New</button>
+  <button id="btn-open" title="Open a .duckshow.json file (⌘O)">Open…</button>
+  <button id="btn-save" class="primary" title="Save (⌘S)">Save</button>
+  <button id="btn-demo" title="Fetch ../shows/demo/demo.duckshow.json (needs the page served over http)">Load demo</button>
+  <span id="file-name">untitled.duckshow.json</span>
+  <span id="save-note">Save downloads a copy — browsers cannot write files in place.</span>
+  <span class="sep"></span>
+  <span class="field"><label for="f-name">name</label><input id="f-name" type="text" class="wide"></span>
+  <span class="field"><label for="f-author">author</label><input id="f-author" type="text"></span>
+  <span class="field"><label for="f-duration">duration s</label><input id="f-duration" type="number" step="0.1" min="0.1"></span>
+  <span class="field"><label for="f-bpm">bpm</label><input id="f-bpm" type="number" step="0.1" min="0"></span>
+  <span class="field"><label for="f-offset">beat_offset s</label><input id="f-offset" type="number" step="0.01"></span>
+  <span class="field"><label for="f-music">music file</label><input id="f-music" type="text"></span>
+  <input id="open-file" type="file" accept=".json,application/json" class="hidden">
+  <input id="audio-file" type="file" accept="audio/*" class="hidden">
+</header>
+
+<div id="toolbar">
+  <button id="btn-start" title="To start (Home)">⏮</button>
+  <button id="btn-play" title="Play / pause (Space)">▶</button>
+  <button id="btn-end" title="To end (End)">⏭</button>
+  <button id="btn-loop" class="toggle" aria-pressed="false" title="Loop playback">loop</button>
+  <span id="time">0.000 <small>s · bar 1.1</small></span>
+  <span class="sep"></span>
+  <button id="btn-audio" title="Load an audio file to play along with the playhead (no beat detection: type the bpm)">♪ audio…</button>
+  <span id="audio-name" class="hint"></span>
+  <button id="btn-audio-use" class="hidden" title="Copy the audio file name into meta.music.file">use as music file</button>
+  <label class="field"><input id="audio-mute" type="checkbox"> mute</label>
+  <span class="sep"></span>
+  <button id="btn-snap" class="toggle" aria-pressed="true" title="Snap keyframes and events to the beat grid (S)">snap</button>
+  <span class="field"><label for="subdiv">grid</label>
+    <select id="subdiv"><option value="1">beat</option><option value="2">½ beat</option><option value="4">¼ beat</option></select></span>
+  <span class="sep"></span>
+  <button id="btn-zoom-out" title="Zoom out (−)">−</button>
+  <button id="btn-zoom-in" title="Zoom in (+)">+</button>
+  <button id="btn-fit" title="Fit whole show (0)">fit</button>
+  <span class="sep"></span>
+  <button id="btn-undo" title="Undo (⌘Z)">undo</button>
+  <button id="btn-redo" title="Redo (⇧⌘Z)">redo</button>
+</div>
+
+<main id="main">
+  <section id="timeline">
+    <div id="ruler-row">
+      <div id="ruler-spacer"><span>roles</span><button id="btn-add-role" title="Add a role to the cast">+ role</button></div>
+      <canvas id="ruler"></canvas>
+    </div>
+    <div id="lanes-scroll">
+      <div id="lanes-inner">
+        <div id="lane-headers"></div>
+        <canvas id="lanes"></canvas>
+      </div>
+    </div>
+    <div id="hscroll"><div></div></div>
+  </section>
+  <aside id="side">
+    <section id="inspector">
+      <h2>selection <span id="inspector-title" class="count"></span></h2>
+      <div id="inspector-body"><div class="full hint">Click a keyframe or event. Double-click (or ⌘-click) a lane to add one.</div></div>
+    </section>
+    <section id="validation">
+      <h2>validation <span id="issue-count" class="count"></span></h2>
+      <ul id="issues"></ul>
+    </section>
+    <section id="stage-section">
+      <h2>stage <span class="count" style="font-weight:400">top-down · dead-reckoned · drag marks, ⌥-drag to turn</span></h2>
+      <canvas id="stage"></canvas>
+      <div id="stage-legend"></div>
+    </section>
+  </aside>
+</main>
+
+<footer id="status">
+  <span class="msg" id="status-msg"></span>
+  <span class="summary" id="status-summary"></span>
+  <span class="hint"><kbd>space</kbd> play · <kbd>⌘Z</kbd> undo · <kbd>I</kbd> interp · <kbd>⌫</kbd> delete · <kbd>←→↑↓</kbd> nudge · <kbd>⇧</kbd>-drag time only · <kbd>⌥</kbd>-drag value only</span>
+</footer>
+
+<script>
+  // Classic script: if the ES module below never boots (file:// in Chrome/Safari), explain why.
+  window.__duckshowEditorBooted = false;
+  setTimeout(function () {
+    if (!window.__duckshowEditorBooted) document.getElementById('banner').classList.remove('hidden');
+  }, 1500);
+</script>
+<script type="module">
+import * as core from './duckshow-core.js';
+
+// ---------------------------------------------------------------------------
+// Constants
+// ---------------------------------------------------------------------------
+const FRAME = 0.02;                       // 50 Hz, the agent's tick
+const HEADER_W = 220;
+const GROUP_H = 22, CURVE_H = 66, EVENTS_H = 30, PAD = 7;
+const HIT_R = 7;
+const FIELDS = core.trackFields(core.DEFAULT_LIMITS);
+const FIELD_COLORS = {
+  vx: '#4da3ff', vy: '#3ecf8e', vyaw: '#f0b429',
+  neck_pitch: '#4da3ff', head_pitch: '#3ecf8e', head_yaw: '#f0b429', head_roll: '#d77bff',
+  z: '#4da3ff', roll: '#3ecf8e', pitch: '#f0b429', active: '#ff7a59',
+  open: '#ff7ab6',
+};
+const EVENT_COLORS = { do: '#ffd166', sound: '#3ecf8e', mode: '#d77bff' };
+const ROLE_COLORS = ['#4da3ff', '#3ecf8e', '#f0b429', '#ff7ab6', '#d77bff', '#ff7a59', '#5be0e0', '#c3d64f', '#ff9f43', '#9aa1ad'];
+const DEMO_URL = '../shows/demo/demo.duckshow.json';
+
+const $ = (id) => document.getElementById(id);
+// Pointer capture keeps a drag alive outside the canvas; synthetic/stale pointers may throw, which is harmless.
+const capture = (el, ev) => { try { el.setPointerCapture(ev.pointerId); } catch (_) { /* not a live pointer */ } };
+const css = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
+const round = (v, d) => Math.round(v * 10 ** d) / 10 ** d;
+const fmt = (v, d = 3) => (typeof v === 'number' && Number.isFinite(v) ? v.toFixed(d) : String(v));
+
+// ---------------------------------------------------------------------------
+// State
+// ---------------------------------------------------------------------------
+const state = {
+  show: null, norm: null, issues: [], samplers: new Map(), pathsFor: null, paths: new Map(),
+  history: [], future: [], dirty: false, fileName: 'untitled.duckshow.json', fileHandle: null,
+  playhead: 0, playing: false, loop: false, clockStart: 0, clockShowTime: 0,
+  pxPerSec: 40, scrollT: 0, snap: true, subdivision: 1,
+  selection: null, collapsed: new Set(), drag: null,
+  audio: { ctx: null, buffer: null, source: null, gain: null, name: '' },
+  layout: { lanes: [], totalH: 0, W: 0, H: 0 },
+};
+
+function duration() { return state.norm?.meta.duration ?? 0; }
+function roles() { return state.norm ? state.norm.roleNames() : []; }
+function roleColor(role) { const i = roles().indexOf(role); return ROLE_COLORS[(i < 0 ? 0 : i) % ROLE_COLORS.length]; }
+function sampler(role) {
+  if (!state.samplers.has(role)) state.samplers.set(role, core.createSampler(state.norm, role));
+  return state.samplers.get(role);
+}
+function grid() {
+  return core.showBeatTimes(state.norm, state.subdivision);
+}
+function musicMeta() { return state.norm?.meta.music || null; }
+
+/** Replace the show (after an edit op). `base` goes on the undo stack. */
+function commit(next, base = state.show, { transient = false } = {}) {
+  if (next === base) return false;
+  if (!transient && base) {
+    state.history.push(base);
+    if (state.history.length > 200) state.history.shift();
+    state.future.length = 0;
+  }
+  setShow(next, { dirty: true });
+  return true;
+}
+
+function setShow(show, { dirty, resetHistory = false } = {}) {
+  state.show = show;
+  state.norm = core.normalizeShow(show);
+  state.samplers.clear();
+  state.issues = core.validate(show);
+  if (resetHistory) { state.history.length = 0; state.future.length = 0; }
+  if (dirty !== undefined) state.dirty = dirty;
+  const roleSet = new Set(roles());
+  for (const r of [...state.collapsed]) if (!roleSet.has(r)) state.collapsed.delete(r);
+  if (state.selection && !selectionValid()) state.selection = null;
+  state.playhead = clamp(state.playhead, 0, Math.max(0, duration()));
+  renderAll();
+}
+
+function selectionValid() {
+  const s = state.selection;
+  if (!s) return false;
+  const tr = state.show.tracks?.[s.role];
+  if (!tr) return false;
+  if (s.kind === 'kf') return Array.isArray(tr[s.track]) && s.index < tr[s.track].length;
+  if (s.kind === 'event') return Array.isArray(tr.events) && s.index < tr.events.length;
+  return false;
+}
+
+function undo() {
+  if (!state.history.length) return;
+  state.future.push(state.show);
+  setShow(state.history.pop(), { dirty: true });
+  status('undo');
+}
+function redo() {
+  if (!state.future.length) return;
+  state.history.push(state.show);
+  setShow(state.future.pop(), { dirty: true });
+  status('redo');
+}
+
+function status(msg, kind = '') {
+  const el = $('status-msg');
+  el.textContent = msg;
+  el.className = `msg ${kind}`;
+}
+
+// ---------------------------------------------------------------------------
+// Layout + rendering
+// ---------------------------------------------------------------------------
+const rulerC = $('ruler'), lanesC = $('lanes'), stageC = $('stage');
+const scrollEl = $('lanes-scroll'), headersEl = $('lane-headers'), innerEl = $('lanes-inner'), hscroll = $('hscroll');
+
+function computeLanes() {
+  const lanes = [];
+  let y = 0;
+  for (const role of roles()) {
+    lanes.push({ kind: 'group', role, y, h: GROUP_H });
+    y += GROUP_H;
+    if (state.collapsed.has(role)) continue;
+    for (const track of core.CURVE_TRACKS) {
+      lanes.push({ kind: 'curve', role, track, y, h: CURVE_H, fields: FIELDS[track] });
+      y += CURVE_H;
+    }
+    lanes.push({ kind: 'events', role, y, h: EVENTS_H });
+    y += EVENTS_H;
+  }
+  return { lanes, totalH: y };
+}
+
+function setupCanvas(c, w, h) {
+  const dpr = window.devicePixelRatio || 1;
+  if (c.width !== Math.round(w * dpr) || c.height !== Math.round(h * dpr)) {
+    c.width = Math.round(w * dpr); c.height = Math.round(h * dpr);
+  }
+  c.style.width = `${w}px`; c.style.height = `${h}px`;
+  const ctx = c.getContext('2d');
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  return ctx;
+}
+
+function xOf(t) { return (t - state.scrollT) * state.pxPerSec; }
+function tOf(x) { return state.scrollT + x / state.pxPerSec; }
+function yOfValue(lane, field, v) {
+  const span = lane.h - 2 * PAD;
+  const f = (v - field.min) / (field.max - field.min);
+  return lane.y + PAD + (1 - clamp(f, -0.08, 1.08)) * span;
+}
+function valueOfY(lane, field, y) {
+  const span = lane.h - 2 * PAD;
+  const f = 1 - (y - lane.y - PAD) / span;
+  return field.min + clamp(f, 0, 1) * (field.max - field.min);
+}
+
+function renderAll() {
+  rebuildHeaders();
+  layoutTimeline();
+  drawRuler();
+  drawLanes();
+  renderInspector();
+  renderIssues();
+  renderHeaderFields();
+  drawStage();
+  updateReadouts();
+  updateTimeLabel();
+  $('file-name').textContent = state.fileName;
+  $('file-name').classList.toggle('dirty', state.dirty);
+  $('btn-undo').disabled = !state.history.length;
+  $('btn-redo').disabled = !state.future.length;
+}
+
+function layoutTimeline() {
+  const { lanes, totalH } = computeLanes();
+  const W = Math.max(50, scrollEl.clientWidth - HEADER_W);
+  const H = Math.max(50, scrollEl.clientHeight);
+  state.layout = { lanes, totalH, W, H };
+  innerEl.style.height = `${Math.max(totalH, H)}px`;
+  headersEl.style.height = `${Math.max(totalH, H)}px`;
+  lanesC.style.height = `${H}px`;
+  const contentW = Math.max(W, (duration() + 2) * state.pxPerSec);
+  hscroll.firstElementChild.style.width = `${contentW}px`;
+  const maxScrollT = Math.max(0, (contentW - W) / state.pxPerSec);
+  state.scrollT = clamp(state.scrollT, 0, maxScrollT);
+  hscroll._syncing = true;
+  hscroll.scrollLeft = state.scrollT * state.pxPerSec;
+  hscroll._syncing = false;
+}
+
+function rebuildHeaders() {
+  const { lanes } = computeLanes();
+  headersEl.replaceChildren();
+  for (const lane of lanes) {
+    const el = document.createElement('div');
+    el.className = `lane-head ${lane.kind}`;
+    el.style.height = `${lane.h}px`;
+    if (lane.kind === 'group') {
+      const cast = state.norm.cast.find((c) => c.role === lane.role);
+      const collapsed = state.collapsed.has(lane.role);
+      el.innerHTML = `<button class="collapse" title="${collapsed ? 'expand' : 'collapse'}">${collapsed ? '▸' : '▾'}</button>`
+        + `<span class="name" style="color:${roleColor(lane.role)}"></span><button class="remove danger" title="remove role">✕</button>`;
+      el.querySelector('.name').textContent = lane.role + (cast?.notes ? ` · ${cast.notes}` : '');
+      el.querySelector('.collapse').onclick = () => { state.collapsed.has(lane.role) ? state.collapsed.delete(lane.role) : state.collapsed.add(lane.role); renderAll(); };
+      el.querySelector('.remove').onclick = () => {
+        if (confirm(`Remove role "${lane.role}" and all its tracks?`)) { commit(core.removeRole(state.show, lane.role)); status(`removed role ${lane.role}`); }
+      };
+    } else if (lane.kind === 'curve') {
+      el.innerHTML = `<div class="title">${lane.track}</div><div class="readout"></div>`;
+      el.dataset.role = lane.role; el.dataset.track = lane.track;
+    } else {
+      el.innerHTML = `<div class="title">events</div><div class="readout"></div>`;
+      el.dataset.role = lane.role; el.dataset.track = 'events';
+    }
+    headersEl.appendChild(el);
+  }
+}
+
+function updateReadouts() {
+  const t = state.playhead;
+  for (const el of headersEl.querySelectorAll('.lane-head[data-role]')) {
+    const role = el.dataset.role, track = el.dataset.track;
+    const ro = el.querySelector('.readout');
+    if (track === 'events') {
+      const s = sampler(role);
+      const mode = s.modeAt(t);
+      const recent = s.eventsBetween(t - 0.5, t).map((e) => e.do ?? e.sound ?? (e.mode ? `mode ${e.mode}` : '?'));
+      ro.textContent = (mode ? `mode: ${mode}` : 'mode: —') + (recent.length ? `  ◆ ${recent.join(', ')}` : '');
+      continue;
+    }
+    const frame = sampler(role).at(t)[track];
+    ro.replaceChildren();
+    for (const f of FIELDS[track]) {
+      const span = document.createElement('span');
+      span.style.color = FIELD_COLORS[f.name];
+      const v = frame ? frame[f.name] : null;
+      span.innerHTML = `${f.name} <b>${v === null ? '—' : (f.bool ? (v ? 'on' : 'off') : fmt(v))}</b>`;
+      ro.appendChild(span);
+    }
+  }
+}
+
+function niceTickStep() {
+  for (const s of [0.1, 0.2, 0.5, 1, 2, 5, 10, 30, 60, 120]) if (s * state.pxPerSec >= 64) return s;
+  return 300;
+}
+
+function drawRuler() {
+  const W = state.layout.W, H = 26;
+  const ctx = setupCanvas(rulerC, W, H);
+  ctx.clearRect(0, 0, W, H);
+  ctx.fillStyle = css('--bg2'); ctx.fillRect(0, 0, W, H);
+  ctx.font = `10px ${css('--mono')}`;
+  ctx.textBaseline = 'top';
+  const t0 = state.scrollT, t1 = tOf(W);
+  // beat labels
+  const music = musicMeta();
+  if (music && Number(music.bpm) > 0) {
+    const period = core.beatPeriod(Number(music.bpm));
+    for (const t of core.beatTimes(music.bpm, music.beat_offset, Math.max(duration(), t1))) {
+      if (t < t0 - 1 || t > t1 + 1) continue;
+      const k = Math.round((t - music.beat_offset) / period);
+      const x = xOf(t);
+      const isBar = ((k % 4) + 4) % 4 === 0;
+      ctx.strokeStyle = isBar ? css('--bar') : css('--beat');
+      ctx.beginPath(); ctx.moveTo(x + 0.5, isBar ? 12 : 18); ctx.lineTo(x + 0.5, H); ctx.stroke();
+      if (isBar && period * state.pxPerSec * 4 > 30) {
+        ctx.fillStyle = css('--fg2');
+        ctx.fillText(`${Math.floor(k / 4) + 1}`, x + 3, 12);
+      }
+    }
+  }
+  // seconds
+  const step = niceTickStep();
+  ctx.fillStyle = css('--fg');
+  ctx.strokeStyle = css('--fg3');
+  for (let t = Math.ceil(t0 / step) * step; t <= t1; t = round(t + step, 6)) {
+    const x = xOf(t);
+    ctx.beginPath(); ctx.moveTo(x + 0.5, 0); ctx.lineTo(x + 0.5, 8); ctx.stroke();
+    ctx.fillText(`${round(t, 3)}s`, x + 3, 0);
+  }
+  // end of show
+  const xe = xOf(duration());
+  if (xe >= 0 && xe <= W) { ctx.fillStyle = css('--after-end'); ctx.fillRect(xe, 0, W - xe, H); }
+  // playhead
+  const xp = xOf(state.playhead);
+  ctx.fillStyle = css('--playhead');
+  ctx.beginPath(); ctx.moveTo(xp - 5, 0); ctx.lineTo(xp + 5, 0); ctx.lineTo(xp, 7); ctx.closePath(); ctx.fill();
+  ctx.fillRect(xp - 0.5, 0, 1, H);
+}
+
+function issueKeys() {
+  const m = new Map();
+  for (const i of state.issues) {
+    if (i.role === null || i.t === null) continue;
+    const k = `${i.role}|${i.track}|${i.t}`;
+    if (i.severity === 'error' || !m.has(k)) m.set(k, i.severity);
+  }
+  return m;
+}
+
+function drawLanes() {
+  const { lanes, W, H } = state.layout;
+  const ctx = setupCanvas(lanesC, W, H);
+  const top = scrollEl.scrollTop;
+  ctx.clearRect(0, 0, W, H);
+  ctx.save();
+  ctx.translate(0, -top);
+  const t0 = state.scrollT, t1 = tOf(W);
+  const issues = issueKeys();
+  const sel = state.selection;
+  const music = musicMeta();
+  const beats = music && Number(music.bpm) > 0 ? core.beatTimes(music.bpm, music.beat_offset, Math.max(duration(), t1), state.subdivision) : [];
+  const period = music && Number(music.bpm) > 0 ? core.beatPeriod(Number(music.bpm)) : 0;
+  ctx.font = `10px ${css('--mono')}`;
+  ctx.textBaseline = 'middle';
+
+  for (const lane of lanes) {
+    if (lane.y + lane.h < top || lane.y > top + H) continue;
+    // background
+    ctx.fillStyle = lane.kind === 'group' ? css('--group') : (lane.kind === 'events' ? css('--lane-alt') : css('--lane'));
+    ctx.fillRect(0, lane.y, W, lane.h);
+    ctx.fillStyle = css('--line'); ctx.fillRect(0, lane.y + lane.h - 1, W, 1);
+    if (lane.kind === 'group') {
+      ctx.fillStyle = css('--fg3');
+      ctx.fillText(lane.role, 6, lane.y + lane.h / 2);
+      continue;
+    }
+    // beat grid
+    for (const t of beats) {
+      if (t < t0 || t > t1) continue;
+      const k = Math.round((t - music.beat_offset) / (period / state.subdivision));
+      const onBeat = k % state.subdivision === 0;
+      const isBar = onBeat && (((k / state.subdivision) % 4) + 4) % 4 === 0;
+      ctx.fillStyle = isBar ? css('--bar') : (onBeat ? css('--beat') : css('--grid'));
+      ctx.fillRect(Math.round(xOf(t)), lane.y, 1, lane.h - 1);
+    }
+    // after end shading
+    const xe = xOf(duration());
+    if (xe < W) { ctx.fillStyle = css('--after-end'); ctx.fillRect(Math.max(0, xe), lane.y, W - Math.max(0, xe), lane.h - 1); }
+
+    if (lane.kind === 'curve') drawCurveLane(ctx, lane, t0, t1, W, issues, sel);
+    else drawEventsLane(ctx, lane, t0, t1, W, issues, sel);
+  }
+  // playhead
+  const xp = Math.round(xOf(state.playhead));
+  ctx.fillStyle = css('--playhead');
+  ctx.fillRect(xp, top, 1, H);
+  ctx.restore();
+}
+
+function drawCurveLane(ctx, lane, t0, t1, W, issues, sel) {
+  const s = sampler(lane.role);
+  const tracks = s.tracks[lane.track];
+  // zero lines
+  for (const f of lane.fields) {
+    if (f.bool || !(f.min < 0 && f.max > 0)) continue;
+    const y0 = Math.round(yOfValue(lane, f, 0));
+    ctx.fillStyle = css('--zero'); ctx.fillRect(0, y0, W, 1);
+    break;
+  }
+  if (!tracks.length) {
+    ctx.fillStyle = css('--fg3');
+    ctx.fillText('(no keyframes — double-click to add)', 8, lane.y + lane.h / 2);
+    return;
+  }
+  // curves sampled at 2px resolution -> exactly what the duck will do
+  const STEP = 2;
+  const n = Math.ceil(W / STEP) + 1;
+  const frames = new Array(n);
+  for (let i = 0; i < n; i++) frames[i] = s.at(tOf(i * STEP))[lane.track];
+  for (const f of lane.fields) {
+    if (f.bool) {
+      ctx.fillStyle = FIELD_COLORS[f.name];
+      ctx.globalAlpha = 0.35;
+      let runStart = -1;
+      for (let i = 0; i <= n; i++) {
+        const on = i < n && frames[i] && frames[i][f.name];
+        if (on && runStart < 0) runStart = i;
+        if (!on && runStart >= 0) { ctx.fillRect(runStart * STEP, lane.y + 2, (i - runStart) * STEP, 5); runStart = -1; }
+      }
+      ctx.globalAlpha = 1;
+      continue;
+    }
+    ctx.strokeStyle = FIELD_COLORS[f.name];
+    ctx.lineWidth = sel && sel.kind === 'kf' && sel.role === lane.role && sel.track === lane.track && sel.field === f.name ? 2 : 1.25;
+    ctx.beginPath();
+    for (let i = 0; i < n; i++) {
+      const y = yOfValue(lane, f, frames[i][f.name]);
+      if (i === 0) ctx.moveTo(0, y); else ctx.lineTo(i * STEP, y);
+    }
+    ctx.stroke();
+  }
+  ctx.lineWidth = 1;
+  // keyframe dots
+  tracks.forEach((kf, index) => {
+    if (kf.t < t0 - 0.5 || kf.t > t1 + 0.5) return;
+    const x = xOf(kf.t);
+    const isSelKf = sel && sel.kind === 'kf' && sel.role === lane.role && sel.track === lane.track && sel.index === index;
+    const issue = issues.get(`${lane.role}|${lane.track}|${kf.t}`);
+    // interp glyph under the lane top
+    ctx.fillStyle = css('--fg3');
+    ctx.fillText(kf.interp === 'step' ? '⌐' : (kf.interp === 'smooth' ? '~' : '/'), x + 3, lane.y + lane.h - 8);
+    for (const f of lane.fields) {
+      const v = kf[f.name];
+      const y = f.bool ? lane.y + 4.5 : yOfValue(lane, f, v);
+      const isSelField = isSelKf && sel.field === f.name;
+      ctx.beginPath();
+      ctx.arc(x, y, isSelField ? 5 : 3.5, 0, Math.PI * 2);
+      ctx.fillStyle = f.bool ? (v ? FIELD_COLORS[f.name] : css('--lane')) : FIELD_COLORS[f.name];
+      ctx.fill();
+      if (f.bool) { ctx.strokeStyle = FIELD_COLORS[f.name]; ctx.stroke(); }
+      if (issue) { ctx.strokeStyle = issue === 'error' ? css('--err') : css('--warn'); ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(x, y, 6.5, 0, Math.PI * 2); ctx.stroke(); ctx.lineWidth = 1; }
+      if (isSelKf) { ctx.strokeStyle = css('--sel'); ctx.lineWidth = isSelField ? 2 : 1; ctx.beginPath(); ctx.arc(x, y, isSelField ? 7.5 : 5.5, 0, Math.PI * 2); ctx.stroke(); ctx.lineWidth = 1; }
+    }
+    if (isSelKf) { ctx.fillStyle = css('--sel'); ctx.globalAlpha = 0.5; ctx.fillRect(Math.round(x), lane.y, 1, lane.h - 1); ctx.globalAlpha = 1; }
+  });
+}
+
+function drawEventsLane(ctx, lane, t0, t1, W, issues, sel) {
+  const events = state.norm.tracksFor(lane.role).events;
+  const ym = lane.y + lane.h / 2;
+  for (const e of events) {
+    if (e.t < t0 - 2 || e.t > t1 + 2) continue;
+    const kind = e.do !== null ? 'do' : (e.sound !== null ? 'sound' : (e.mode !== null ? 'mode' : null));
+    const label = kind ? `${kind === 'mode' ? 'mode ' : ''}${e[kind]}${e.hold !== null ? ` ⏵${e.hold}s` : ''}` : '(no action)';
+    const x = xOf(e.t);
+    const isSel = sel && sel.kind === 'event' && sel.role === lane.role && sel.index === e.index;
+    const issue = issues.get(`${lane.role}|events|${e.t}`);
+    ctx.fillStyle = kind ? EVENT_COLORS[kind] : css('--err');
+    ctx.beginPath(); ctx.moveTo(x, ym - 6); ctx.lineTo(x + 6, ym); ctx.lineTo(x, ym + 6); ctx.lineTo(x - 6, ym); ctx.closePath(); ctx.fill();
+    if (issue) { ctx.strokeStyle = issue === 'error' ? css('--err') : css('--warn'); ctx.lineWidth = 2; ctx.stroke(); ctx.lineWidth = 1; }
+    if (isSel) { ctx.strokeStyle = css('--sel'); ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(x, ym, 9, 0, Math.PI * 2); ctx.stroke(); ctx.lineWidth = 1; }
+    ctx.fillStyle = css('--fg');
+    ctx.fillText(label, x + 9, ym);
+  }
+  if (!events.length) { ctx.fillStyle = css('--fg3'); ctx.fillText('(no events — double-click to add)', 8, ym); }
+}
+
+// ---------------------------------------------------------------------------
+// Hit testing + timeline interaction
+// ---------------------------------------------------------------------------
+function laneAt(y) { return state.layout.lanes.find((l) => y >= l.y && y < l.y + l.h) || null; }
+
+function hitTest(x, y) {
+  const lane = laneAt(y);
+  if (!lane || lane.kind === 'group') return null;
+  if (lane.kind === 'curve') {
+    const kfs = sampler(lane.role).tracks[lane.track];
+    let best = null, bestD = HIT_R;
+    kfs.forEach((kf, index) => {
+      const kx = xOf(kf.t);
+      if (Math.abs(kx - x) > HIT_R) return;
+      for (const f of lane.fields) {
+        const ky = f.bool ? lane.y + 4.5 : yOfValue(lane, f, kf[f.name]);
+        const d = Math.hypot(kx - x, ky - y);
+        const preferred = state.selection?.kind === 'kf' && state.selection.field === f.name ? 1.5 : 0;
+        if (d - preferred < bestD) { bestD = d - preferred; best = { kind: 'kf', role: lane.role, track: lane.track, index, field: f.name, lane }; }
+      }
+    });
+    return best || { kind: 'empty', lane };
+  }
+  const events = state.norm.tracksFor(lane.role).events;
+  let best = null, bestD = 9;
+  for (const e of events) {
+    const d = Math.abs(xOf(e.t) - x);
+    if (d < bestD && Math.abs(lane.y + lane.h / 2 - y) <= 10) { bestD = d; best = { kind: 'event', role: lane.role, index: e.index, lane }; }
+  }
+  return best || { kind: 'empty', lane };
+}
+
+function snapTime(t) {
+  t = Math.max(0, t);
+  if (state.snap) {
+    const g = grid();
+    if (g.length) {
+      const s = core.snap(t, g);
+      if (Math.abs(s - t) * state.pxPerSec <= 12) return s;
+    }
+  }
+  return round(t, 3);
+}
+
+function canvasPoint(ev) {
+  const r = lanesC.getBoundingClientRect();
+  return { x: ev.clientX - r.left, y: ev.clientY - r.top + scrollEl.scrollTop };
+}
+
+function select(sel) {
+  state.selection = sel ? { kind: sel.kind, role: sel.role, track: sel.track, index: sel.index, field: sel.field } : null;
+  drawLanes(); renderInspector();
+}
+
+function addKeyframeAt(lane, t, y) {
+  const s = sampler(lane.role);
+  const frame = s.at(t)[lane.track];
+  const kf = { t: snapTime(t) };
+  for (const f of lane.fields) kf[f.name] = frame ? (f.bool ? frame[f.name] : round(frame[f.name], 4)) : (f.bool ? false : 0);
+  kf.interp = 'linear';
+  if (core.keyframeIndexAt(state.show, lane.role, lane.track, kf.t) >= 0) { status(`a keyframe already sits at ${kf.t}s`, 'error'); return; }
+  const next = core.addKeyframe(state.show, lane.role, lane.track, kf);
+  commit(next);
+  let field = lane.fields[0].name, bestD = Infinity;
+  for (const f of lane.fields) { const d = Math.abs((f.bool ? lane.y + 4.5 : yOfValue(lane, f, kf[f.name])) - y); if (d < bestD) { bestD = d; field = f.name; } }
+  select({ kind: 'kf', role: lane.role, track: lane.track, index: core.keyframeIndexAt(state.show, lane.role, lane.track, kf.t), field });
+  status(`added ${lane.track} keyframe at ${kf.t}s`);
+}
+
+function addEventAt(lane, t) {
+  const ev = { t: snapTime(t), sound: 'chirp' };
+  commit(core.addEvent(state.show, lane.role, ev));
+  const idx = state.show.tracks[lane.role].events.findIndex((e) => e.t === ev.t && e.sound === 'chirp');
+  select({ kind: 'event', role: lane.role, index: idx });
+  status(`added event at ${ev.t}s`);
+}
+
+lanesC.addEventListener('pointerdown', (ev) => {
+  if (ev.button !== 0) return;
+  const { x, y } = canvasPoint(ev);
+  const hit = hitTest(x, y);
+  if (!hit) return;
+  if (hit.kind === 'empty') {
+    if (ev.metaKey || ev.ctrlKey) {
+      if (hit.lane.kind === 'curve') addKeyframeAt(hit.lane, tOf(x), y); else addEventAt(hit.lane, tOf(x));
+    } else {
+      select(null);
+      state.drag = { type: 'scrub', base: state.show };
+      seek(snapTime(tOf(x)), { fromUser: true });
+    }
+    capture(lanesC, ev);
+    return;
+  }
+  select(hit);
+  const base = state.show;
+  if (hit.kind === 'kf') {
+    const kf = sampler(hit.role).tracks[hit.track][hit.index];
+    const field = hit.lane.fields.find((f) => f.name === hit.field);
+    state.drag = { type: 'kf', base, hit, startX: x, startY: y, startT: kf.t, startV: kf[hit.field], field, moved: false };
+  } else {
+    const e = state.norm.tracksFor(hit.role).events.find((e) => e.index === hit.index);
+    state.drag = { type: 'event', base, hit, startX: x, startT: e.t, moved: false };
+  }
+  capture(lanesC, ev);
+});
+
+lanesC.addEventListener('pointermove', (ev) => {
+  const d = state.drag;
+  if (!d) return;
+  const { x, y } = canvasPoint(ev);
+  if (d.type === 'scrub') { seek(snapTime(tOf(x)), { fromUser: true }); return; }
+  if (Math.abs(x - d.startX) < 2 && Math.abs((y ?? 0) - (d.startY ?? y ?? 0)) < 2 && !d.moved) return;
+  d.moved = true;
+  if (d.type === 'kf') {
+    const { hit, field } = d;
+    const changes = {};
+    if (!ev.altKey) changes.t = snapTime(d.startT + (x - d.startX) / state.pxPerSec);
+    if (!ev.shiftKey && !field.bool) {
+      const dv = -(y - d.startY) / (hit.lane.h - 2 * PAD) * (field.max - field.min);
+      changes[field.name] = round(clamp(d.startV + dv, field.min, field.max), 4);
+    }
+    const next = core.moveKeyframe(d.base, hit.role, hit.track, hit.index, changes);
+    if (next === d.base && 't' in changes && changes.t !== d.startT) return; // collision: keep last good state
+    setShow(next, { dirty: true });
+    const newT = 't' in changes ? changes.t : d.startT;
+    state.selection = { kind: 'kf', role: hit.role, track: hit.track, index: core.keyframeIndexAt(state.show, hit.role, hit.track, newT), field: field.name };
+    drawLanes(); renderInspector();
+  } else if (d.type === 'event') {
+    const t = snapTime(d.startT + (x - d.startX) / state.pxPerSec);
+    setShow(core.updateEvent(d.base, d.hit.role, d.hit.index, { t }), { dirty: true });
+    state.selection = { kind: 'event', role: d.hit.role, index: d.hit.index };
+    drawLanes(); renderInspector();
+  }
+});
+
+function endDrag() {
+  const d = state.drag;
+  state.drag = null;
+  if (!d || d.type === 'scrub') return;
+  if (d.moved && state.show !== d.base) {
+    state.history.push(d.base); state.future.length = 0;
+    if (state.history.length > 200) state.history.shift();
+    renderAll();
+  }
+}
+lanesC.addEventListener('pointerup', endDrag);
+lanesC.addEventListener('pointercancel', endDrag);
+
+lanesC.addEventListener('dblclick', (ev) => {
+  const { x, y } = canvasPoint(ev);
+  const hit = hitTest(x, y);
+  if (!hit) return;
+  if (hit.kind === 'empty') { if (hit.lane.kind === 'curve') addKeyframeAt(hit.lane, tOf(x), y); else addEventAt(hit.lane, tOf(x)); }
+  else if (hit.kind === 'kf' && hit.lane.fields.find((f) => f.name === hit.field)?.bool) {
+    const kf = sampler(hit.role).tracks[hit.track][hit.index];
+    commit(core.moveKeyframe(state.show, hit.role, hit.track, hit.index, { [hit.field]: !kf[hit.field] }));
+  } else if (hit.kind === 'kf') {
+    cycleSelectedInterp();
+  }
+});
+
+lanesC.addEventListener('wheel', (ev) => {
+  if (ev.metaKey || ev.ctrlKey) {
+    ev.preventDefault();
+    const { x } = canvasPoint(ev);
+    zoomAt(Math.exp(-ev.deltaY * 0.01), x);
+  } else if (ev.shiftKey || Math.abs(ev.deltaX) > Math.abs(ev.deltaY)) {
+    ev.preventDefault();
+    const dx = ev.shiftKey ? (ev.deltaY || ev.deltaX) : ev.deltaX;
+    setScrollT(state.scrollT + dx / state.pxPerSec);
+  }
+}, { passive: false });
+
+scrollEl.addEventListener('scroll', () => drawLanes());
+hscroll.addEventListener('scroll', () => { if (hscroll._syncing) return; state.scrollT = hscroll.scrollLeft / state.pxPerSec; drawRuler(); drawLanes(); });
+
+function setScrollT(t) {
+  const { W } = state.layout;
+  const contentW = Math.max(W, (duration() + 2) * state.pxPerSec);
+  state.scrollT = clamp(t, 0, Math.max(0, (contentW - W) / state.pxPerSec));
+  hscroll._syncing = true; hscroll.scrollLeft = state.scrollT * state.pxPerSec; hscroll._syncing = false;
+  drawRuler(); drawLanes();
+}
+
+function zoomAt(factor, x) {
+  const tAt = tOf(x);
+  state.pxPerSec = clamp(state.pxPerSec * factor, 4, 4000);
+  state.scrollT = tAt - x / state.pxPerSec;
+  layoutTimeline(); drawRuler(); drawLanes();
+}
+function zoomFit() {
+  state.pxPerSec = clamp(state.layout.W / Math.max(1, duration() + 1), 4, 4000);
+  state.scrollT = 0;
+  layoutTimeline(); drawRuler(); drawLanes();
+}
+function ensureVisible(t) {
+  const { W } = state.layout;
+  if (xOf(t) < 0 || xOf(t) > W) setScrollT(t - W / state.pxPerSec * 0.3);
+}
+
+// ruler scrub
+rulerC.addEventListener('pointerdown', (ev) => {
+  capture(rulerC, ev);
+  const r = rulerC.getBoundingClientRect();
+  state.drag = { type: 'scrub' };
+  seek(clamp(round(tOf(ev.clientX - r.left), 3), 0, duration()), { fromUser: true });
+});
+rulerC.addEventListener('pointermove', (ev) => {
+  if (state.drag?.type !== 'scrub') return;
+  const r = rulerC.getBoundingClientRect();
+  seek(clamp(round(tOf(ev.clientX - r.left), 3), 0, duration()), { fromUser: true });
+});
+rulerC.addEventListener('pointerup', () => { state.drag = null; });
+
+// ---------------------------------------------------------------------------
+// Inspector
+// ---------------------------------------------------------------------------
+function renderInspector() {
+  const body = $('inspector-body');
+  const title = $('inspector-title');
+  const sel = state.selection;
+  body.replaceChildren();
+  if (!sel || !selectionValid()) {
+    title.textContent = '';
+    body.innerHTML = '<div class="full hint">Click a keyframe or event. Double-click (or ⌘-click) a lane to add one; drag to move (⇧ time only, ⌥ value only).</div>';
+    return;
+  }
+  const row = (labelText, input) => {
+    const l = document.createElement('label'); l.textContent = labelText; body.appendChild(l); body.appendChild(input); return input;
+  };
+  const num = (value, { step = 0.001, min, max } = {}) => {
+    const i = document.createElement('input'); i.type = 'number'; i.step = String(step);
+    if (min !== undefined) i.min = String(min); if (max !== undefined) i.max = String(max);
+    i.value = value === null || value === undefined ? '' : String(value);
+    return i;
+  };
+  if (sel.kind === 'kf') {
+    const kf = sampler(sel.role).tracks[sel.track][sel.index];
+    title.textContent = `${sel.role} · ${sel.track} #${sel.index}`;
+    const tIn = row('t (s)', num(kf.t, { step: 0.01, min: 0 }));
+    tIn.onchange = () => {
+      const t = round(Number(tIn.value), 3);
+      const next = core.moveKeyframe(state.show, sel.role, sel.track, sel.index, { t });
+      if (next === state.show) { status(`a keyframe already sits at ${t}s`, 'error'); tIn.value = kf.t; return; }
+      commit(next);
+      select({ ...sel, index: core.keyframeIndexAt(state.show, sel.role, sel.track, Math.max(0, t)) });
+    };
+    for (const f of FIELDS[sel.track]) {
+      if (f.bool) {
+        const cb = document.createElement('input'); cb.type = 'checkbox'; cb.checked = !!kf[f.name];
+        cb.onchange = () => commit(core.moveKeyframe(state.show, sel.role, sel.track, sel.index, { [f.name]: cb.checked }));
+        const lab = row(f.name, cb); lab.style.justifySelf = 'start';
+        continue;
+      }
+      const inp = row(`${f.name}${f.unit ? ` (${f.unit})` : ''}`, num(kf[f.name], { min: f.min, max: f.max }));
+      inp.style.borderColor = FIELD_COLORS[f.name];
+      inp.onchange = () => {
+        const v = Number(inp.value);
+        if (!Number.isFinite(v)) return;
+        commit(core.moveKeyframe(state.show, sel.role, sel.track, sel.index, { [f.name]: round(v, 4) }));
+      };
+    }
+    const interp = document.createElement('select');
+    for (const v of core.VALID_INTERPS) { const o = document.createElement('option'); o.value = v; o.textContent = v; interp.appendChild(o); }
+    interp.value = core.VALID_INTERPS.includes(kf.interp) ? kf.interp : 'linear';
+    interp.onchange = () => commit(core.setInterp(state.show, sel.role, sel.track, sel.index, interp.value));
+    row('interp →', interp);
+    const actions = document.createElement('div'); actions.className = 'full'; actions.style.display = 'flex'; actions.style.gap = '6px';
+    const cyc = document.createElement('button'); cyc.textContent = 'cycle interp (I)'; cyc.onclick = cycleSelectedInterp;
+    const del = document.createElement('button'); del.textContent = 'delete (⌫)'; del.className = 'danger'; del.onclick = deleteSelection;
+    actions.append(cyc, del); body.appendChild(actions);
+    return;
+  }
+  // event
+  const e = state.norm.tracksFor(sel.role).events.find((x) => x.index === sel.index);
+  title.textContent = `${sel.role} · event #${sel.index}`;
+  const tIn = row('t (s)', num(e.t, { step: 0.01, min: 0 }));
+  tIn.onchange = () => commit(core.updateEvent(state.show, sel.role, sel.index, { t: round(Math.max(0, Number(tIn.value)), 3) }));
+  const kind = e.do !== null ? 'do' : (e.sound !== null ? 'sound' : (e.mode !== null ? 'mode' : 'sound'));
+  const kindSel = document.createElement('select');
+  for (const k of ['do', 'sound', 'mode']) { const o = document.createElement('option'); o.value = k; o.textContent = k === 'do' ? 'do (skill)' : k; kindSel.appendChild(o); }
+  kindSel.value = kind;
+  kindSel.onchange = () => {
+    const k = kindSel.value;
+    const v = k === 'do' ? core.SKILLS[0] : (k === 'sound' ? core.SOUND_TAGS[0] : (declaredModes()[0] ?? 'default'));
+    commit(core.setEventAction(state.show, sel.role, sel.index, k, v));
+  };
+  row('action', kindSel);
+  if (kind === 'mode') {
+    const inp = document.createElement('input'); inp.type = 'text'; inp.value = e.mode ?? ''; inp.setAttribute('list', 'declared-modes');
+    let dl = $('declared-modes');
+    if (!dl) { dl = document.createElement('datalist'); dl.id = 'declared-modes'; document.body.appendChild(dl); }
+    dl.replaceChildren(...declaredModes().map((m) => { const o = document.createElement('option'); o.value = m; return o; }));
+    inp.onchange = () => commit(core.setEventAction(state.show, sel.role, sel.index, 'mode', inp.value));
+    row('mode', inp);
+    const hint = document.createElement('div'); hint.className = 'full hint';
+    hint.textContent = declaredModes().length ? `declared: ${declaredModes().join(', ')}` : 'no policies declared in requires.policies (warning, not error)';
+    body.appendChild(hint);
+  } else {
+    const vs = document.createElement('select');
+    for (const v of (kind === 'do' ? core.SKILLS : core.SOUND_TAGS)) { const o = document.createElement('option'); o.value = v; o.textContent = v; vs.appendChild(o); }
+    const current = e[kind];
+    if (!Array.from(vs.options).some((o) => o.value === current)) { const o = document.createElement('option'); o.value = String(current); o.textContent = `${current} (invalid)`; vs.appendChild(o); }
+    vs.value = String(current);
+    vs.onchange = () => commit(core.setEventAction(state.show, sel.role, sel.index, kind, vs.value));
+    row(kind === 'do' ? 'skill' : 'sound', vs);
+    if (kind === 'sound') {
+      const hold = row('hold (s)', num(e.hold, { step: 0.1, min: 0 }));
+      hold.placeholder = 'none';
+      hold.onchange = () => commit(core.updateEvent(state.show, sel.role, sel.index, { hold: hold.value === '' ? undefined : round(Number(hold.value), 3) }));
+    }
+  }
+  const del = document.createElement('button'); del.textContent = 'delete (⌫)'; del.className = 'danger full'; del.onclick = deleteSelection;
+  body.appendChild(del);
+}
+
+function declaredModes() { return state.norm.requires.policies.map((p) => p.mode); }
+
+function cycleSelectedInterp() {
+  const sel = state.selection;
+  if (!sel || sel.kind !== 'kf' || !selectionValid()) return;
+  const kf = sampler(sel.role).tracks[sel.track][sel.index];
+  commit(core.setInterp(state.show, sel.role, sel.track, sel.index, core.cycleInterp(kf.interp)));
+}
+
+function deleteSelection() {
+  const sel = state.selection;
+  if (!sel || !selectionValid()) return;
+  if (sel.kind === 'kf') commit(core.deleteKeyframe(state.show, sel.role, sel.track, sel.index));
+  else commit(core.deleteEvent(state.show, sel.role, sel.index));
+  select(null);
+  status('deleted');
+}
+
+function nudgeSelection(dt, dvFrac) {
+  const sel = state.selection;
+  if (!sel || !selectionValid()) return;
+  if (sel.kind === 'kf') {
+    const kf = sampler(sel.role).tracks[sel.track][sel.index];
+    const changes = {};
+    if (dt) changes.t = round(Math.max(0, kf.t + dt), 3);
+    if (dvFrac) {
+      const f = FIELDS[sel.track].find((x) => x.name === sel.field);
+      if (f.bool) changes[f.name] = !kf[f.name];
+      else changes[f.name] = round(clamp(kf[f.name] + dvFrac * (f.max - f.min), f.min, f.max), 4);
+    }
+    const next = core.moveKeyframe(state.show, sel.role, sel.track, sel.index, changes);
+    if (next === state.show) { status('another keyframe is in the way', 'error'); return; }
+    commit(next);
+    select({ ...sel, index: core.keyframeIndexAt(state.show, sel.role, sel.track, changes.t ?? kf.t) });
+    if (changes.t !== undefined) ensureVisible(changes.t);
+  } else if (dt) {
+    const e = state.norm.tracksFor(sel.role).events.find((x) => x.index === sel.index);
+    const t = round(Math.max(0, e.t + dt), 3);
+    commit(core.updateEvent(state.show, sel.role, sel.index, { t }));
+    ensureVisible(t);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Validation panel
+// ---------------------------------------------------------------------------
+function renderIssues() {
+  const ul = $('issues');
+  ul.replaceChildren();
+  const errors = state.issues.filter((i) => i.severity === 'error').length;
+  const warnings = state.issues.length - errors;
+  $('issue-count').innerHTML = state.issues.length ? `<span style="color:var(--err)">${errors} err</span> · <span style="color:var(--warn)">${warnings} warn</span>` : '<span style="color:var(--ok)">clean</span>';
+  $('status-summary').innerHTML = `<span class="${errors ? 'e' : 'k'}">${errors} errors</span> · <span class="${warnings ? 'w' : 'k'}">${warnings} warnings</span>`;
+  if (!state.issues.length) {
+    const li = document.createElement('li'); li.className = 'ok'; li.textContent = 'No issues — the show passes the same rules python/duckshow enforces at LOAD.'; ul.appendChild(li);
+    return;
+  }
+  for (const issue of state.issues) {
+    const li = document.createElement('li');
+    li.className = issue.severity;
+    const where = [issue.role, issue.track, issue.t !== null && issue.t !== undefined ? `@ ${issue.t}s` : null].filter((x) => x !== null && x !== undefined).join(' · ') || 'show';
+    li.innerHTML = `<span class="sev"></span><span><div class="where"></div><div class="text"></div></span>`;
+    li.querySelector('.where').textContent = where;
+    li.querySelector('.text').textContent = issue.message;
+    li.title = 'jump to';
+    li.onclick = () => jumpTo(issue);
+    ul.appendChild(li);
+  }
+}
+
+function jumpTo(issue) {
+  if (issue.role && state.collapsed.has(issue.role)) { state.collapsed.delete(issue.role); renderAll(); }
+  if (issue.t !== null && issue.t !== undefined && Number.isFinite(issue.t)) {
+    seek(clamp(issue.t, 0, duration()), { fromUser: true });
+    ensureVisible(issue.t);
+  }
+  if (issue.role && issue.track) {
+    if (core.CURVE_TRACKS.includes(issue.track)) {
+      const index = core.keyframeIndexAt(state.show, issue.role, issue.track, issue.t);
+      if (index >= 0) select({ kind: 'kf', role: issue.role, track: issue.track, index, field: FIELDS[issue.track][0].name });
+    } else if (issue.track === 'events') {
+      const e = state.norm.tracksFor(issue.role).events.find((x) => x.t === issue.t);
+      if (e) select({ kind: 'event', role: issue.role, index: e.index });
+    }
+    const lane = state.layout.lanes.find((l) => l.role === issue.role && (l.track === issue.track || (l.kind === 'events' && issue.track === 'events')));
+    if (lane && (lane.y < scrollEl.scrollTop || lane.y + lane.h > scrollEl.scrollTop + state.layout.H)) scrollEl.scrollTop = Math.max(0, lane.y - 40);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Header fields
+// ---------------------------------------------------------------------------
+function renderHeaderFields() {
+  const m = state.norm.meta;
+  const set = (id, v) => { const el = $(id); if (document.activeElement !== el) el.value = v === null || v === undefined ? '' : String(v); };
+  set('f-name', m.name); set('f-author', m.author); set('f-duration', m.duration);
+  set('f-bpm', m.music?.bpm ?? ''); set('f-offset', m.music ? m.music.beat_offset : ''); set('f-music', m.music?.file ?? '');
+}
+$('f-name').onchange = (e) => commit(core.setMeta(state.show, { name: e.target.value || undefined }));
+$('f-author').onchange = (e) => commit(core.setMeta(state.show, { author: e.target.value || undefined }));
+$('f-duration').onchange = (e) => {
+  const v = Number(e.target.value);
+  commit(core.setMeta(state.show, { duration: Number.isFinite(v) ? round(v, 3) : undefined }));
+};
+$('f-bpm').onchange = (e) => {
+  const v = e.target.value === '' ? undefined : round(Number(e.target.value), 3);
+  commit(core.setMeta(state.show, { music: { bpm: v, beat_offset: state.norm.meta.music?.beat_offset ?? 0 } }));
+};
+$('f-offset').onchange = (e) => commit(core.setMeta(state.show, { music: { beat_offset: round(Number(e.target.value) || 0, 3) } }));
+$('f-music').onchange = (e) => commit(core.setMeta(state.show, { music: { file: e.target.value || undefined } }));
+
+$('btn-add-role').onclick = () => {
+  const name = prompt('Role name (e.g. lead, wing, tail):');
+  if (!name) return;
+  try { commit(core.addRole(state.show, name.trim())); status(`added role ${name.trim()}`); }
+  catch (err) { status(err.message, 'error'); }
+};
+
+// ---------------------------------------------------------------------------
+// Stage (top-down dead reckoning)
+// ---------------------------------------------------------------------------
+let stageView = { scale: 100, cx: 0, cy: 0, W: 0, H: 0 };
+function pathsCache() {
+  if (state.pathsFor !== state.show) {
+    state.paths.clear();
+    for (const role of roles()) state.paths.set(role, core.integrate(state.norm, role, FRAME, { start: core.getMark(state.show, role) }));
+    state.pathsFor = state.show;
+  }
+  return state.paths;
+}
+function stageToScreen(x, y) { return { sx: stageView.W / 2 + (x - stageView.cx) * stageView.scale, sy: stageView.H / 2 - (y - stageView.cy) * stageView.scale }; }
+function screenToStage(sx, sy) { return { x: stageView.cx + (sx - stageView.W / 2) / stageView.scale, y: stageView.cy - (sy - stageView.H / 2) / stageView.scale }; }
+
+function drawStage() {
+  const W = Math.max(50, stageC.clientWidth || stageC.parentElement.clientWidth), H = Math.max(120, stageC.clientHeight || 200);
+  const ctx = setupCanvas(stageC, W, H);
+  const paths = pathsCache();
+  // fit
+  let minX = -0.5, maxX = 0.5, minY = -0.5, maxY = 0.5;
+  for (const p of paths.values()) for (const q of p) { minX = Math.min(minX, q.x); maxX = Math.max(maxX, q.x); minY = Math.min(minY, q.y); maxY = Math.max(maxY, q.y); }
+  const spanX = Math.max(1, maxX - minX + 0.4), spanY = Math.max(1, maxY - minY + 0.4);
+  if (!state.drag || state.drag.type !== 'mark') {
+    stageView = { W, H, scale: Math.min((W - 20) / spanX, (H - 20) / spanY), cx: (minX + maxX) / 2, cy: (minY + maxY) / 2 };
+  } else { stageView.W = W; stageView.H = H; }
+  ctx.clearRect(0, 0, W, H);
+  ctx.fillStyle = css('--lane'); ctx.fillRect(0, 0, W, H);
+  // grid 0.5 m
+  const g = 0.5;
+  const tl = screenToStage(0, 0), br = screenToStage(W, H);
+  ctx.strokeStyle = css('--grid'); ctx.lineWidth = 1;
+  for (let x = Math.floor(tl.x / g) * g; x <= br.x; x += g) { const { sx } = stageToScreen(x, 0); ctx.beginPath(); ctx.moveTo(Math.round(sx) + 0.5, 0); ctx.lineTo(Math.round(sx) + 0.5, H); ctx.stroke(); }
+  for (let y = Math.floor(br.y / g) * g; y <= tl.y; y += g) { const { sy } = stageToScreen(0, y); ctx.beginPath(); ctx.moveTo(0, Math.round(sy) + 0.5); ctx.lineTo(W, Math.round(sy) + 0.5); ctx.stroke(); }
+  // axes
+  ctx.strokeStyle = css('--zero');
+  { const o = stageToScreen(0, 0); ctx.beginPath(); ctx.moveTo(0, o.sy + 0.5); ctx.lineTo(W, o.sy + 0.5); ctx.moveTo(o.sx + 0.5, 0); ctx.lineTo(o.sx + 0.5, H); ctx.stroke(); }
+  ctx.font = `10px ${css('--mono')}`; ctx.fillStyle = css('--fg3'); ctx.textBaseline = 'top';
+  ctx.fillText('x forward →  y left ↑  (grid 0.5 m)', 6, 4);
+  ctx.fillText(`${(1 / stageView.scale * 100).toFixed(1)} cm/px`, 6, 16);
+  // paths
+  const idx = Math.round(state.playhead / FRAME);
+  for (const role of roles()) {
+    const p = paths.get(role);
+    const color = roleColor(role);
+    ctx.strokeStyle = color; ctx.lineWidth = 1.5; ctx.globalAlpha = 0.9;
+    ctx.beginPath();
+    p.forEach((q, i) => { const { sx, sy } = stageToScreen(q.x, q.y); if (i === 0) ctx.moveTo(sx, sy); else ctx.lineTo(sx, sy); });
+    ctx.stroke(); ctx.globalAlpha = 1;
+    // end marker
+    const end = p[p.length - 1]; const es = stageToScreen(end.x, end.y);
+    ctx.fillStyle = color; ctx.fillRect(es.sx - 2, es.sy - 2, 4, 4);
+    // current position
+    const cur = p[clamp(idx, 0, p.length - 1)];
+    const cs = stageToScreen(cur.x, cur.y);
+    ctx.beginPath(); ctx.arc(cs.sx, cs.sy, 5, 0, Math.PI * 2); ctx.fillStyle = color; ctx.fill();
+    ctx.strokeStyle = css('--fg'); ctx.lineWidth = 1; ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(cs.sx, cs.sy); ctx.lineTo(cs.sx + Math.cos(cur.heading) * 10, cs.sy - Math.sin(cur.heading) * 10); ctx.stroke();
+    // start mark (draggable)
+    const m = core.getMark(state.show, role);
+    const ms = stageToScreen(m.x, m.y);
+    ctx.beginPath(); ctx.arc(ms.sx, ms.sy, 8, 0, Math.PI * 2);
+    ctx.strokeStyle = color; ctx.lineWidth = 2; ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(ms.sx, ms.sy); ctx.lineTo(ms.sx + Math.cos(m.heading) * 16, ms.sy - Math.sin(m.heading) * 16); ctx.stroke();
+    ctx.lineWidth = 1;
+    ctx.fillStyle = color; ctx.textBaseline = 'middle'; ctx.fillText(role, ms.sx + 11, ms.sy + 10);
+  }
+  // legend
+  const legend = $('stage-legend');
+  legend.replaceChildren(...roles().map((role) => {
+    const m = core.getMark(state.show, role);
+    const span = document.createElement('span');
+    span.innerHTML = `<i style="background:${roleColor(role)}"></i>${role} (${fmt(m.x, 2)}, ${fmt(m.y, 2)}) ${(m.heading * 180 / Math.PI).toFixed(0)}°`;
+    return span;
+  }));
+}
+
+stageC.addEventListener('pointerdown', (ev) => {
+  const r = stageC.getBoundingClientRect();
+  const sx = ev.clientX - r.left, sy = ev.clientY - r.top;
+  let hit = null, bestD = 14;
+  for (const role of roles()) {
+    const m = core.getMark(state.show, role);
+    const ms = stageToScreen(m.x, m.y);
+    const d = Math.hypot(ms.sx - sx, ms.sy - sy);
+    if (d < bestD) { bestD = d; hit = role; }
+  }
+  if (!hit) return;
+  const m = core.getMark(state.show, hit);
+  state.drag = { type: 'mark', role: hit, base: state.show, start: m, startSx: sx, startSy: sy, rotate: ev.altKey || ev.shiftKey, moved: false };
+  capture(stageC, ev);
+});
+stageC.addEventListener('pointermove', (ev) => {
+  const d = state.drag;
+  if (!d || d.type !== 'mark') return;
+  const r = stageC.getBoundingClientRect();
+  const sx = ev.clientX - r.left, sy = ev.clientY - r.top;
+  d.moved = true;
+  let mark;
+  if (d.rotate) {
+    const ms = stageToScreen(d.start.x, d.start.y);
+    mark = { ...d.start, heading: round(Math.atan2(-(sy - ms.sy), sx - ms.sx), 4) };
+  } else {
+    const p = screenToStage(sx, sy);
+    mark = { ...d.start, x: round(p.x, 3), y: round(p.y, 3) };
+  }
+  setShow(core.setMark(d.base, d.role, mark), { dirty: true });
+});
+function endMarkDrag() {
+  const d = state.drag;
+  if (!d || d.type !== 'mark') return;
+  state.drag = null;
+  if (d.moved && state.show !== d.base) { state.history.push(d.base); state.future.length = 0; }
+  renderAll();
+}
+stageC.addEventListener('pointerup', endMarkDrag);
+stageC.addEventListener('pointercancel', endMarkDrag);
+
+// ---------------------------------------------------------------------------
+// Transport + audio
+// ---------------------------------------------------------------------------
+function updateTimeLabel() {
+  const t = state.playhead;
+  const music = musicMeta();
+  let bar = '';
+  if (music && Number(music.bpm) > 0) {
+    const period = core.beatPeriod(Number(music.bpm));
+    const beats = Math.floor((t - music.beat_offset) / period + 1e-9);
+    const b = ((beats % 4) + 4) % 4;
+    bar = ` · bar ${Math.floor(beats / 4) + 1}.${b + 1}`;
+  }
+  $('time').innerHTML = `${t.toFixed(3)} <small>s · frame ${Math.round(t / FRAME)}${bar}</small>`;
+  $('btn-play').textContent = state.playing ? '⏸' : '▶';
+}
+
+function seek(t, { fromUser = false } = {}) {
+  state.playhead = clamp(t, 0, Math.max(0, duration()));
+  if (state.playing && fromUser) { stopAudio(); startClock(); }
+  drawRuler(); drawLanes(); updateReadouts(); updateTimeLabel(); drawStage();
+}
+
+function startClock() {
+  const a = state.audio;
+  state.clockShowTime = state.playhead;
+  if (a.buffer && a.ctx) {
+    a.ctx.resume();
+    if (state.playhead < a.buffer.duration) {
+      a.source = a.ctx.createBufferSource();
+      a.source.buffer = a.buffer;
+      a.source.connect(a.gain);
+      a.source.start(0, state.playhead);
+    }
+    state.clockStart = a.ctx.currentTime;
+  } else {
+    state.clockStart = performance.now() / 1000;
+  }
+}
+function stopAudio() {
+  const a = state.audio;
+  if (a.source) { try { a.source.stop(); } catch (_) { /* already stopped */ } a.source = null; }
+}
+function clockNow() {
+  const a = state.audio;
+  return a.buffer && a.ctx ? a.ctx.currentTime : performance.now() / 1000;
+}
+function play() {
+  if (state.playing) return;
+  if (state.playhead >= duration()) state.playhead = 0;
+  state.playing = true;
+  startClock();
+  updateTimeLabel();
+  requestAnimationFrame(tick);
+}
+function pause() {
+  if (!state.playing) return;
+  state.playing = false;
+  stopAudio();
+  updateTimeLabel();
+}
+function tick() {
+  if (!state.playing) return;
+  let t = state.clockShowTime + (clockNow() - state.clockStart);
+  if (t >= duration()) {
+    if (state.loop) { stopAudio(); state.playhead = 0; startClock(); t = 0; }
+    else { state.playhead = duration(); pause(); seek(duration()); return; }
+  }
+  state.playhead = t;
+  drawRuler(); drawLanes(); updateReadouts(); updateTimeLabel(); drawStage();
+  const xp = xOf(t);
+  if (xp > state.layout.W - 20 || xp < 0) setScrollT(t - 20 / state.pxPerSec);
+  requestAnimationFrame(tick);
+}
+
+$('btn-play').onclick = () => (state.playing ? pause() : play());
+$('btn-start').onclick = () => seek(0, { fromUser: true });
+$('btn-end').onclick = () => seek(duration(), { fromUser: true });
+$('btn-loop').onclick = (e) => { state.loop = !state.loop; e.currentTarget.setAttribute('aria-pressed', String(state.loop)); };
+$('btn-snap').onclick = (e) => { state.snap = !state.snap; e.currentTarget.setAttribute('aria-pressed', String(state.snap)); };
+$('subdiv').onchange = (e) => { state.subdivision = Number(e.target.value); drawLanes(); };
+$('btn-zoom-in').onclick = () => zoomAt(1.5, state.layout.W / 2);
+$('btn-zoom-out').onclick = () => zoomAt(1 / 1.5, state.layout.W / 2);
+$('btn-fit').onclick = zoomFit;
+$('btn-undo').onclick = undo;
+$('btn-redo').onclick = redo;
+
+$('btn-audio').onclick = () => $('audio-file').click();
+$('audio-file').onchange = async (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+  try {
+    const a = state.audio;
+    if (!a.ctx) { a.ctx = new (window.AudioContext || window.webkitAudioContext)(); a.gain = a.ctx.createGain(); a.gain.connect(a.ctx.destination); }
+    const buf = await file.arrayBuffer();
+    pause();
+    a.buffer = await a.ctx.decodeAudioData(buf);
+    a.name = file.name;
+    $('audio-name').textContent = `${file.name} · ${a.buffer.duration.toFixed(1)}s`;
+    $('btn-audio-use').classList.remove('hidden');
+    status(`audio loaded: ${file.name} (${a.buffer.duration.toFixed(1)} s) — type the bpm in the header; no beat detection`, 'ok');
+  } catch (err) { status(`could not decode audio: ${err.message}`, 'error'); }
+  e.target.value = '';
+};
+$('btn-audio-use').onclick = () => { if (state.audio.name) commit(core.setMeta(state.show, { music: { file: state.audio.name } })); };
+$('audio-mute').onchange = (e) => { if (state.audio.gain) state.audio.gain.gain.value = e.target.checked ? 0 : 1; };
+
+// ---------------------------------------------------------------------------
+// File I/O
+// ---------------------------------------------------------------------------
+function loadShowText(text, fileName) {
+  try {
+    const show = core.parseShow(text);
+    pause();
+    state.selection = null; state.collapsed.clear(); state.fileName = fileName; state.fileHandle = null; state.playhead = 0;
+    setShow(show, { dirty: false, resetHistory: true });
+    zoomFit();
+    const errs = state.issues.filter((i) => i.severity === 'error').length;
+    status(`opened ${fileName}: ${roles().length} roles, ${duration()} s, ${errs ? `${errs} validation errors` : 'valid'}`, errs ? 'error' : 'ok');
+    return true;
+  } catch (err) {
+    status(`cannot open ${fileName}: ${err.message}`, 'error');
+    return false;
+  }
+}
+
+$('btn-open').onclick = () => $('open-file').click();
+$('open-file').onchange = async (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+  if (state.dirty && !confirm('Discard unsaved changes?')) { e.target.value = ''; return; }
+  loadShowText(await file.text(), file.name);
+  e.target.value = '';
+};
+
+async function save() {
+  let text;
+  try { text = core.serializeShow(state.show); } catch (err) { status(`cannot save: ${err.message}`, 'error'); return; }
+  const name = state.fileName || `${(state.norm.meta.name || 'show').toLowerCase().replace(/[^a-z0-9]+/g, '-')}.duckshow.json`;
+  if (window.showSaveFilePicker) {
+    try {
+      const handle = state.fileHandle || await window.showSaveFilePicker({ suggestedName: name, types: [{ description: 'duckshow', accept: { 'application/json': ['.json'] } }] });
+      const w = await handle.createWritable();
+      await w.write(text); await w.close();
+      state.fileHandle = handle; state.fileName = handle.name; state.dirty = false;
+      renderAll(); status(`saved ${handle.name}`, 'ok');
+      return;
+    } catch (err) {
+      if (err && err.name === 'AbortError') { status('save cancelled'); return; }
+      // fall through to a download
+    }
+  }
+  const url = URL.createObjectURL(new Blob([text], { type: 'application/json' }));
+  const a = document.createElement('a');
+  a.href = url; a.download = name; document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 2000);
+  state.dirty = false; renderAll();
+  status(`downloaded ${name} — move it into shows/ yourself`, 'ok');
+}
+$('btn-save').onclick = save;
+
+$('btn-new').onclick = () => {
+  if (state.dirty && !confirm('Discard unsaved changes?')) return;
+  const show = core.newShow({ name: 'Untitled', duration: 30, bpm: 120, roles: ['lead'] });
+  pause(); state.selection = null; state.collapsed.clear(); state.fileName = 'untitled.duckshow.json'; state.fileHandle = null; state.playhead = 0;
+  setShow(show, { dirty: false, resetHistory: true }); zoomFit();
+  status('new show');
+};
+
+async function loadDemo({ quiet = false } = {}) {
+  try {
+    const res = await fetch(DEMO_URL, { cache: 'no-cache' });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const text = await res.text();
+    return loadShowText(text, 'demo.duckshow.json');
+  } catch (err) {
+    const why = location.protocol === 'file:'
+      ? 'the page is opened from file://, so it cannot fetch ../shows/demo/demo.duckshow.json. Run `python3 -m http.server 8000` in the repo root and open http://localhost:8000/editor/duckshow-editor.html, or use Open… to pick the file.'
+      : `${err.message}. Serve the repo root (python3 -m http.server) so ../shows/demo/demo.duckshow.json is reachable, or use Open….`;
+    if (!quiet) status(`Load demo failed: ${why}`, 'error');
+    return false;
+  }
+}
+$('btn-demo').onclick = () => { if (!state.dirty || confirm('Discard unsaved changes?')) loadDemo(); };
+
+// drag & drop a file anywhere
+window.addEventListener('dragover', (e) => { e.preventDefault(); document.body.classList.add('dropping'); });
+window.addEventListener('dragleave', (e) => { if (!e.relatedTarget) document.body.classList.remove('dropping'); });
+window.addEventListener('drop', async (e) => {
+  e.preventDefault(); document.body.classList.remove('dropping');
+  const file = e.dataTransfer.files[0];
+  if (!file) return;
+  if (file.type.startsWith('audio/')) { const dt = new DataTransfer(); dt.items.add(file); $('audio-file').files = dt.files; $('audio-file').dispatchEvent(new Event('change')); return; }
+  if (state.dirty && !confirm('Discard unsaved changes?')) return;
+  loadShowText(await file.text(), file.name);
+});
+window.addEventListener('beforeunload', (e) => { if (state.dirty) { e.preventDefault(); e.returnValue = ''; } });
+
+// ---------------------------------------------------------------------------
+// Keyboard
+// ---------------------------------------------------------------------------
+window.addEventListener('keydown', (e) => {
+  const tag = document.activeElement?.tagName;
+  const typing = tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA';
+  const mod = e.metaKey || e.ctrlKey;
+  if (mod && e.key.toLowerCase() === 's') { e.preventDefault(); save(); return; }
+  if (mod && e.key.toLowerCase() === 'o') { e.preventDefault(); $('open-file').click(); return; }
+  if (mod && e.key.toLowerCase() === 'z') { e.preventDefault(); if (typing) document.activeElement.blur(); e.shiftKey ? redo() : undo(); return; }
+  if (mod && e.key.toLowerCase() === 'y') { e.preventDefault(); redo(); return; }
+  if (typing) { if (e.key === 'Escape') document.activeElement.blur(); return; }
+  const g = grid();
+  const stepT = state.snap && g.length ? (core.beatPeriod(Number(musicMeta().bpm)) / state.subdivision) : FRAME;
+  switch (e.key) {
+    case ' ': e.preventDefault(); state.playing ? pause() : play(); break;
+    case 'Home': e.preventDefault(); seek(0, { fromUser: true }); break;
+    case 'End': e.preventDefault(); seek(duration(), { fromUser: true }); break;
+    case 'ArrowLeft': case 'ArrowRight': {
+      e.preventDefault();
+      const dir = e.key === 'ArrowLeft' ? -1 : 1;
+      if (state.selection) nudgeSelection(dir * stepT * (e.shiftKey ? 10 : 1), 0);
+      else seek(state.playhead + dir * (e.shiftKey ? 1 : FRAME), { fromUser: true });
+      break;
+    }
+    case 'ArrowUp': case 'ArrowDown': e.preventDefault(); nudgeSelection(0, (e.key === 'ArrowUp' ? 1 : -1) * (e.shiftKey ? 0.1 : 0.01)); break;
+    case 'Delete': case 'Backspace': e.preventDefault(); deleteSelection(); break;
+    case 'Escape': select(null); break;
+    case 'i': case 'I': cycleSelectedInterp(); break;
+    case 's': case 'S': $('btn-snap').click(); break;
+    case '+': case '=': zoomAt(1.5, state.layout.W / 2); break;
+    case '-': case '_': zoomAt(1 / 1.5, state.layout.W / 2); break;
+    case '0': zoomFit(); break;
+    case ',': seek(state.playhead - FRAME, { fromUser: true }); break;
+    case '.': seek(state.playhead + FRAME, { fromUser: true }); break;
+    default: break;
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Boot
+// ---------------------------------------------------------------------------
+new ResizeObserver(() => { layoutTimeline(); drawRuler(); drawLanes(); drawStage(); }).observe(scrollEl);
+new ResizeObserver(() => drawStage()).observe($('stage-section'));
+if (window.matchMedia) window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', renderAll);
+
+function starterShow() {
+  let show = core.newShow({ name: 'Starter', duration: 16, bpm: 120, roles: ['lead', 'wing'] });
+  show = core.addKeyframe(show, 'lead', 'locomotion', { t: 1, vx: 0, vy: 0, vyaw: 0, interp: 'linear' });
+  show = core.addKeyframe(show, 'lead', 'locomotion', { t: 2, vx: 0.1, vy: 0, vyaw: 0, interp: 'step' });
+  show = core.addKeyframe(show, 'lead', 'locomotion', { t: 6, vx: 0.1, vy: 0, vyaw: 0.5, interp: 'linear' });
+  show = core.addKeyframe(show, 'lead', 'locomotion', { t: 8, vx: 0, vy: 0, vyaw: 0 });
+  show = core.addKeyframe(show, 'lead', 'head', { t: 0, neck_pitch: 0, head_pitch: 0, head_yaw: 0, head_roll: 0, interp: 'smooth' });
+  show = core.addKeyframe(show, 'lead', 'head', { t: 1, neck_pitch: 0, head_pitch: -0.3, head_yaw: 0, head_roll: 0, interp: 'smooth' });
+  show = core.addKeyframe(show, 'lead', 'head', { t: 2, neck_pitch: 0, head_pitch: 0, head_yaw: 0, head_roll: 0 });
+  show = core.addEvent(show, 'lead', { t: 4, sound: 'chirp' });
+  show = core.addEvent(show, 'wing', { t: 4.5, sound: 'coo' });
+  show = core.addKeyframe(show, 'wing', 'locomotion', { t: 2, vx: 0.1, vy: 0, vyaw: -0.5, interp: 'step' });
+  show = core.addKeyframe(show, 'wing', 'locomotion', { t: 8, vx: 0, vy: 0, vyaw: 0 });
+  show = core.setMark(show, 'lead', { x: 0, y: 0.4, heading: 0 });
+  show = core.setMark(show, 'wing', { x: 0, y: -0.4, heading: 0 });
+  return show;
+}
+
+// Handy in devtools and for headless smoke tests: window.duckshowEditor.state.show is the live document.
+window.duckshowEditor = { state, core, xOf, tOf, yOfValue, stageToScreen, screenToStage, commit, select, seek };
+
+async function boot() {
+  window.__duckshowEditorBooted = true;
+  state.show = null;
+  setShow(starterShow(), { dirty: false, resetHistory: true });
+  state.fileName = 'starter.duckshow.json';
+  zoomFit();
+  if (location.protocol.startsWith('http')) {
+    if (!(await loadDemo({ quiet: true }))) status('could not fetch the demo show (serve from the repo root); loaded a built-in starter show instead');
+  } else {
+    status('opened from file:// — loaded a built-in starter show. Use Open… for a .duckshow.json, or serve the repo (python3 -m http.server) for "Load demo".');
+  }
+  renderAll();
+}
+boot();
+</script>
+</body>
+</html>

@@ -140,6 +140,44 @@ final class MessagesTests: XCTestCase {
         XCTAssertEqual(roundTripped, decoded)
     }
 
+    /// docs/swarmlink-protocol.md §6: "Telemetry adds `puppet: true|false`"
+    /// — the Python agent's `build_telemetry` always sends it; the master
+    /// must keep it (a duck under a forgotten puppet sender is otherwise
+    /// indistinguishable from one on the timeline) and decode a datagram
+    /// without it as `false`.
+    func testTelemetryPuppetFlagDecodesFromAPythonShapedDatagramAndDefaultsToFalse() throws {
+        let live = """
+        {"v": 1, "type": "telemetry", "duck": "duck-03", "seq": 12, "state": "playing", "show": "demo",
+         "show_time": 4.2, "clock_offset_ms": 0.7, "clock_rtt_ms": 3.1, "policies_ok": true,
+         "battery_pct": null, "rssi_dbm": null, "last_error": null, "puppet": true}
+        """
+        let decoded = try JSONDecoder().decode(TelemetryMessage.self, from: Data(live.utf8))
+        XCTAssertTrue(decoded.puppet)
+        XCTAssertEqual(decoded.state, .playing)
+        guard case .telemetry(let viaEnvelope)? = SwarmMessage.decode(Data(live.utf8)) else {
+            return XCTFail("expected a telemetry envelope")
+        }
+        XCTAssertTrue(viaEnvelope.puppet, "the flag survives the envelope path SwarmMaster ingests through")
+
+        let quiet = live.replacingOccurrences(of: "\"puppet\": true", with: "\"puppet\": false")
+        XCTAssertFalse(try JSONDecoder().decode(TelemetryMessage.self, from: Data(quiet.utf8)).puppet)
+
+        let legacy = """
+        {"v": 1, "type": "telemetry", "duck": "duck-03", "seq": 1, "state": "idle", "show": null,
+         "show_time": 0.0, "clock_offset_ms": null, "clock_rtt_ms": null, "policies_ok": true}
+        """
+        XCTAssertFalse(try JSONDecoder().decode(TelemetryMessage.self, from: Data(legacy.utf8)).puppet,
+                       "an agent without the puppet channel omits the key: not under a stream")
+
+        let encoded = jsonString(try JSONEncoder().encode(decoded))
+        XCTAssertTrue(encoded.contains("\"puppet\":true"), encoded)
+        let roundTripped = try JSONDecoder().decode(TelemetryMessage.self, from: Data(encoded.utf8))
+        XCTAssertEqual(roundTripped, decoded)
+        XCTAssertTrue(jsonString(try JSONEncoder().encode(TelemetryMessage(
+            duck: "duck-01", seq: 1, state: .idle, show: nil, showTime: 0, clockOffsetMs: nil, clockRttMs: nil, policiesOk: true
+        ))).contains("\"puppet\":false"), "always on the wire, like the Python agent")
+    }
+
     func testEnvelopeDispatchesOnType() throws {
         let ack = AckMessage(duck: "duck-01", cmdID: "uuid-6", ok: true, error: nil)
         let data = try JSONEncoder().encode(ack)

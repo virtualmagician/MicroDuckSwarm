@@ -1,0 +1,5 @@
+{
+  "private": true,
+  "type": "module",
+  "description": "Marks editor/tests as an ES-module directory so `node --test editor/tests` works on every Node version (see index.js). Not an npm package: no dependencies, nothing to install."
+}

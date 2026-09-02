@@ -53,7 +53,7 @@ final class SwarmMasterTelemetryTests: XCTestCase {
 
         async let events = Self.collect(master, count: 2, timeoutMs: 1500)
         await Task.sleepMs(20)
-        try await duck.sendTelemetry(state: .loaded, show: "tele", showTime: 0)
+        try await duck.sendTelemetry(state: .loaded, show: "tele", showTime: 0, puppet: true)
         let got = await events
 
         guard got.count == 2, case .updated(let t) = got[0], case .lost(let lostID) = got[1] else {
@@ -62,6 +62,7 @@ final class SwarmMasterTelemetryTests: XCTestCase {
         XCTAssertEqual(t.duck, duck01)
         XCTAssertEqual(t.state, .loaded)
         XCTAssertEqual(t.show, "tele")
+        XCTAssertTrue(t.puppet, "docs/swarmlink-protocol.md §6: the telemetry `puppet` flag is carried into DuckTelemetry")
         XCTAssertFalse(t.lost)
         XCTAssertEqual(lostID, duck01)
         let lostEntry = await master.telemetry[duck01]?.lost
@@ -74,6 +75,8 @@ final class SwarmMasterTelemetryTests: XCTestCase {
         await Task.sleepMs(50)
         let clearedEntry = await master.telemetry[duck01]?.lost
         XCTAssertEqual(clearedEntry, false)
+        let puppetReleased = await master.telemetry[duck01]?.puppet
+        XCTAssertEqual(puppetReleased, false, "the stream went stale: the flag follows each datagram")
         let clearedSet = await master.lostDucks
         XCTAssertTrue(clearedSet.isEmpty)
         await duck.stop()

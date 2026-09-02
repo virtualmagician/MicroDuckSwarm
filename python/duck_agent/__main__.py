@@ -2,18 +2,33 @@
 
 Runs the on-duck daemon: connects to robotd, binds the SwarmLink agent
 UDP port, and drives the state machine in agent.py until interrupted.
+SIGINT (Ctrl-C) and SIGTERM (systemd stop) both go through
+`DuckAgent.stop()`, which stops a duck in motion before the robotd link
+is closed -- robotd is last-value-wins, and no agent means no deadman.
 """
 
 from __future__ import annotations
 
 import argparse
 import logging
+import signal
 import sys
 import time
 from pathlib import Path
 from typing import Optional
 
 from .agent import DuckAgent
+
+
+def _raise_keyboard_interrupt(signum: int, frame: object) -> None:
+    raise KeyboardInterrupt
+
+
+def install_sigterm_handler() -> None:
+    """Route SIGTERM into the same KeyboardInterrupt path as Ctrl-C so
+    `main()`'s finally block runs `agent.stop()` on a systemd stop.
+    """
+    signal.signal(signal.SIGTERM, _raise_keyboard_interrupt)
 
 DEFAULT_AGENT_PORT = 47801
 DEFAULT_MASTER_PORT = 47800
@@ -60,6 +75,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         master_host=args.master_host,
         master_port=args.master_port,
     )
+    install_sigterm_handler()
     agent.start()
     logging.getLogger("duck_agent").info(
         "%s: listening on UDP %d, robotd=%s, shows_dir=%s", args.duck_id, agent.bound_port, args.robotd, args.shows_dir

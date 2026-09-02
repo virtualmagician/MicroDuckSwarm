@@ -26,6 +26,9 @@ actor TestDuck {
     private(set) var received: [CommandMessage] = []
     private(set) var receivedStates: [StateMessage] = []
     private(set) var receivedTimeResponses: [TimeResponse] = []
+    private(set) var receivedPuppets: [PuppetFrame] = []
+    /// Master-monotonic arrival stamp (ns) of each puppet frame, for rate checks.
+    private(set) var puppetArrivalNs: [Int64] = []
 
     init(id: DuckID = "duck-01") {
         self.id = id
@@ -100,6 +103,16 @@ actor TestDuck {
         return receivedStates
     }
 
+    /// Polls until at least `count` puppet frames have arrived.
+    @discardableResult
+    func waitForPuppets(count: Int = 1, timeoutMs: Int = 1500) async -> [PuppetFrame] {
+        let deadline = Date().addingTimeInterval(Double(timeoutMs) / 1000)
+        while Date() < deadline, receivedPuppets.count < count {
+            try? await Task.sleep(nanoseconds: 10_000_000)
+        }
+        return receivedPuppets
+    }
+
     // MARK: Agent → master
 
     /// `clockOffsetMs`/`clockRttMs` are nil until an agent's first
@@ -107,11 +120,12 @@ actor TestDuck {
     /// exercise that "not yet synced, never 0" path.
     func sendTelemetry(
         state: AgentState, show: String? = nil, showTime: Double = 0, lastError: String? = nil,
-        clockOffsetMs: Double? = 0.5, clockRttMs: Double? = 2.0, policiesOk: Bool = true
+        clockOffsetMs: Double? = 0.5, clockRttMs: Double? = 2.0, policiesOk: Bool = true, puppet: Bool = false
     ) throws {
         let message = TelemetryMessage(
             duck: id, seq: received.count, state: state, show: show, showTime: showTime,
-            clockOffsetMs: clockOffsetMs, clockRttMs: clockRttMs, policiesOk: policiesOk, lastError: lastError
+            clockOffsetMs: clockOffsetMs, clockRttMs: clockRttMs, policiesOk: policiesOk, lastError: lastError,
+            puppet: puppet
         )
         try send(.telemetry(message))
     }
@@ -169,6 +183,9 @@ actor TestDuck {
             receivedStates.append(state)
         case .timeResponse(let response):
             receivedTimeResponses.append(response)
+        case .puppet(let frame):
+            receivedPuppets.append(frame)
+            puppetArrivalNs.append(MasterClock.nowNanoseconds())
         default:
             break
         }
