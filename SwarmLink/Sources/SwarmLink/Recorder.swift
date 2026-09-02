@@ -9,9 +9,14 @@
 //
 //  - `PuppetInputSource` — where input frames come from. `ScriptedInput`
 //    replays a JSON list of timed frames on the monotonic clock (what tests
-//    and CI use; a recording made from a script is reproducible).
+//    and CI use; a recording made from a script is reproducible) and also
+//    conforms to `ScheduledPuppetInputSource`, so the recorder resolves its
+//    value at each tick directly from the known schedule — a pure function
+//    of the tick's show time — rather than from the timing of that replay,
+//    which is what makes it reproducible regardless of machine speed.
 //    `GamepadInput` reads the first connected controller through
-//    GameController.framework (macOS only, zero deps).
+//    GameController.framework (macOS only, zero deps); a live controller
+//    has no schedule, so it stays on the asynchronous delivery path.
 //  - `ControllerMap` — the documented default map from an `InputFrame` to
 //    the `PuppetFrame` to send this tick: dead zone, scaling to the
 //    validation limits, button edges → `do`/`sound` events.
@@ -126,6 +131,28 @@ public protocol PuppetInputSource: Sendable {
     func frames(from epochNs: Int64) -> AsyncStream<InputFrame>
 }
 
+/// A `PuppetInputSource` whose entire timeline is known before the take
+/// starts, so "what is the operator's input at show time t" can be
+/// resolved as a pure function of `t` — instead of waiting for
+/// `frames(from:)` to (eventually) deliver the answer.
+///
+/// This is the seam that makes a scripted take deterministic regardless of
+/// machine speed (see `Recorder.foldSchedule`): the recorder's tick loop
+/// folds `scheduledFrames` forward against its own show time directly, so
+/// nothing about what gets captured depends on when any `Task` happened to
+/// be scheduled. `ScriptedInput` conforms — a script is exactly this list,
+/// known up front. `GamepadInput` does not: a live controller has no
+/// schedule, only its most recent live sample, so it is driven by
+/// `frames(from:)` as before (see docs/authoring.md §2's puppet channel:
+/// live input is inherently best-effort, which is fine for a puppeteer's
+/// hands and wrong for the record of what they did).
+public protocol ScheduledPuppetInputSource: PuppetInputSource {
+    /// Every frame in ascending `t` (ties broken by original order) — the
+    /// same sequence `frames(from:)` streams, but available synchronously
+    /// up front.
+    var scheduledFrames: [InputFrame] { get }
+}
+
 public enum ScriptedInputError: Error, Sendable, Equatable, CustomStringConvertible {
     case notAnArray
     case badTime(index: Int, t: Double)
@@ -142,12 +169,17 @@ public enum ScriptedInputError: Error, Sendable, Equatable, CustomStringConverti
 /// is yielded when `epoch + t` comes due (immediately if already past),
 /// in ascending `t`, and the stream finishes after the last one.
 ///
-/// Frames are delivered `deliveryLead` seconds *ahead* of their nominal
-/// time (10 ms by default). The recorder samples a few ms after each
-/// nominal 20 ms tick, so a frame scripted for `t` is in hand for the
-/// tick at `t` — and cannot reach the tick before it, which fired 20 ms
-/// earlier. That is what makes a scripted take land the same way on a
-/// loaded CI runner as on an idle Mac.
+/// This is a best-effort, real-time replay — useful on its own (an
+/// operator can watch a script play out live) and exercised directly by
+/// `RecorderTests` — but the recorder does not depend on its *timing* for
+/// correctness. `ScriptedInput` also conforms to
+/// `ScheduledPuppetInputSource`, which hands the recorder the same list of
+/// frames synchronously; the recorder folds that schedule against each
+/// tick's own show time (`Recorder.foldSchedule`) instead of reading
+/// whatever this stream happened to have delivered by then. `deliveryLead`
+/// (10 ms by default) only shapes how promptly this replay itself yields a
+/// frame relative to its nominal time — it no longer needs to race
+/// anything, because nothing downstream depends on it.
 public struct ScriptedInput: PuppetInputSource, Sendable, Equatable {
     public let frames: [InputFrame]
     public let name: String
@@ -217,6 +249,10 @@ public struct ScriptedInput: PuppetInputSource, Sendable, Equatable {
             try await Task.sleep(nanoseconds: UInt64(min(remaining, 5_000_000)))
         }
     }
+}
+
+extension ScriptedInput: ScheduledPuppetInputSource {
+    public var scheduledFrames: [InputFrame] { frames }
 }
 
 #if canImport(GameController)
@@ -794,6 +830,11 @@ public actor Recorder {
     /// scripted take ends on the same tick on every run.
     private var inputEndShowTime: Double?
     private var lastInputShowTime: Double?
+    /// How many of a `ScheduledPuppetInputSource`'s `scheduledFrames` have
+    /// been folded into the puppeteer state so far, and whether that
+    /// schedule has been fully consumed (see `foldSchedule`).
+    private var scheduleCursor = 0
+    private var scheduleExhausted = false
     private var cancelled = false
     private var tempShowURL: URL?
 
@@ -913,21 +954,35 @@ public actor Recorder {
         let leadNs = Int64(max(0, configuration.leadSeconds) * 1_000_000_000)
         let epochNs = MasterClock.nowNanoseconds() + leadNs
 
-        // Input consumer, started now so frames already flow during the
-        // countdown (a puppeteer holding a pose at GO is sent that pose at
-        // t=0, and a script's t=0 frame is in hand before the first tick).
-        // Every frame is mapped as it arrives, so no button edge is missed
-        // between ticks; the tick loop sends the newest continuous values
-        // plus one pending event of each kind.
-        let stream = input.frames(from: epochNs)
-        let consumer = Task { [weak self] in
-            for await frame in stream {
-                guard let self else { return }
-                await self.ingest(frame)
+        // A scheduled input's (ScriptedInput's) value at each tick is
+        // resolved from its known schedule directly — see `foldSchedule`,
+        // called from the tick loop below — never from this stream, so a
+        // scripted take is immune to how promptly anything gets scheduled.
+        // Only a live input (GamepadInput), which has no schedule, needs
+        // the asynchronous consumer.
+        let scheduledFrames = (input as? any ScheduledPuppetInputSource)?.scheduledFrames
+
+        let consumer: Task<Void, Never>?
+        if scheduledFrames != nil {
+            consumer = nil
+        } else {
+            // Started now so frames already flow during the countdown (a
+            // puppeteer holding a pose at GO is sent that pose at t=0).
+            // Every frame is mapped as it arrives, so no button edge is
+            // missed between ticks; the tick loop sends the newest
+            // continuous values plus one pending event of each kind. This
+            // is best-effort by nature — a live controller has no
+            // schedule to fold against, only its latest sample.
+            let stream = input.frames(from: epochNs)
+            consumer = Task { [weak self] in
+                for await frame in stream {
+                    guard let self else { return }
+                    await self.ingest(frame)
+                }
+                await self?.markInputEnded()
             }
-            await self?.markInputEnded()
         }
-        defer { consumer.cancel() }
+        defer { consumer?.cancel() }
 
         if show != nil {
             async let playOutcomes = master.play(atMasterTime: epochNs)
@@ -953,6 +1008,10 @@ public actor Recorder {
         var lastShowTime = 0.0
         streaming: while true {
             let showTime = Double(tick) / tickHz
+            // The sole authority over what a scheduled input says at this
+            // tick: resolved from `showTime` itself, before anything below
+            // reads `latestContinuous` or decides whether the take is over.
+            if let scheduledFrames { foldSchedule(scheduledFrames, upTo: showTime) }
             if cancelled || takeEnded(at: showTime, endShowTime: endShowTime) { break streaming }
             let due = epochNs + Int64(tick) * tickNs + tickPhaseNs
             let now = MasterClock.nowNanoseconds()
@@ -1000,7 +1059,7 @@ public actor Recorder {
             capture.sample(neutral, at: closingShowTime)
             lastShowTime = closingShowTime
         }
-        consumer.cancel()
+        consumer?.cancel()
 
         let interrupted = cancelled
         if interrupted {
@@ -1053,6 +1112,43 @@ public actor Recorder {
         lastInputShowTime = max(lastInputShowTime ?? 0, frame.t)
         if mapped.stop { endTake(at: frame.t) }
     }
+
+    /// Folds every scheduled frame due at or before `showTime` into the
+    /// puppeteer state, in order (`ingest`, same as a live source's async
+    /// consumer would) — the sole authority, for a `ScheduledPuppetInputSource`,
+    /// over what is "due" at a tick. More than one frame can fold on the
+    /// same tick (two button presses closer together than 20 ms), which
+    /// still fires every edge, exactly as consuming them one at a time
+    /// would. Once the schedule is exhausted, the take is marked ended at
+    /// the last frame's `t` — what `markInputEnded` does for a live
+    /// source's stream finishing.
+    ///
+    /// Why this exists (a real recorder bug, not a test artifact): the
+    /// previous design read `latestContinuous`, mutated only by
+    /// asynchronously consuming `frames(from:)`. A frame scripted for show
+    /// time `t` was *supposed* to have already been delivered and ingested
+    /// by the tick at `t` — a fixed 10 ms delivery lead plus a 5 ms tick
+    /// delay — but that margin is a guess about scheduler latency, not a
+    /// guarantee. On a loaded machine (GitHub's macos-latest: 2 vCPU) it is
+    /// not always enough: the tick can be captured, or the take ended,
+    /// before the frame due at its own show time has been applied,
+    /// silently recording the previous value (or nothing at all) instead —
+    /// in the artifact the whole show is built from. Resolving the value
+    /// here, from the schedule itself, driven only by `showTime` — a pure
+    /// function of the tick counter, not of when any `Task` happened to
+    /// run — removes the race instead of tightening its margins further.
+    private func foldSchedule(_ frames: [InputFrame], upTo showTime: Double) {
+        while scheduleCursor < frames.count, frames[scheduleCursor].t <= showTime + Self.scheduleEpsilon {
+            ingest(frames[scheduleCursor])
+            scheduleCursor += 1
+        }
+        if scheduleCursor == frames.count, !scheduleExhausted {
+            scheduleExhausted = true
+            endTake(at: lastInputShowTime ?? 0)
+        }
+    }
+
+    private static let scheduleEpsilon = 1e-9
 
     /// The input ran out (script exhausted, controller gone): the take ends
     /// at the last frame's `t`. A frame holds until the next one, so a

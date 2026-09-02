@@ -287,6 +287,68 @@ final class RecorderEndToEndTests: XCTestCase {
         await duck.stop()
     }
 
+    /// Regression test for the capture race fixed in `Recorder.foldSchedule`
+    /// (Sources/SwarmLink/Recorder.swift): the pre-fix recorder resolved
+    /// each tick's puppet frame from `latestContinuous`, a var mutated only
+    /// by asynchronously consuming `ScriptedInput.frames(from:)` — a stream
+    /// that was *supposed* to deliver a frame scripted for show time `t`
+    /// before the tick at `t` (a fixed 10 ms lead plus a 5 ms tick delay),
+    /// but that is a guess about scheduler latency, not a guarantee: on a
+    /// loaded CI runner it sometimes lost the race, silently capturing the
+    /// previous (often rest) value instead of what was actually scripted —
+    /// see CI run 33594893037 for three examples.
+    ///
+    /// `BrokenDeliveryInput` below provokes exactly that failure shape
+    /// deterministically, without depending on real machine load: it wraps
+    /// a normal script but its `frames(from:)` never delivers anything at
+    /// all — an infinitely slow machine, not just a loaded one. On the
+    /// pre-fix recorder this reproducibly captured all-neutral frames (or,
+    /// worse, ended the take at t=0 the instant the empty stream finished,
+    /// via `markInputEnded`). The fix resolves a `ScheduledPuppetInputSource`
+    /// like `ScriptedInput` from its `scheduledFrames` directly, folded
+    /// against each tick's own show time (`Recorder.foldSchedule`) — the
+    /// recorder never subscribes to `frames(from:)` for a scheduled input
+    /// at all, so breaking that stream must have zero effect on what gets
+    /// captured. This test is the same shape as
+    /// `testScriptedTakeWithoutAShowCreatesAOneRoleShowOnTheBeatGrid` so the
+    /// two can be compared directly.
+    func testScheduledInputIsResolvedFromItsScheduleNeverFromDeliveryTiming() async throws {
+        let duck = TestDuck()
+        let port = try await duck.start()
+        let dir = try XCTUnwrap(tmpDir)
+        let roster = try Fixtures.writeRoster([RosterEntry(id: "duck-01", host: "127.0.0.1", port: port, role: "lead")], in: dir)
+        let outputURL = dir.appendingPathComponent("broken-delivery.duckshow.json")
+        let script = ScriptedInput(frames: [
+            InputFrame(t: 0.0, rx: 1.0),
+            InputFrame(t: 0.45, rx: 1.0, buttons: ["options"])
+        ])
+        let master = SwarmMaster(masterPort: 0)
+        let recorder = Recorder(
+            master: master, input: BrokenDeliveryInput(script: script),
+            configuration: RecorderConfiguration(
+                rosterURL: roster, duck: duck01, role: "solo", outputURL: outputURL,
+                bpm: 120, beatOffset: 0, leadSeconds: 0.1
+            )
+        )
+        let result = try await recorder.run()
+        XCTAssertTrue(result.written, "a broken delivery stream must not starve the take")
+        XCTAssertFalse(result.interrupted)
+        XCTAssertEqual(result.recordedSeconds, 0.46, accuracy: 1e-9)
+        XCTAssertEqual(result.framesSent, 24)
+
+        let puppets = await duck.waitForPuppets(count: result.framesSent)
+        XCTAssertEqual(puppets.count, result.framesSent)
+        XCTAssertEqual(puppets[5].move?.vyaw ?? 0, 1.5, accuracy: 1e-9, "the scripted value, not the neutral rest the old race would have captured")
+        XCTAssertEqual(puppets.last?.move?.vyaw, 0, "closing frame at rest")
+
+        let show = try Show.load(contentsOf: outputURL)
+        let loco = try XCTUnwrap(show.tracks["solo"]?.locomotion)
+        XCTAssertEqual(loco.first?.vyaw ?? 0, 1.5, accuracy: 1e-9)
+        XCTAssertEqual(loco.last?.vyaw, 0)
+        XCTAssertTrue(result.validation.isValid, "\(result.validation.errors)")
+        await duck.stop()
+    }
+
     func testScriptRunningOutEndsTheTakeAtItsLastFrameOnTheSameTickEveryRun() async throws {
         let duck = TestDuck()
         let port = try await duck.start()
@@ -600,5 +662,23 @@ private final class LogSink: @unchecked Sendable {
     var lines: [String] {
         lock.lock(); defer { lock.unlock() }
         return storage
+    }
+}
+
+/// Wraps a `ScriptedInput` but never delivers anything over
+/// `frames(from:)` — an artificial stand-in for "infinitely slow machine",
+/// used to provoke the capture race `Recorder.foldSchedule` fixes
+/// deterministically (see `testScheduledInputIsResolvedFromItsScheduleNeverFromDeliveryTiming`).
+/// It still conforms to `ScheduledPuppetInputSource` via `scheduledFrames`,
+/// which is the only thing the fixed recorder actually consults for a
+/// scripted take.
+private struct BrokenDeliveryInput: PuppetInputSource, ScheduledPuppetInputSource {
+    let script: ScriptedInput
+
+    var displayName: String { script.displayName }
+    var scheduledFrames: [InputFrame] { script.frames }
+
+    func frames(from epochNs: Int64) -> AsyncStream<InputFrame> {
+        AsyncStream { continuation in continuation.finish() }
     }
 }
