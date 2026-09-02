@@ -2,13 +2,13 @@
 
 A 3D stage view inside the timeline editor: scrub the playhead and watch the whole cast perform. It answers the question the timeline cannot — *does this bit read from the house?* — months before any hardware exists.
 
-`editor/duckshow-viewer.js`, rendered into a canvas the editor already owns. It consumes the same sampler output as everything else, so what you see is what the ducks will be told to do.
+Three modules, rendered into a canvas the editor already owns: `editor/duckshow-viewer.js` (pure, no DOM/GL — pose derivation, dead reckoning, palette, camera easing, and the `StageViewer` controller that binds them to a canvas), `editor/viewer-gl.js` (the raw-WebGL2 renderer — matrix maths, primitive meshes, `StageRenderer`), and `editor/viewer-duck.js` (the duck built from those primitives). It consumes the same sampler output as everything else, so what you see is what the ducks will be told to do.
 
 ## Non-negotiables
 
 1. **No dependencies, no CDN, no build step.** Raw WebGL2 and our own maths. The editor must open at a venue with no internet — a viewer that needs a CDN is a viewer that dies backstage. This rules out three.js; write the small amount of matrix/quaternion code we need.
 2. **No Pollen assets.** `microduck_rl`'s meshes and hardware design files are **CC BY-SA-NC (non-commercial)**, this repo is public and MIT, and the shows are paid work. Model our own stylized duck from primitives. Never vendor their mesh, and don't fetch it at runtime either.
-3. **Pose in, pixels out.** The renderer takes a plain array of per-duck poses (`{role, x, y, heading, headYaw, headPitch, headRoll, neckPitch, bodyZ, bodyRoll, bodyPitch, mouthOpen, walkPhase}`) and draws them. It never reads a `.duckshow` file, never touches the sampler, never knows about time. This is what lets a MuJoCo-driven pose stream replace the kinematic one later without touching the renderer.
+3. **Pose in, pixels out.** The renderer takes a plain array of per-duck poses (`{role, x, y, heading, headYaw, headPitch, headRoll, neckPitch, bodyZ, bodyRoll, bodyPitch, mouthOpen, walkPhase, resting}`) and draws them. `resting` (optional bool: is this duck at rest right now) exists because `walkPhase` is an unbounded accumulating angle — a renderer can't safely tell "moving" from "scrubbed elsewhere and back" by diffing it alone. It never reads a `.duckshow` file, never touches the sampler, never knows about time. This is what lets a MuJoCo-driven pose stream replace the kinematic one later without touching the renderer — one that has no notion of `resting` simply omits it.
 4. **60 fps with ten ducks** on a MacBook, and it must not spin the GPU when the playhead is parked (render on change, not on a permanent rAF loop).
 
 ## Art direction

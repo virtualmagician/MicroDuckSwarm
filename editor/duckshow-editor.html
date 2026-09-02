@@ -104,9 +104,28 @@
   #issues li.warning .sev { background: var(--warn); }
   #issues li.ok { color: var(--ok); cursor: default; grid-template-columns: 1fr; }
   #stage-section { flex: 1 1 45%; }
-  #stage { width: 100%; flex: 1; min-height: 160px; display: block; cursor: default; }
+  #viewer-wrap { position: relative; flex: 1; min-height: 160px; overflow: hidden; }
+  #stage { width: 100%; height: 100%; display: block; cursor: grab; }
+  #stage:active { cursor: grabbing; }
+  #viewer-badge {
+    position: absolute; left: 8px; bottom: 8px; padding: 2px 7px; border-radius: 3px;
+    background: rgba(0,0,0,0.45); color: #e7e9ee; font-size: 10px; letter-spacing: 0.04em;
+    text-transform: uppercase; pointer-events: none; border: 1px solid rgba(255,255,255,0.18);
+  }
+  #viewer-error { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+    padding: 12px; text-align: center; color: var(--err); font-size: 11px; background: var(--lane); }
+  #viewer-labels { position: absolute; inset: 0; pointer-events: none; overflow: hidden; }
+  .viewer-label {
+    position: absolute; transform: translate(-50%, -100%); white-space: nowrap; font-size: 11px;
+    padding: 1px 6px; border-radius: 3px; background: var(--bg3); border: 1px solid var(--line); color: var(--fg);
+  }
+  .viewer-label.sound { opacity: 0.65; }
   #stage-legend { padding: 0 8px 6px; color: var(--fg2); font-size: 11px; display: flex; flex-wrap: wrap; gap: 4px 10px; }
   #stage-legend i { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 4px; vertical-align: middle; }
+  #stage-legend span { cursor: pointer; }
+  .lane-head.group .name { cursor: pointer; }
+  .lane-head.group .name:hover { text-decoration: underline; }
+  .lane-head.group.viewer-selected { box-shadow: inset 3px 0 0 var(--sel); }
 
   #status { display: flex; gap: 12px; align-items: center; padding: 4px 8px; background: var(--bg2); border-top: 1px solid var(--line); color: var(--fg2); min-height: 24px; }
   #status .msg { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -202,8 +221,12 @@
       <ul id="issues"></ul>
     </section>
     <section id="stage-section">
-      <h2>stage <span class="count" style="font-weight:400">top-down · dead-reckoned · drag marks, ⌥-drag to turn</span></h2>
-      <canvas id="stage"></canvas>
+      <h2>stage <span class="count" style="font-weight:400">1 house · 2 ¾ · 3 top · drag orbit · scroll dolly · drag mark in top view</span></h2>
+      <div id="viewer-wrap">
+        <canvas id="stage"></canvas>
+        <div id="viewer-labels"></div>
+        <div id="viewer-badge">kinematic preview</div>
+      </div>
       <div id="stage-legend"></div>
     </section>
   </aside>
@@ -224,6 +247,13 @@
 </script>
 <script type="module">
 import * as core from './duckshow-core.js';
+import * as dv from './duckshow-viewer.js';
+import {
+  StageRenderer, CAMERA_PRESETS, orbitCamera, dollyCamera,
+  mat4Multiply, mat4TransformPoint, cameraViewMatrix, cameraProjectionMatrix, mapPoseToWorld,
+  mixCamera, cameraEase, CAMERA_TRANSITION_MS,
+} from './viewer-gl.js';
+import { DUCK_HEIGHT_M } from './viewer-duck.js';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -242,6 +272,9 @@ const FIELD_COLORS = {
 const EVENT_COLORS = { do: '#ffd166', sound: '#3ecf8e', mode: '#d77bff' };
 const ROLE_COLORS = ['#4da3ff', '#3ecf8e', '#f0b429', '#ff7ab6', '#d77bff', '#ff7a59', '#5be0e0', '#c3d64f', '#ff9f43', '#9aa1ad'];
 const DEMO_URL = '../shows/demo/demo.duckshow.json';
+const VIEWER_ORBIT_SPEED = 0.008;   // radians per pixel of drag
+const VIEWER_DOLLY_SPEED = 0.0015;  // exponential distance change per wheel-delta unit
+const VIEWER_MARK_HIT_M = 0.28;     // metres — pick radius for grabbing a start mark in Top view
 
 const $ = (id) => document.getElementById(id);
 // Pointer capture keeps a drag alive outside the canvas; synthetic/stale pointers may throw, which is harmless.
@@ -255,11 +288,11 @@ const fmt = (v, d = 3) => (typeof v === 'number' && Number.isFinite(v) ? v.toFix
 // State
 // ---------------------------------------------------------------------------
 const state = {
-  show: null, norm: null, issues: [], samplers: new Map(), pathsFor: null, paths: new Map(),
+  show: null, norm: null, issues: [], samplers: new Map(),
   history: [], future: [], dirty: false, fileName: 'untitled.duckshow.json', fileHandle: null,
   playhead: 0, playing: false, loop: false, clockStart: 0, clockShowTime: 0,
   pxPerSec: 40, scrollT: 0, snap: true, subdivision: 1,
-  selection: null, collapsed: new Set(), drag: null,
+  selection: null, collapsed: new Set(), drag: null, viewerSelectedRole: null,
   audio: { ctx: null, buffer: null, source: null, gain: null, name: '' },
   layout: { lanes: [], totalH: 0, W: 0, H: 0 },
 };
@@ -386,7 +419,8 @@ function renderAll() {
   renderInspector();
   renderIssues();
   renderHeaderFields();
-  drawStage();
+  syncViewerShow();
+  paintViewer();
   updateReadouts();
   updateTimeLabel();
   $('file-name').textContent = state.fileName;
@@ -423,12 +457,17 @@ function rebuildHeaders() {
       const cast = state.norm.cast.find((c) => c.role === lane.role);
       const collapsed = state.collapsed.has(lane.role);
       el.innerHTML = `<button class="collapse" title="${collapsed ? 'expand' : 'collapse'}">${collapsed ? '▸' : '▾'}</button>`
-        + `<span class="name" style="color:${roleColor(lane.role)}"></span><button class="remove danger" title="remove role">✕</button>`;
+        + `<span class="name" style="color:${roleColor(lane.role)}" title="click to highlight this duck in the stage viewer"></span><button class="remove danger" title="remove role">✕</button>`;
       el.querySelector('.name').textContent = lane.role + (cast?.notes ? ` · ${cast.notes}` : '');
       el.querySelector('.collapse').onclick = () => { state.collapsed.has(lane.role) ? state.collapsed.delete(lane.role) : state.collapsed.add(lane.role); renderAll(); };
       el.querySelector('.remove').onclick = () => {
         if (confirm(`Remove role "${lane.role}" and all its tracks?`)) { commit(core.removeRole(state.show, lane.role)); status(`removed role ${lane.role}`); }
       };
+      el.querySelector('.name').onclick = (ev) => {
+        ev.stopPropagation();
+        setViewerSelectedRole(state.viewerSelectedRole === lane.role ? null : lane.role);
+      };
+      if (state.viewerSelectedRole === lane.role) el.classList.add('viewer-selected');
     } else if (lane.kind === 'curve') {
       el.innerHTML = `<div class="title">${lane.track}</div><div class="readout"></div>`;
       el.dataset.role = lane.role; el.dataset.track = lane.track;
@@ -712,6 +751,7 @@ function canvasPoint(ev) {
 
 function select(sel) {
   state.selection = sel ? { kind: sel.kind, role: sel.role, track: sel.track, index: sel.index, field: sel.field } : null;
+  if (sel && sel.role) setViewerSelectedRole(sel.role);
   drawLanes(); renderInspector();
 }
 
@@ -1096,122 +1136,306 @@ $('btn-add-role').onclick = () => {
 };
 
 // ---------------------------------------------------------------------------
-// Stage (top-down dead reckoning)
+// Stage viewer — 3D WebGL2 kinematic preview (docs/viewer.md). Reuses
+// duckshow-viewer.js's pure pose/dead-reckoning/palette functions (never
+// reimplements the sampler or core.integrate) and drives the real
+// StageRenderer API from viewer-gl.js directly: setCast/setMarks/setTrails/
+// setSelected/setCamera/draw/pick/resize. The renderer owns its own camera
+// easing (a bounded, self-stopping animation per preset switch) and its own
+// floor-plane raycasting (pick()), so no camera or hit-testing math is
+// duplicated here — only the small amount of glue (tracking the live
+// orbit/dolly state between drags, and projecting a world point to a
+// screen-space label) that the renderer's per-call API doesn't itself keep.
 // ---------------------------------------------------------------------------
-let stageView = { scale: 100, cx: 0, cy: 0, W: 0, H: 0 };
-function pathsCache() {
-  if (state.pathsFor !== state.show) {
-    state.paths.clear();
-    for (const role of roles()) state.paths.set(role, core.integrate(state.norm, role, FRAME, { start: core.getMark(state.show, role) }));
-    state.pathsFor = state.show;
-  }
-  return state.paths;
-}
-function stageToScreen(x, y) { return { sx: stageView.W / 2 + (x - stageView.cx) * stageView.scale, sy: stageView.H / 2 - (y - stageView.cy) * stageView.scale }; }
-function screenToStage(sx, sy) { return { x: stageView.cx + (sx - stageView.W / 2) / stageView.scale, y: stageView.cy - (sy - stageView.H / 2) / stageView.scale }; }
+const viewer = {
+  renderer: null,
+  camera: { ...CAMERA_PRESETS.house },
+  presetName: 'house',
+  paths: new Map(), pathsFor: null,
+  marks: new Map(),
+  palette: new Map(),
+  selectedRole: null,
+  dragging: null,
+  lastLabels: [],
+};
 
-function drawStage() {
-  const W = Math.max(50, stageC.clientWidth || stageC.parentElement.clientWidth), H = Math.max(120, stageC.clientHeight || 200);
-  const ctx = setupCanvas(stageC, W, H);
-  const paths = pathsCache();
-  // fit
-  let minX = -0.5, maxX = 0.5, minY = -0.5, maxY = 0.5;
-  for (const p of paths.values()) for (const q of p) { minX = Math.min(minX, q.x); maxX = Math.max(maxX, q.x); minY = Math.min(minY, q.y); maxY = Math.max(maxY, q.y); }
-  const spanX = Math.max(1, maxX - minX + 0.4), spanY = Math.max(1, maxY - minY + 0.4);
-  if (!state.drag || state.drag.type !== 'mark') {
-    stageView = { W, H, scale: Math.min((W - 20) / spanX, (H - 20) / spanY), cx: (minX + maxX) / 2, cy: (minY + maxY) / 2 };
-  } else { stageView.W = W; stageView.H = H; }
-  ctx.clearRect(0, 0, W, H);
-  ctx.fillStyle = css('--lane'); ctx.fillRect(0, 0, W, H);
-  // grid 0.5 m
-  const g = 0.5;
-  const tl = screenToStage(0, 0), br = screenToStage(W, H);
-  ctx.strokeStyle = css('--grid'); ctx.lineWidth = 1;
-  for (let x = Math.floor(tl.x / g) * g; x <= br.x; x += g) { const { sx } = stageToScreen(x, 0); ctx.beginPath(); ctx.moveTo(Math.round(sx) + 0.5, 0); ctx.lineTo(Math.round(sx) + 0.5, H); ctx.stroke(); }
-  for (let y = Math.floor(br.y / g) * g; y <= tl.y; y += g) { const { sy } = stageToScreen(0, y); ctx.beginPath(); ctx.moveTo(0, Math.round(sy) + 0.5); ctx.lineTo(W, Math.round(sy) + 0.5); ctx.stroke(); }
-  // axes
-  ctx.strokeStyle = css('--zero');
-  { const o = stageToScreen(0, 0); ctx.beginPath(); ctx.moveTo(0, o.sy + 0.5); ctx.lineTo(W, o.sy + 0.5); ctx.moveTo(o.sx + 0.5, 0); ctx.lineTo(o.sx + 0.5, H); ctx.stroke(); }
-  ctx.font = `10px ${css('--mono')}`; ctx.fillStyle = css('--fg3'); ctx.textBaseline = 'top';
-  ctx.fillText('x forward →  y left ↑  (grid 0.5 m)', 6, 4);
-  ctx.fillText(`${(1 / stageView.scale * 100).toFixed(1)} cm/px`, 6, 16);
-  // paths
-  const idx = Math.round(state.playhead / FRAME);
-  for (const role of roles()) {
-    const p = paths.get(role);
-    const color = roleColor(role);
-    ctx.strokeStyle = color; ctx.lineWidth = 1.5; ctx.globalAlpha = 0.9;
-    ctx.beginPath();
-    p.forEach((q, i) => { const { sx, sy } = stageToScreen(q.x, q.y); if (i === 0) ctx.moveTo(sx, sy); else ctx.lineTo(sx, sy); });
-    ctx.stroke(); ctx.globalAlpha = 1;
-    // end marker
-    const end = p[p.length - 1]; const es = stageToScreen(end.x, end.y);
-    ctx.fillStyle = color; ctx.fillRect(es.sx - 2, es.sy - 2, 4, 4);
-    // current position
-    const cur = p[clamp(idx, 0, p.length - 1)];
-    const cs = stageToScreen(cur.x, cur.y);
-    ctx.beginPath(); ctx.arc(cs.sx, cs.sy, 5, 0, Math.PI * 2); ctx.fillStyle = color; ctx.fill();
-    ctx.strokeStyle = css('--fg'); ctx.lineWidth = 1; ctx.stroke();
-    ctx.beginPath(); ctx.moveTo(cs.sx, cs.sy); ctx.lineTo(cs.sx + Math.cos(cur.heading) * 10, cs.sy - Math.sin(cur.heading) * 10); ctx.stroke();
-    // start mark (draggable)
-    const m = core.getMark(state.show, role);
-    const ms = stageToScreen(m.x, m.y);
-    ctx.beginPath(); ctx.arc(ms.sx, ms.sy, 8, 0, Math.PI * 2);
-    ctx.strokeStyle = color; ctx.lineWidth = 2; ctx.stroke();
-    ctx.beginPath(); ctx.moveTo(ms.sx, ms.sy); ctx.lineTo(ms.sx + Math.cos(m.heading) * 16, ms.sy - Math.sin(m.heading) * 16); ctx.stroke();
-    ctx.lineWidth = 1;
-    ctx.fillStyle = color; ctx.textBaseline = 'middle'; ctx.fillText(role, ms.sx + 11, ms.sy + 10);
+/** Shows (or updates) the "viewer unavailable" overlay banner over the stage canvas. */
+function showViewerBanner(text) {
+  const wrap = $('viewer-wrap');
+  if (!wrap) return;
+  let warn = $('viewer-error');
+  if (!warn) {
+    warn = document.createElement('div');
+    warn.id = 'viewer-error';
+    wrap.appendChild(warn);
   }
-  // legend
+  warn.textContent = text;
+}
+function hideViewerBanner() {
+  const warn = $('viewer-error');
+  if (warn) warn.remove();
+}
+
+function initViewer() {
+  try {
+    viewer.renderer = new StageRenderer(stageC, {
+      // A real GPU context loss (driver reset, GPU switch, sleep/wake, too
+      // many contexts open) would otherwise freeze the canvas silently for
+      // the rest of the session — surface the same banner a viewer that
+      // never came up at all gets, and clear it once WebGL recovers.
+      onContextLost: () => {
+        showViewerBanner('3D stage viewer: GPU context lost — attempting to recover…');
+        status('3D stage viewer: GPU context lost', 'error');
+      },
+      onContextRestored: () => {
+        hideViewerBanner();
+        status('3D stage viewer: GPU context restored', 'ok');
+        syncViewerShow();
+        paintViewer();
+      },
+    });
+  } catch (err) {
+    viewer.renderer = null;
+    showViewerBanner(`3D stage viewer unavailable: ${err.message}`);
+    status(`3D stage viewer unavailable: ${err.message}`, 'error');
+    return;
+  }
+  viewer.renderer.setCamera('house');
+}
+
+/** Structural sync (cast colours, start marks, dead-reckoned paths) — call after any show edit. */
+function syncViewerShow() {
+  if (!viewer.renderer) return;
+  const roleNames = roles();
+  const roleSet = new Set(roleNames);
+  if (state.viewerSelectedRole && !roleSet.has(state.viewerSelectedRole)) state.viewerSelectedRole = null;
+  viewer.selectedRole = state.viewerSelectedRole;
+  viewer.palette = dv.roleColorPalette(roleNames);
+  viewer.marks = dv.resolveMarks(state.show); // needs the raw doc: editor.marks lives outside normalizeShow()'s output
+  // state.norm, not state.show: marks are already resolved above, so
+  // nothing downstream needs the raw document's "editor" field here, and
+  // passing the already-tagged normalized show makes every internal
+  // normalizeShow() call in precomputeShowPaths/integrate/createSampler an
+  // O(1) passthrough instead of a full reparse of the whole cast.
+  viewer.paths = dv.precomputeShowPaths(state.norm, { dt: FRAME, marks: viewer.marks });
+  viewer.pathsFor = state.show;
+  viewer.renderer.setCast(roleNames.map((role) => ({ role, color: viewer.palette.get(role)?.hex || '#e8dfc8' })));
+  viewer.renderer.setMarks(roleNames.map((role) => {
+    const m = viewer.marks.get(role) || { x: 0, y: 0, heading: 0 };
+    return { role, x: m.x, y: m.y, heading: m.heading };
+  }));
+  renderViewerLegend();
+}
+
+/** Per-frame paint (poses/trails/labels at the current playhead) — render on change only, no permanent loop. */
+function paintViewer() {
+  if (!viewer.renderer || !state.show) return;
+  // state.norm here too (see syncViewerShow): deriveFrame's per-role
+  // derivePose() and deriveEventLabels() each normalize independently, and
+  // an already-normalized doc makes that O(1) instead of a full reparse of
+  // every role's every track, up to ~12x per rendered frame for a 10-role
+  // cast (the "60 fps with ten ducks" budget this sits directly on).
+  const frame = dv.deriveFrame(state.norm, state.playhead, viewer.paths, {
+    selectedRole: viewer.selectedRole,
+    trailMaxPoints: dv.TRAIL_MAX_POINTS,
+    eventLabelWindow: dv.DEFAULT_EVENT_LABEL_WINDOW,
+  });
+  const trails = {};
+  for (const [role, pts] of frame.trails) trails[role] = pts;
+  viewer.renderer.setTrails(trails);
+  viewer.renderer.setSelected(frame.selectedRole);
+  viewer.renderer.draw(frame.poses);
+  viewer.lastLabels = frame.labels;
+  paintEventLabels(frame.labels);
+}
+
+/** World point (show-space x/y, world-space height) -> canvas CSS-px, or null if behind the camera. */
+function worldToScreen(camera, aspect, world, cssW, cssH) {
+  const vp = mat4Multiply(cameraProjectionMatrix(camera, aspect), cameraViewMatrix(camera));
+  const w = vp[3] * world[0] + vp[7] * world[1] + vp[11] * world[2] + vp[15];
+  if (w <= 1e-6) return null; // behind the eye
+  const ndc = mat4TransformPoint(vp, world);
+  return { x: (ndc[0] * 0.5 + 0.5) * cssW, y: (1 - (ndc[1] * 0.5 + 0.5)) * cssH };
+}
+
+function paintEventLabels(labels) {
+  const host = $('viewer-labels');
+  if (!host) return;
+  if (!viewer.renderer || !labels.length) { host.replaceChildren(); return; }
+  const w = stageC.clientWidth || 1, h = stageC.clientHeight || 1;
+  const aspect = w / Math.max(1, h);
+  const frag = document.createDocumentFragment();
+  for (const label of labels) {
+    const path = viewer.paths.get(label.role);
+    if (!path) continue;
+    const p = dv.sampleRolePath(path, state.playhead);
+    const world = mapPoseToWorld({ x: p.x, y: p.y }).position;
+    world[1] = DUCK_HEIGHT_M + 0.09;
+    const screen = worldToScreen(viewer.camera, aspect, world, w, h);
+    if (!screen || screen.x < -40 || screen.x > w + 40 || screen.y < -20 || screen.y > h + 40) continue;
+    const div = document.createElement('div');
+    div.className = `viewer-label ${label.kind}`;
+    div.style.left = `${screen.x}px`;
+    div.style.top = `${screen.y}px`;
+    div.textContent = label.text;
+    frag.appendChild(div);
+  }
+  host.replaceChildren(frag);
+}
+
+function renderViewerLegend() {
   const legend = $('stage-legend');
+  if (!legend) return;
   legend.replaceChildren(...roles().map((role) => {
-    const m = core.getMark(state.show, role);
+    const info = viewer.palette.get(role);
     const span = document.createElement('span');
-    span.innerHTML = `<i style="background:${roleColor(role)}"></i>${role} (${fmt(m.x, 2)}, ${fmt(m.y, 2)}) ${(m.heading * 180 / Math.PI).toFixed(0)}°`;
+    span.innerHTML = `<i style="background:${info ? info.hex : roleColor(role)}"></i>${role}`;
+    span.style.fontWeight = state.viewerSelectedRole === role ? '700' : '400';
+    span.title = 'click to highlight this duck in the stage viewer';
+    span.onclick = () => setViewerSelectedRole(state.viewerSelectedRole === role ? null : role);
     return span;
   }));
 }
 
+function setViewerSelectedRole(role) {
+  state.viewerSelectedRole = role || null;
+  viewer.selectedRole = state.viewerSelectedRole;
+  rebuildHeaders();
+  renderViewerLegend();
+  paintViewer();
+}
+
+let viewerCameraLabelRAF = null;
+/**
+ * Eases the editor's own `viewer.camera` (used only to project floating
+ * event labels to screen space) toward `name`'s preset in lockstep with
+ * StageRenderer's own internal ~0.5s transition, instead of jumping it to
+ * the destination immediately. Jumping it meant a visible skill/sound
+ * label snapped to its post-transition screen position at once while the
+ * WebGL duck was still visibly mid-ease toward that framing — detached
+ * from its duck for the whole half-second (docs/viewer.md "Camera": the
+ * ease "reads as intent and helps you keep your bearings", which a
+ * detached label works directly against).
+ */
+function easeViewerCameraForLabels(name) {
+  if (viewerCameraLabelRAF != null) cancelAnimationFrame(viewerCameraLabelRAF);
+  const from = viewer.camera;
+  const to = { ...CAMERA_PRESETS[name] };
+  const start = performance.now();
+  const step = () => {
+    const t = clamp((performance.now() - start) / CAMERA_TRANSITION_MS, 0, 1);
+    viewer.camera = t < 1 ? mixCamera(from, to, cameraEase(t)) : to;
+    paintEventLabels(viewer.lastLabels || []);
+    viewerCameraLabelRAF = t < 1 ? requestAnimationFrame(step) : null;
+  };
+  step();
+}
+
+/** Switch to a named camera preset; the renderer eases itself over ~0.5s (docs/viewer.md "Camera"). */
+function setViewerCameraPreset(name) {
+  if (!viewer.renderer) return;
+  viewer.presetName = name;
+  viewer.renderer.setCamera(name);
+  easeViewerCameraForLabels(name);
+  paintViewer(); // resync trails/labels against the (still-current) camera right away; the ease above catches labels up frame by frame
+}
+
+function resizeViewer() {
+  if (!viewer.renderer) return;
+  viewer.renderer.resize();
+  paintViewer();
+}
+
+// -- input: orbit-drag (any preset), scroll-dolly (any preset), mark-drag (Top view only) --
 stageC.addEventListener('pointerdown', (ev) => {
+  if (!viewer.renderer || ev.button !== 0) return;
   const r = stageC.getBoundingClientRect();
-  const sx = ev.clientX - r.left, sy = ev.clientY - r.top;
-  let hit = null, bestD = 14;
-  for (const role of roles()) {
-    const m = core.getMark(state.show, role);
-    const ms = stageToScreen(m.x, m.y);
-    const d = Math.hypot(ms.sx - sx, ms.sy - sy);
-    if (d < bestD) { bestD = d; hit = role; }
+  const px = ev.clientX - r.left, py = ev.clientY - r.top;
+  if (viewer.presetName === 'top') {
+    const hit = viewer.renderer.pick(px, py);
+    if (hit) {
+      let best = null, bestD = VIEWER_MARK_HIT_M;
+      for (const role of roles()) {
+        const m = viewer.marks.get(role) || { x: 0, y: 0, heading: 0 };
+        const d = Math.hypot(m.x - hit.x, m.y - hit.y);
+        if (d < bestD) { bestD = d; best = role; }
+      }
+      if (best) {
+        viewer.dragging = { type: 'mark', role: best, base: state.show, start: { ...(viewer.marks.get(best)) }, moved: false, currentMark: null };
+        setViewerSelectedRole(best);
+        capture(stageC, ev);
+        return;
+      }
+    }
   }
-  if (!hit) return;
-  const m = core.getMark(state.show, hit);
-  state.drag = { type: 'mark', role: hit, base: state.show, start: m, startSx: sx, startSy: sy, rotate: ev.altKey || ev.shiftKey, moved: false };
+  viewer.dragging = { type: 'orbit', lastX: ev.clientX, lastY: ev.clientY };
   capture(stageC, ev);
 });
-stageC.addEventListener('pointermove', (ev) => {
-  const d = state.drag;
-  if (!d || d.type !== 'mark') return;
-  const r = stageC.getBoundingClientRect();
-  const sx = ev.clientX - r.left, sy = ev.clientY - r.top;
-  d.moved = true;
-  let mark;
-  if (d.rotate) {
-    const ms = stageToScreen(d.start.x, d.start.y);
-    mark = { ...d.start, heading: round(Math.atan2(-(sy - ms.sy), sx - ms.sx), 4) };
-  } else {
-    const p = screenToStage(sx, sy);
-    mark = { ...d.start, x: round(p.x, 3), y: round(p.y, 3) };
-  }
-  setShow(core.setMark(d.base, d.role, mark), { dirty: true });
-});
-function endMarkDrag() {
-  const d = state.drag;
-  if (!d || d.type !== 'mark') return;
-  state.drag = null;
-  if (d.moved && state.show !== d.base) { state.history.push(d.base); state.future.length = 0; }
-  renderAll();
+let viewerDragRAF = null;
+/** Live-preview-only update for one animation frame of an in-progress mark drag: moves the dragged role's own dead-reckoned path and re-paints, without touching state.show/validate/drawLanes — those wait for endViewerDrag(). */
+function applyMarkDragFrame(d) {
+  const mark = d.currentMark;
+  if (!mark || !viewer.renderer) return;
+  viewer.marks.set(d.role, mark);
+  viewer.paths.set(d.role, dv.precomputeRolePath(state.norm, d.role, mark, FRAME));
+  viewer.renderer.setMarks(roles().map((role) => {
+    const m = viewer.marks.get(role) || { x: 0, y: 0, heading: 0 };
+    return { role, x: m.x, y: m.y, heading: m.heading };
+  }));
+  paintViewer();
 }
-stageC.addEventListener('pointerup', endMarkDrag);
-stageC.addEventListener('pointercancel', endMarkDrag);
+stageC.addEventListener('pointermove', (ev) => {
+  const d = viewer.dragging;
+  if (!d || !viewer.renderer) return;
+  if (d.type === 'mark') {
+    const r = stageC.getBoundingClientRect();
+    const hit = viewer.renderer.pick(ev.clientX - r.left, ev.clientY - r.top);
+    if (!hit) return;
+    d.moved = true;
+    // Only the dragged role's path is touched, and at most once per
+    // animation frame — the old code ran a full setShow (validate the
+    // whole show, re-integrate every role's path, repaint every lane) on
+    // every raw pointermove, which for a 10-role show meant hundreds of
+    // full-cast re-integrations to move one duck's mark. The real commit
+    // (setShow, history, drawLanes) happens once, at drag end.
+    d.currentMark = (ev.altKey || ev.shiftKey)
+      ? { ...d.start, heading: round(Math.atan2(hit.y - d.start.y, hit.x - d.start.x), 4) }
+      : { ...d.start, x: round(hit.x, 3), y: round(hit.y, 3) };
+    if (viewerDragRAF == null) {
+      viewerDragRAF = requestAnimationFrame(() => { viewerDragRAF = null; applyMarkDragFrame(d); });
+    }
+    return;
+  }
+  if (viewerCameraLabelRAF != null) { cancelAnimationFrame(viewerCameraLabelRAF); viewerCameraLabelRAF = null; } // manual orbit takes over from any in-flight preset ease
+  const dx = ev.clientX - d.lastX, dy = ev.clientY - d.lastY;
+  d.lastX = ev.clientX; d.lastY = ev.clientY;
+  viewer.camera = orbitCamera(viewer.camera, -dx * VIEWER_ORBIT_SPEED, dy * VIEWER_ORBIT_SPEED);
+  viewer.presetName = null; // manual orbit no longer matches a named preset
+  viewer.renderer.setCamera(viewer.camera);
+  paintEventLabels(viewer.lastLabels || []); // reproject at the new angle; poses/trails are unchanged so draw() isn't needed
+});
+function endViewerDrag() {
+  const d = viewer.dragging;
+  viewer.dragging = null;
+  if (!d) return;
+  if (viewerDragRAF != null) { cancelAnimationFrame(viewerDragRAF); viewerDragRAF = null; }
+  if (d.type === 'mark' && d.moved && d.currentMark) {
+    state.history.push(d.base); state.future.length = 0;
+    if (state.history.length > 200) state.history.shift();
+    setShow(core.setMark(d.base, d.role, d.currentMark), { dirty: true });
+  }
+}
+stageC.addEventListener('pointerup', endViewerDrag);
+stageC.addEventListener('pointercancel', endViewerDrag);
+stageC.addEventListener('wheel', (ev) => {
+  if (!viewer.renderer) return;
+  ev.preventDefault();
+  if (viewerCameraLabelRAF != null) { cancelAnimationFrame(viewerCameraLabelRAF); viewerCameraLabelRAF = null; } // manual dolly takes over from any in-flight preset ease
+  viewer.camera = dollyCamera(viewer.camera, Math.exp(ev.deltaY * VIEWER_DOLLY_SPEED));
+  viewer.presetName = null;
+  viewer.renderer.setCamera(viewer.camera);
+  paintEventLabels(viewer.lastLabels || []);
+}, { passive: false });
 
 // ---------------------------------------------------------------------------
 // Transport + audio
@@ -1233,7 +1457,7 @@ function updateTimeLabel() {
 function seek(t, { fromUser = false } = {}) {
   state.playhead = clamp(t, 0, Math.max(0, duration()));
   if (state.playing && fromUser) { stopAudio(); startClock(); }
-  drawRuler(); drawLanes(); updateReadouts(); updateTimeLabel(); drawStage();
+  drawRuler(); drawLanes(); updateReadouts(); updateTimeLabel(); paintViewer();
 }
 
 function startClock() {
@@ -1282,7 +1506,7 @@ function tick() {
     else { state.playhead = duration(); pause(); seek(duration()); return; }
   }
   state.playhead = t;
-  drawRuler(); drawLanes(); updateReadouts(); updateTimeLabel(); drawStage();
+  drawRuler(); drawLanes(); updateReadouts(); updateTimeLabel(); paintViewer();
   const xp = xOf(t);
   if (xp > state.layout.W - 20 || xp < 0) setScrollT(t - 20 / state.pxPerSec);
   requestAnimationFrame(tick);
@@ -1330,6 +1554,7 @@ function loadShowText(text, fileName) {
     state.selection = null; state.collapsed.clear(); state.fileName = fileName; state.fileHandle = null; state.playhead = 0;
     setShow(show, { dirty: false, resetHistory: true });
     zoomFit();
+    setViewerCameraPreset('house');
     const errs = state.issues.filter((i) => i.severity === 'error').length;
     status(`opened ${fileName}: ${roles().length} roles, ${duration()} s, ${errs ? `${errs} validation errors` : 'valid'}`, errs ? 'error' : 'ok');
     return true;
@@ -1379,6 +1604,7 @@ $('btn-new').onclick = () => {
   const show = core.newShow({ name: 'Untitled', duration: 30, bpm: 120, roles: ['lead'] });
   pause(); state.selection = null; state.collapsed.clear(); state.fileName = 'untitled.duckshow.json'; state.fileHandle = null; state.playhead = 0;
   setShow(show, { dirty: false, resetHistory: true }); zoomFit();
+  setViewerCameraPreset('house');
   status('new show');
 };
 
@@ -1446,6 +1672,9 @@ window.addEventListener('keydown', (e) => {
     case '0': zoomFit(); break;
     case ',': seek(state.playhead - FRAME, { fromUser: true }); break;
     case '.': seek(state.playhead + FRAME, { fromUser: true }); break;
+    case '1': e.preventDefault(); setViewerCameraPreset('house'); break;
+    case '2': e.preventDefault(); setViewerCameraPreset('threeQuarter'); break;
+    case '3': e.preventDefault(); setViewerCameraPreset('top'); break;
     default: break;
   }
 });
@@ -1453,8 +1682,8 @@ window.addEventListener('keydown', (e) => {
 // ---------------------------------------------------------------------------
 // Boot
 // ---------------------------------------------------------------------------
-new ResizeObserver(() => { layoutTimeline(); drawRuler(); drawLanes(); drawStage(); }).observe(scrollEl);
-new ResizeObserver(() => drawStage()).observe($('stage-section'));
+new ResizeObserver(() => { layoutTimeline(); drawRuler(); drawLanes(); }).observe(scrollEl);
+new ResizeObserver(() => resizeViewer()).observe($('stage-section'));
 if (window.matchMedia) window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', renderAll);
 
 function starterShow() {
@@ -1476,14 +1705,16 @@ function starterShow() {
 }
 
 // Handy in devtools and for headless smoke tests: window.duckshowEditor.state.show is the live document.
-window.duckshowEditor = { state, core, xOf, tOf, yOfValue, stageToScreen, screenToStage, commit, select, seek };
+window.duckshowEditor = { state, core, dv, xOf, tOf, yOfValue, commit, select, seek, viewer };
 
 async function boot() {
   window.__duckshowEditorBooted = true;
+  initViewer();
   state.show = null;
   setShow(starterShow(), { dirty: false, resetHistory: true });
   state.fileName = 'starter.duckshow.json';
   zoomFit();
+  setViewerCameraPreset('house');
   if (location.protocol.startsWith('http')) {
     if (!(await loadDemo({ quiet: true }))) status('could not fetch the demo show (serve from the repo root); loaded a built-in starter show instead');
   } else {

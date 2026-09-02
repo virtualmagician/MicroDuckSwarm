@@ -5,8 +5,10 @@ A single-file timeline editor for `.duckshow.json` choreographies (spec: `docs/a
 | File | What |
 |---|---|
 | `duckshow-core.js` | Pure ES module, no DOM: parse/serialize (unknown fields preserved), sampler and validator with the **same semantics, limits, issue order and message text** as `python/duckshow` (the canonical implementation), beat-grid helpers, dead reckoning, and pure edit operations. |
-| `duckshow-editor.html` | The editor UI. Imports `./duckshow-core.js` with `<script type="module">`. |
-| `tests/*.test.mjs` | Node's built-in test runner. Sampler parity with the numbers `python/tests/test_sampler.py` asserts, validator parity with `shows/fixtures/*.duckshow.json` + `expected.json` (the same gate `DuckShowFixtureTests.swift` runs), round-trip preservation, dead reckoning, every edit op. |
+| `duckshow-viewer.js` | Pure ES module, no DOM/GL: turns a show + a moment in show time into pose/trail/event-label data for the stage viewer (spec: `docs/viewer.md`) — dead-reckoned pose derivation (reuses `duckshow-core.js`'s `integrate`, never reimplements it), the per-role colour palette, and start-mark resolution. |
+| `viewer-gl.js` / `viewer-duck.js` | The stage viewer's renderer: raw WebGL2, no dependencies. `viewer-gl.js` is `StageRenderer` (camera, ground, trails, shadows, marks — `setCast`/`setMarks`/`setTrails`/`setSelected`/`setCamera`/`draw`/`pick`) plus the from-scratch matrix maths and primitive mesh generators; `viewer-duck.js` builds the duck itself from those primitives (never Pollen's meshes — see `docs/viewer.md` item 2). |
+| `duckshow-editor.html` | The editor UI. Imports the four modules above with `<script type="module">`. |
+| `tests/*.test.mjs` | Node's built-in test runner. Sampler parity with the numbers `python/tests/test_sampler.py` asserts, validator parity with `shows/fixtures/*.duckshow.json` + `expected.json` (the same gate `DuckShowFixtureTests.swift` runs), round-trip preservation, dead reckoning, every edit op, stage-viewer pose/palette/camera-easing logic, and the WebGL2 matrix/mesh maths. |
 
 ## Opening the editor
 
@@ -40,7 +42,7 @@ Node 20 treats the directory argument as a place to search for `*.test.mjs`; Nod
 - **Lanes** — one group per role (collapse with ▾, remove with ✕, add with **+ role**), with sub-lanes `locomotion` (vx/vy/vyaw), `head` (neck_pitch/head_pitch/head_yaw/head_roll), `pose` (z/roll/pitch + `active` band), `mouth` (open), and `events`. Each curve lane spans exactly the validation limits of its fields, so anything touching the lane edge is at the limit. Curves are drawn by sampling the same sampler the duck uses (step / linear / smooth), so what you see is what plays. The small glyph under a keyframe shows its interp (`/` linear, `~` smooth, `⌐` step).
 - **Beat grid** — drawn from bpm / beat_offset (bars emphasised, assuming 4 beats per bar for display only); **grid** picks beat, ½ or ¼; **snap** snaps drags, clicks and arrow nudges to it.
 - **Validation** — re-runs on every change with the rules `python/duckshow` applies at LOAD; click an issue to jump to it (playhead, lane, selection). Keyframes and events with issues get a red (error) or yellow (warning) ring.
-- **Stage** — top-down dead-reckoned path per role from its start mark (x forward, y left, heading counter-clockwise; 0.5 m grid). Drag a mark to move it, ⌥/⇧-drag to turn it. Marks live under the top-level `"editor"` field (see below). The dot on each path is the duck's position at the playhead.
+- **Stage** — a real-time 3D kinematic preview (raw WebGL2, no dependencies; spec: `docs/viewer.md`), bound live to the playhead: scrub and the whole cast poses in step, press play and it animates in sync. It renders on change only — parked, it burns no GPU. Camera: `1` house (audience, default) / `2` three-quarter / `3` top, each a half-second eased transition; drag to orbit, scroll to dolly, always aimed at stage centre. Start marks are only draggable in **top** view (floor-plane pick, exactly the old top-down behaviour) and stay persisted under the top-level `"editor"` field (see below). Click a role's name in the lane header (or its swatch in the legend below the stage) to highlight that duck — a lifted rim light and a brighter trail, no selection box. Skills and sounds with no pose (`kick_left`, `sit_toggle`, …) surface as a small floating label above the duck when they fire. The **kinematic preview** label in the corner is a standing reminder: this stages spacing, facing and timing — it does not simulate physics or run the RL policies, and a duck that walks cleanly here can still stumble on a raked stage.
 - **Audio** — ♪ audio… loads any browser-decodable file and plays it in sync with the playhead (Web Audio). No beat detection in v1: type the bpm. **use as music file** copies the file name into `meta.music.file`.
 
 ### Mouse
@@ -55,6 +57,9 @@ Node 20 treats the directory argument as a place to search for `*.test.mjs`; Nod
 | drag in the ruler | scrub |
 | ⌘/Ctrl + wheel | zoom around the cursor |
 | ⇧ + wheel, horizontal wheel | scroll time |
+| drag on the stage | orbit the camera |
+| scroll on the stage | dolly the camera |
+| drag a start mark (top view only) | move it; ⌥/⇧-drag to turn it |
 
 ### Keyboard
 
@@ -69,6 +74,7 @@ Node 20 treats the directory argument as a place to search for `*.test.mjs`; Nod
 | `I` | cycle interp: linear → smooth → step |
 | `S` | toggle snap |
 | `+` `−` `0` | zoom in / out / fit |
+| `1` `2` `3` | stage camera: house / three-quarter / top |
 | `⌘Z` / `⇧⌘Z` (`Ctrl` on other platforms), `⌘Y` | undo / redo |
 | `⌘S`, `⌘O` | save, open |
 | `Esc` | clear selection (or leave a text field) |

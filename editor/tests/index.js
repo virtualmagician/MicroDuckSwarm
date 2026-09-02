@@ -10,7 +10,7 @@
 //     "type": "module") to this file, which registers every suite in one
 //     process.
 //
-// Either way, exactly the six suites below run, once. Keep this list in
+// Either way, exactly the eight suites below run, once. Keep this list in
 // sync when adding a test file.
 import './sampler.test.mjs';
 import './validator.test.mjs';
@@ -18,3 +18,5 @@ import './roundtrip.test.mjs';
 import './integrate.test.mjs';
 import './editops.test.mjs';
 import './beatgrid.test.mjs';
+import './viewer-gl.test.mjs';
+import './viewer-pose.test.mjs';
