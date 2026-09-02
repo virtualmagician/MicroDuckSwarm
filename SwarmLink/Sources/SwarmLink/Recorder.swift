@@ -31,10 +31,18 @@
 // Show-night invariants respected here: puppet frames are unacknowledged
 // and never retried (the agent's 250 ms deadman covers a gap, and the
 // stream ends with a neutral frame so nobody keeps the last velocity);
-// panic is what an interrupt sends; the recorder never asks a duck to
-// catch up — its ticks are nominal show times, and a tick the process
-// could not make in time (more than two ticks late) is skipped, never
-// squeezed in late as a burst of back-dated frames.
+// panic is what an interrupt sends; ticks are nominal show times, not
+// wall-clock readings. What a stalled process does with the ticks it owes
+// depends on whether the take is reproducible: a live `GamepadInput` has
+// no schedule — real time is inherent to it — so a tick more than two
+// ticks late is skipped rather than fired as a burst of back-dated frames
+// that would record the resumed input as if held since the stall. A
+// `ScheduledPuppetInputSource` (a script) is different: its take must be
+// tick-complete — every nominal tick from 0 through the end is captured,
+// in order, on every machine — so falling behind never drops a tick; the
+// loop simply sends and captures the ticks it owes, back to back, with no
+// artificial pacing delay, and resumes normal cadence once caught up (see
+// the tick loop below and `foldSchedule`).
 
 import Foundation
 #if canImport(GameController)
@@ -889,10 +897,12 @@ public actor Recorder {
         // frame due exactly at a tick (a script's) is ingested first and
         // lands in that tick, not the next. Invisible on the wire.
         let tickPhaseNs: Int64 = min(5_000_000, tickNs / 4)
-        // How late a tick may still be sent. Scheduler jitter is a tick or
-        // two; anything beyond is a stalled process, and its missed ticks
-        // are skipped rather than fired as a burst of back-dated frames
-        // that would record the resumed input as if held since the stall.
+        // How late a tick may still be sent before a *live* input source is
+        // considered stalled and skips ahead to the wall clock (see the
+        // `scheduledFrames == nil` guard below). Scheduler jitter is a tick
+        // or two; a `ScheduledPuppetInputSource` (a script) never consults
+        // this — its take is tick-complete regardless of how far behind the
+        // process falls.
         let lateTickTolerance: Int64 = 2
         var endShowTime = configuration.maxDuration
         if let show {
@@ -1018,10 +1028,17 @@ public actor Recorder {
             if due > now {
                 await sleep(until: due)
                 if cancelled { break streaming }
-            } else if now - due > lateTickTolerance * tickNs {
-                // Fell behind by more than `lateTickTolerance` ticks (a
-                // stalled process): skip ahead rather than fire a burst of
-                // stale frames.
+            } else if scheduledFrames == nil, now - due > lateTickTolerance * tickNs {
+                // Live input only (no schedule to stay faithful to): fell
+                // behind by more than `lateTickTolerance` ticks (a stalled
+                // process), so skip ahead to the wall clock rather than fire
+                // a burst of stale frames — real time is inherent to a live
+                // puppeteer's hands. A `ScheduledPuppetInputSource` never
+                // takes this branch: `due <= now` just falls through below,
+                // so every nominal tick it owes is still sent and captured,
+                // back to back, with no artificial delay — the take is
+                // tick-complete regardless of how far behind the process
+                // fell (see the doc comment atop this file).
                 let missed = Int((now - due) / tickNs)
                 log?("[record] \(missed) ticks behind at t=\(TrackCapture.round3(showTime)) — skipping ahead")
                 tick += missed

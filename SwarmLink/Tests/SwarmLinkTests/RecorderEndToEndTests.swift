@@ -74,6 +74,9 @@ final class RecorderEndToEndTests: XCTestCase {
         XCTAssertLessThanOrEqual(try XCTUnwrap(first.masterTime), try XCTUnwrap(second.masterTime))
 
         let received = await duck.waitForPuppets(count: 3)
+        guard received.count == 3 else {
+            return XCTFail("expected 3 puppet frames, got \(received.count): \(received)")
+        }
         XCTAssertEqual(received.map(\.seq), [first.seq, second.seq, third.seq])
         XCTAssertEqual(received[0].move, PuppetMove(vx: 0.1))
         XCTAssertEqual(received[1].head, PuppetHead(headYaw: 0.2))
@@ -168,13 +171,23 @@ final class RecorderEndToEndTests: XCTestCase {
         XCTAssertEqual(result.framesSent, 51, "50 ticks over 1 s plus the neutral closing frame")
 
         // The puppet stream: ~50 Hz to the recorded duck only, seq monotonic.
+        // The take is tick-complete (Recorder.swift's streaming loop): every
+        // nominal tick is sent and captured regardless of machine speed, so
+        // this count is exact on every run, loaded or not — a shortfall
+        // here would be a real regression, not machine noise, hence the
+        // guard (rather than a plain XCTAssertEqual) before indexing below.
         let puppets = await lead.waitForPuppets(count: 51)
-        XCTAssertEqual(puppets.count, 51)
+        guard puppets.count == 51 else {
+            return XCTFail("expected 51 puppet frames (a tick-complete take), got \(puppets.count)")
+        }
         for (a, b) in zip(puppets, puppets.dropFirst()) {
             XCTAssertLessThan(a.seq, b.seq, "seq must be strictly monotonic")
             XCTAssertLessThanOrEqual(try XCTUnwrap(a.masterTime), try XCTUnwrap(b.masterTime))
         }
         let arrivals = await lead.puppetArrivalNs
+        guard arrivals.count == puppets.count else {
+            return XCTFail("puppetArrivalNs (\(arrivals.count)) must track receivedPuppets (\(puppets.count)) one-to-one")
+        }
         let spanMs = Double(arrivals[49] - arrivals[0]) / 1e6
         XCTAssertEqual(spanMs, 980, accuracy: 120, "49 intervals of 20 ms (±jitter)")
         let wingPuppets = await wing.receivedPuppets
@@ -215,7 +228,9 @@ final class RecorderEndToEndTests: XCTestCase {
         XCTAssertEqual(tracks.events.count, 1)
         XCTAssertEqual(tracks.events.first?.action, .sound("chirp", hold: nil))
         XCTAssertEqual(tracks.events.first?.t ?? 0, 0.1, accuracy: 0.05)
-        XCTAssertEqual(result.warnings.count, 1, "the second chirp, 0.1 s after the first, is dropped with a warning")
+        guard result.warnings.count == 1 else {
+            return XCTFail("expected exactly 1 warning (the dropped second chirp), got \(result.warnings)")
+        }
         XCTAssertTrue(result.warnings[0].contains("chirp"), result.warnings[0])
         XCTAssertTrue(tracks.pose.contains { $0.active && $0.z == -0.05 }, "crouch captured")
         XCTAssertTrue(tracks.locomotion.allSatisfy { $0.interp == .linear })
@@ -269,7 +284,13 @@ final class RecorderEndToEndTests: XCTestCase {
         let commands = await duck.received.map(\.payload.cmdName)
         XCTAssertTrue(commands.isEmpty, "no show: nothing is loaded or played; the duck is driven in puppet mode only (\(commands))")
         let puppets = await duck.waitForPuppets(count: result.framesSent)
-        XCTAssertEqual(puppets.count, result.framesSent)
+        // Tick-complete: `framesSent` is a deterministic function of the
+        // script and the tick rate (Recorder.swift), so this holds on every
+        // run — guard rather than a plain assert so a real regression fails
+        // with a readable message instead of trapping on the index below.
+        guard puppets.count == result.framesSent else {
+            return XCTFail("expected \(result.framesSent) puppet frames (tick-complete take), got \(puppets.count)")
+        }
         XCTAssertGreaterThanOrEqual(puppets.count, 20)
         XCTAssertEqual(puppets[5].move?.vyaw ?? 0, 1.5, accuracy: 1e-9)
         XCTAssertEqual(puppets.last?.move?.vyaw, 0, "closing frame at rest")
@@ -337,7 +358,9 @@ final class RecorderEndToEndTests: XCTestCase {
         XCTAssertEqual(result.framesSent, 24)
 
         let puppets = await duck.waitForPuppets(count: result.framesSent)
-        XCTAssertEqual(puppets.count, result.framesSent)
+        guard puppets.count == result.framesSent else {
+            return XCTFail("expected \(result.framesSent) puppet frames (tick-complete take), got \(puppets.count)")
+        }
         XCTAssertEqual(puppets[5].move?.vyaw ?? 0, 1.5, accuracy: 1e-9, "the scripted value, not the neutral rest the old race would have captured")
         XCTAssertEqual(puppets.last?.move?.vyaw, 0, "closing frame at rest")
 
@@ -379,7 +402,9 @@ final class RecorderEndToEndTests: XCTestCase {
         XCTAssertEqual(result.framesSent, 16, "15 ticks (t = 0 … 0.28) plus the neutral closing frame at 0.30")
 
         let puppets = await duck.waitForPuppets(count: result.framesSent)
-        XCTAssertEqual(puppets.count, 16)
+        guard puppets.count == 16 else {
+            return XCTFail("expected 16 puppet frames (tick-complete take), got \(puppets.count)")
+        }
         XCTAssertEqual(puppets[14].move?.vx ?? 0, 0.25, accuracy: 1e-9, "held at full stick to the last tick before the end")
         XCTAssertEqual(puppets.last?.move, PuppetMove(vx: 0, vy: 0, vyaw: 0), "closing frame at rest, never the last frame's -1.0")
         XCTAssertFalse(puppets.contains { ($0.move?.vx ?? 0) < 0 }, "the last frame's values never play")
