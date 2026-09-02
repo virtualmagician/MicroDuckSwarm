@@ -18,13 +18,14 @@ Pre-hardware development (M0). MicroDuck units ship late 2026; everything here r
 | `docs/duckshow-format.md` | The `.duckshow` choreography file format |
 | `docs/swarmlink-protocol.md` | Clock sync, triggers, telemetry over UDP |
 | `docs/robotd-api.md` | Verified MicroDuck `robotd` JSON-RPC surface |
+| `docs/osc-facade.md` | OSC 1.0 control surface of `swarmctl serve` for external rigs |
 | `python/duckshow/` | Format library: parse, validate, sample at 50 Hz |
 | `python/duck_agent/` | On-duck show agent: clock discipline, local playback, telemetry |
 | `python/mock_duck/` | Protocol-faithful mock `robotd` for development without hardware |
-| `python/tools/` | Reference show master CLI and utilities |
-| `SwarmLink/` | Swift package: show-master engine + `swarmctl` CLI (embeds into StageWizard as a cue type) |
+| `python/tools/` | Reference show master CLI, stdlib OSC send/listen tool |
+| `SwarmLink/` | Swift package: show-master engine, `swarmctl` CLI, OSC facade (`swarmctl serve`) |
 | `shows/` | Example choreographies |
-| `scripts/` | End-to-end demo and dev scripts |
+| `scripts/` | End-to-end demos (`e2e_demo.sh` Python master, `e2e_osc.sh` Swift master over OSC) |
 
 ## Quick start (no hardware needed)
 
@@ -52,7 +53,15 @@ cd python && python -m pytest 2>/dev/null || python -m unittest discover -s test
 cd SwarmLink && swift build && swift test
 ```
 
-Zero third-party dependencies (Network.framework for UDP). `swarmctl` is the standalone show-master CLI; an OSC facade for external rigs is next. Embedding into [StageWizard](https://github.com/virtualmagician/StageWizard) as a `robotShow` cue type is planned once hardware is in hand.
+Zero third-party dependencies (Network.framework for UDP). `swarmctl` is the standalone show-master CLI. For show night with any rig that speaks OSC (QLab, TouchDesigner, a lighting desk, StageWizard network cues):
+
+```bash
+swarmctl serve --roster roster.json --shows-dir shows/        # OSC on UDP 53300, Bonjour _duckswarm._udp
+python3 python/tools/osc_send.py 127.0.0.1:53300 /duckswarm/load s:demo
+python3 python/tools/osc_send.py 127.0.0.1:53300 /duckswarm/go
+```
+
+Commands: `/duckswarm/{load,play,go,seek,stop,panic,ping,status}`; status feedback is pushed to any address that pinged in the last 5 s — the same contract as StageWizard ↔ StageWand. Full table in `docs/osc-facade.md`. Embedding into [StageWizard](https://github.com/virtualmagician/StageWizard) as a `robotShow` cue type is planned once hardware is in hand.
 
 ## License
 

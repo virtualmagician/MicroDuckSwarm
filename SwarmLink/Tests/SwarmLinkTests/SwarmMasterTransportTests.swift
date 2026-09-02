@@ -18,11 +18,12 @@ final class SwarmMasterTransportTests: XCTestCase {
     /// One master (ephemeral local port unless `masterPort` given), one duck
     /// on an ephemeral port, roster + show files on disk.
     private func rig(
-        showName: String = "fixture", role: String = "lead", roles: [String] = ["lead"], masterPort: UInt16 = 0
+        showName: String = "fixture", role: String = "lead", roles: [String] = ["lead"], masterPort: UInt16 = 0,
+        duration: Double = 60.0
     ) async throws -> (master: SwarmMaster, duck: TestDuck, show: URL, roster: URL) {
         let duck = TestDuck()
         let port = try await duck.start()
-        let (dir, show) = try Fixtures.writeShow(named: showName, roles: roles)
+        let (dir, show) = try Fixtures.writeShow(named: showName, roles: roles, duration: duration)
         tmpDir = dir
         let roster = try Fixtures.writeRoster([RosterEntry(id: "duck-01", host: "127.0.0.1", port: port, role: role)], in: dir)
         let master = SwarmMaster(masterPort: masterPort)
@@ -289,6 +290,101 @@ final class SwarmMasterTransportTests: XCTestCase {
         await duck.stop()
     }
 
+    // MARK: a load never overrides a newer command
+
+    /// A `panic` that lands while a `load` is stopping the previous show
+    /// (a slow duck keeps that phase going for up to 500 ms) must keep every
+    /// one of its retries; the older load gives up as `.superseded` instead
+    /// of resuming and abandoning the panic after one datagram.
+    func testPanicDuringLoadStopPhaseKeepsAllItsRetries() async throws {
+        let (master, duck, show, roster) = try await rig()
+        _ = try await master.load(show: show, roster: roster)
+        _ = try await master.play(at: 10_000_000)
+        let playing = await waitForTransport(master, .playing)
+        XCTAssertEqual(playing, .playing)
+        // Momentarily unreachable: never ACKs `stop`, ACKs the third `panic`.
+        await duck.setDropFirst(SwarmLinkInfo.commandMaxAttempts, of: "stop")
+        await duck.setDropFirst(2, of: "panic")
+
+        async let reload = try master.load(show: show, roster: roster)
+        await duck.waitForCommands(named: "stop", count: 1)
+        await Task.sleepMs(50)
+        let panicOutcome = await master.panic()
+        XCTAssertEqual(panicOutcome, [duck01: .ok], "panic retries until the duck ACKs — an older load must not supersede it")
+        let panics = await duck.commands(named: "panic")
+        XCTAssertEqual(panics.count, 3)
+        let reloadOutcome = try await reload
+        XCTAssertEqual(reloadOutcome[duck01]?.status, .superseded, "the load that was stopping the previous show gives up: newest command wins")
+
+        await Task.sleepMs(150)
+        let names = await duck.received.map(\.payload.cmdName)
+        XCTAssertEqual(names.last, "panic", "\(names)")
+        XCTAssertEqual(names.filter { $0 == "load" }.count, 1, "no load is fanned out behind the panic: \(names)")
+        let transport = await master.currentTransport
+        XCTAssertEqual(transport, .stopped)
+        let showID = await master.currentShowID
+        XCTAssertEqual(showID, "fixture", "the previous show stays loaded; nothing was switched under the panic")
+        await duck.stop()
+    }
+
+    func testPlayDuringLoadThrowsLoadInProgress() async throws {
+        let (master, duck, show, roster) = try await rig()
+        _ = try await master.load(show: show, roster: roster)
+        _ = try await master.play(at: 10_000_000)
+        let playing = await waitForTransport(master, .playing)
+        XCTAssertEqual(playing, .playing)
+        await duck.setDropFirst(2, of: "stop") // the reload's stop phase takes ≥ 200 ms
+
+        async let reload = try master.load(show: show, roster: roster)
+        await duck.waitForCommands(named: "stop", count: 1)
+        await Task.sleepMs(30)
+        do {
+            _ = try await master.play(at: 10_000_000)
+            XCTFail("play during a load must be refused")
+        } catch {
+            XCTAssertEqual(error as? SwarmMasterError, .loadInProgress)
+        }
+        let outcome = try await reload
+        XCTAssertEqual(outcome[duck01]?.status, .ok)
+        let plays = await duck.commands(named: "play")
+        XCTAssertEqual(plays.count, 1, "no play for the previous show mid-load")
+        let transport = await master.currentTransport
+        XCTAssertEqual(transport, .stopped)
+
+        let again = try await master.play(at: 10_000_000)
+        XCTAssertEqual(again, [duck01: .ok], "play works again once the load has returned")
+        _ = await master.stop()
+        await duck.stop()
+    }
+
+    // MARK: show clock while armed
+
+    func testShowTimeWhileArmedIsTheCuedStart() async throws {
+        let (master, duck, show, roster) = try await rig()
+        _ = try await master.load(show: show, roster: roster)
+        _ = await master.seek(to: 30.0)
+        _ = try await master.play(at: 300_000_000)
+        let armed = await master.currentTransport
+        XCTAssertEqual(armed, .armed)
+        let armedTime = await master.currentShowTime()
+        XCTAssertEqual(armedTime, 30.0, "while armed the show clock reports the cued start, not 0")
+        let snapshot = await master.statusSnapshot()
+        XCTAssertEqual(snapshot.transport, .armed)
+        XCTAssertEqual(snapshot.showID, "fixture")
+        XCTAssertEqual(snapshot.showTime, 30.0)
+        XCTAssertEqual(Set(snapshot.roster.keys), [duck01])
+
+        let playing = await waitForTransport(master, .playing)
+        XCTAssertEqual(playing, .playing)
+        let running = await master.currentShowTime() ?? -1
+        XCTAssertGreaterThanOrEqual(running, 30.0)
+        XCTAssertLessThan(running, 31.0)
+        _ = await master.stop()
+        let stopped = await master.currentShowTime()
+        XCTAssertNil(stopped)
+        await duck.stop()
+    }
+
     // MARK: production port configuration (F60)
 
     func testTwoDucksShareOneFixedMasterPort() async throws {
@@ -320,5 +416,106 @@ final class SwarmMasterTransportTests: XCTestCase {
         XCTAssertEqual(panic, [duck01: .ok, DuckID("duck-02"): .ok])
         await lead.stop()
         await wing.stop()
+    }
+
+    // MARK: connection hygiene on a fixed port (the OSC facade's lifecycle)
+
+    /// `swarmctl serve` dials the roster at start (`connect`) and then
+    /// `load`s the same roster for every show, all from one fixed master
+    /// port. Cancelling and immediately re-dialing the same 4-tuple parked
+    /// the fresh connection in `.waiting(EADDRINUSE)` for good: the load
+    /// timed out and no telemetry ever arrived again. Ephemeral-port rigs
+    /// never see this (every rewire gets a new port), so this one is pinned.
+    func testLoadAfterConnectOnAFixedPortKeepsTheFlowAlive() async throws {
+        let (master, duck, show, roster) = try await rig(masterPort: Fixtures.randomMasterPort())
+        try await master.connect(roster: roster)
+        let panic = await master.panic() // first contact: the duck learns the master's endpoint
+        XCTAssertEqual(panic, [duck01: .ok])
+        try await duck.sendTelemetry(state: .idle)
+        let idle = await waitForTelemetry(master, duck01, state: .idle)
+        XCTAssertEqual(idle?.state, .idle)
+
+        let outcomes = try await master.load(show: show, roster: roster)
+        XCTAssertEqual(outcomes[duck01]?.status, .ok, "load over the connection connect() dialed")
+        try await duck.sendTelemetry(state: .loaded, show: "fixture")
+        let loaded = await waitForTelemetry(master, duck01, state: .loaded)
+        XCTAssertEqual(loaded?.state, .loaded, "telemetry must keep arriving after load()")
+
+        let reloaded = try await master.load(show: show, roster: roster)
+        XCTAssertEqual(reloaded[duck01]?.status, .ok, "and again on the next show")
+        let play = try await master.play(at: 20_000_000)
+        XCTAssertEqual(play, [duck01: .ok])
+        let names = await duck.received.map(\.payload.cmdName)
+        XCTAssertEqual(names, ["panic", "load", "load", "play"])
+        _ = await master.stop()
+        await duck.stop()
+    }
+
+    func testRosterChangeRedialsOnlyTheDucksThatMoved() async throws {
+        let lead = TestDuck(id: "duck-01")
+        let wing = TestDuck(id: "duck-02")
+        let replacement = TestDuck(id: "duck-02")
+        let leadPort = try await lead.start()
+        let wingPort = try await wing.start()
+        let replacementPort = try await replacement.start()
+        let (dir, show) = try Fixtures.writeShow(named: "duet", roles: ["lead", "wing"])
+        tmpDir = dir
+        let leadEntry = RosterEntry(id: "duck-01", host: "127.0.0.1", port: leadPort, role: "lead")
+        let before = try Fixtures.writeRoster(
+            [leadEntry, RosterEntry(id: "duck-02", host: "127.0.0.1", port: wingPort, role: "wing")], in: dir)
+        let after = try Fixtures.writeRoster(
+            [leadEntry, RosterEntry(id: "duck-02", host: "127.0.0.1", port: replacementPort, role: "wing")], in: dir)
+
+        let master = SwarmMaster(masterPort: Fixtures.randomMasterPort())
+        try await master.connect(roster: before)
+        let panic = await master.panic()
+        XCTAssertEqual(panic, [duck01: .ok, DuckID("duck-02"): .ok])
+
+        let outcomes = try await master.load(show: show, roster: after)
+        XCTAssertEqual(outcomes[duck01]?.status, .ok)
+        XCTAssertEqual(outcomes[DuckID("duck-02")]?.status, .ok)
+        let leadNames = await lead.received.map(\.payload.cmdName)
+        XCTAssertEqual(leadNames, ["panic", "load"], "an unchanged duck keeps its connection and just gets the load")
+        let wingNames = await wing.received.map(\.payload.cmdName)
+        XCTAssertEqual(wingNames, ["panic"], "the old address is hung up on: no load goes there")
+        let replacementNames = await replacement.received.map(\.payload.cmdName)
+        XCTAssertEqual(replacementNames, ["load"])
+        let roster = await master.currentRoster
+        XCTAssertEqual(roster[DuckID("duck-02")]?.port, replacementPort)
+        await lead.stop()
+        await wing.stop()
+        await replacement.stop()
+    }
+
+    // MARK: end of show
+
+    /// The agents end playback themselves at `meta.duration` (→ LOADED);
+    /// the master's transport must follow within a state tick rather than
+    /// read `playing` forever — that is what the OSC facade reports.
+    func testTransportStopsByItselfWhenTheShowEnds() async throws {
+        let (master, duck, show, roster) = try await rig(duration: 0.3)
+        _ = try await master.load(show: show, roster: roster)
+        _ = try await master.play(at: 20_000_000)
+        let playing = await waitForTransport(master, .playing)
+        XCTAssertEqual(playing, .playing)
+        let stopped = await waitForTransport(master, .stopped, timeoutMs: 1500)
+        XCTAssertEqual(stopped, .stopped, "the master must mirror the agents ending at meta.duration")
+        let showTime = await master.currentShowTime()
+        XCTAssertNil(showTime)
+        let stops = await duck.commands(named: "stop")
+        XCTAssertTrue(stops.isEmpty, "the agents end the show themselves; no stop is fanned out")
+        let ticksAtEnd = await duck.receivedStates.count
+        await Task.sleepMs(300)
+        let ticksLater = await duck.receivedStates.count
+        XCTAssertLessThanOrEqual(ticksLater, ticksAtEnd + 1, "the state loop must stop with the show")
+
+        // The show is still loaded: the next play starts from 0 again.
+        let again = try await master.play(at: 20_000_000)
+        XCTAssertEqual(again, [duck01: .ok])
+        let plays = await duck.commands(named: "play")
+        guard plays.count == 2, case .play(_, _, let fromShowTime) = plays[1].payload else { return XCTFail("\(plays)") }
+        XCTAssertEqual(fromShowTime, 0.0)
+        _ = await master.stop()
+        await duck.stop()
     }
 }

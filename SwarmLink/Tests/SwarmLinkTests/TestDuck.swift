@@ -102,12 +102,16 @@ actor TestDuck {
 
     // MARK: Agent → master
 
+    /// `clockOffsetMs`/`clockRttMs` are nil until an agent's first
+    /// time-sync exchange (docs/swarmlink-protocol.md §4); pass nil to
+    /// exercise that "not yet synced, never 0" path.
     func sendTelemetry(
-        state: AgentState, show: String? = nil, showTime: Double = 0, lastError: String? = nil
+        state: AgentState, show: String? = nil, showTime: Double = 0, lastError: String? = nil,
+        clockOffsetMs: Double? = 0.5, clockRttMs: Double? = 2.0, policiesOk: Bool = true
     ) throws {
         let message = TelemetryMessage(
             duck: id, seq: received.count, state: state, show: show, showTime: showTime,
-            clockOffsetMs: 0.5, clockRttMs: 2.0, policiesOk: true, lastError: lastError
+            clockOffsetMs: clockOffsetMs, clockRttMs: clockRttMs, policiesOk: policiesOk, lastError: lastError
         )
         try send(.telemetry(message))
     }
@@ -175,9 +179,13 @@ actor TestDuck {
 
 enum Fixtures {
     /// A minimal, valid show with the given roles; written to a fresh temp
-    /// dir (removed by the returned cleanup closure).
+    /// dir (removed by the returned cleanup closure). The default duration
+    /// is long: the master ends the transport by itself at `meta.duration`,
+    /// and most tests exercise transport/epoch semantics (seeking to 45 s,
+    /// say) that must not run into the end of the show. Tests about the end
+    /// of the show pass a short `duration` explicitly.
     static func writeShow(
-        named name: String = "fixture", roles: [String] = ["lead"], duration: Double = 1.0
+        named name: String = "fixture", roles: [String] = ["lead"], duration: Double = 60.0
     ) throws -> (dir: URL, show: URL) {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -222,6 +230,19 @@ func waitForTransport(_ master: SwarmMaster, _ target: Transport, timeoutMs: Int
         await Task.sleepMs(10)
     }
     return await master.currentTransport
+}
+
+/// Poll a SwarmMaster until `duck`'s telemetry snapshot reports `state`
+/// (or the timeout elapses); returns the snapshot either way.
+func waitForTelemetry(
+    _ master: SwarmMaster, _ duck: DuckID, state: AgentState, timeoutMs: Int = 1500
+) async -> DuckTelemetry? {
+    let deadline = DispatchTime.now().uptimeNanoseconds + UInt64(timeoutMs) * 1_000_000
+    while DispatchTime.now().uptimeNanoseconds < deadline {
+        if let entry = await master.telemetry[duck], entry.state == state { return entry }
+        await Task.sleepMs(10)
+    }
+    return await master.telemetry[duck]
 }
 
 extension Task where Success == Never, Failure == Never {

@@ -17,9 +17,28 @@
 // Ordering guarantees (show-night invariants):
 //  - The newest transport command wins: issuing play/seek/stop/panic/load
 //    stops the retries of every earlier in-flight command (a stale `play`
-//    retry can never re-arm a duck after the operator hit stop).
+//    retry can never re-arm a duck after the operator hit stop). This holds
+//    across suspension points too: a `load` that is still reading files or
+//    stopping the previous show when a newer command lands gives up as
+//    `.superseded` instead of resuming and overriding it — so a `panic`
+//    keeps every one of its retries no matter what it interrupted.
+//  - `play` is refused (`loadInProgress`) while a `load` is under way: it
+//    would otherwise arm whichever show happened to be current mid-load.
 //  - `stop`/`panic` reset the cue point; `seek` while stopped sets it.
 //  - `panic` needs nothing loaded — only a connected roster.
+//  - The transport returns to `.stopped` by itself once the master's show
+//    clock passes `meta.duration` (within one 5 Hz state tick): the agents
+//    end playback there on their own, and a master that kept reporting
+//    `playing` would mislead whatever watches it (the OSC facade, a GUI).
+//
+// Connection hygiene: `load()`/`connect()` keep the live UDP flow of every
+// duck whose host:port is unchanged. Cancelling a fixed-local-port
+// `NWConnection` and immediately re-dialing the same peer parks the new
+// connection in `.waiting(EADDRINUSE)` for good (Network.framework never
+// retries it while the old socket is still closing), which made the master
+// deaf to the whole flock on every `load` after `connect`. Only newcomers
+// and ducks that moved address are dialed; a connection that does report
+// `.waiting`/`.failed` is hung up on first and re-dialed after a backoff.
 
 import Foundation
 @preconcurrency import Network
@@ -77,8 +96,8 @@ public struct DuckTelemetry: Sendable, Equatable {
 public enum TelemetryEvent: Sendable, Equatable {
     case updated(DuckTelemetry)
     /// The duck has sent no telemetry for `telemetryLostThresholdSeconds`
-    /// — including a roster duck that never reported at all since the last
-    /// `load()`/`connect()` (see `lostDucks`).
+    /// — including a roster duck that never reported at all since it was
+    /// dialed by `load()`/`connect()` (see `lostDucks`).
     case lost(DuckID)
 }
 
@@ -87,12 +106,32 @@ public enum TelemetryEvent: Sendable, Equatable {
 /// which show up as `LoadOutcome.Status` instead).
 public enum SwarmMasterError: Error, Sendable, Equatable, CustomStringConvertible {
     case notLoaded
+    /// `play()` while a `load()` is still under way (reading the show,
+    /// stopping the previous one, or fanning out): arming now would arm
+    /// whichever show happened to be current mid-load.
+    case loadInProgress
 
     public var description: String {
         switch self {
         case .notLoaded: return "no show is loaded"
+        case .loadInProgress: return "a load is in progress"
         }
     }
+}
+
+/// Everything a status display needs, read in one actor hop so the values
+/// belong to one instant (the OSC facade's full status push; a GUI).
+public struct SwarmStatusSnapshot: Sendable, Equatable {
+    public var transport: Transport
+    /// `nil` when nothing is loaded.
+    public var showID: String?
+    /// The master's show clock: `nil` while stopped, the cued start
+    /// position while armed (not advancing yet), the running clock while
+    /// playing.
+    public var showTime: Double?
+    public var roster: [DuckID: RosterEntry]
+    public var telemetry: [DuckID: DuckTelemetry]
+    public var lostDucks: Set<DuckID>
 }
 
 // MARK: - SwarmMaster
@@ -133,12 +172,26 @@ public actor SwarmMaster {
     private var showSHA256: String = ""
 
     private var clock = MasterClock()
-    private var transport: Transport = .stopped
+    /// Master-side transport intent. Every *change* is published to
+    /// `transportEvents()` subscribers (the OSC facade pushes status
+    /// "immediately on any transport change" — docs/osc-facade.md).
+    private var transport: Transport = .stopped {
+        didSet {
+            guard oldValue != transport else { return }
+            for continuation in transportContinuations.values { continuation.yield(transport) }
+        }
+    }
+    private var transportContinuations: [UUID: AsyncStream<Transport>.Continuation] = [:]
     private var stateSeq: Int = 0
     /// Show-time to start from on the next `play()`; set by `seek()` while
     /// stopped, consumed (and reset to 0) by the next `play()`, and reset
     /// to 0 by `stop()`/`panic()`/`load()`.
     private var cueShowTime: Double = 0.0
+    /// The show-time the pending scheduled start will begin from: set by
+    /// `play()` and cleared once `beginPlaying` establishes the epoch (or
+    /// anything else ends the armed state). Reported as the show clock
+    /// while armed, like the Python reference master's `from_show_time`.
+    private var armedFromShowTime: Double?
 
     private var telemetryStore: [DuckID: DuckTelemetry] = [:]
     private var lastTelemetryNs: [DuckID: Int64] = [:]
@@ -154,6 +207,17 @@ public actor SwarmMaster {
     /// Bumped by play/seek/stop/panic so a scheduled `beginPlaying` from an
     /// earlier `play()` cannot clobber the clock epoch of a newer command.
     private var playGeneration: Int = 0
+    /// Count of transport commands issued (load/play/seek/stop/panic). A
+    /// multi-phase command — `load`, with its off-actor file reads and its
+    /// stop-first fan-out — takes a ticket when it is issued and, after
+    /// each suspension, abandons itself as `.superseded` if a newer command
+    /// has been issued meanwhile. Newest command wins: an older `load` can
+    /// never resume and override a `panic` that arrived while it was
+    /// stopping the previous show.
+    private var issuedCommands: Int = 0
+    /// `load()`s currently between issue and return; `play()` is refused
+    /// with `loadInProgress` meanwhile.
+    private var loadsInProgress: Int = 0
 
     private var stateLoopTask: Task<Void, Never>?
     private var stateLoopGeneration: Int = 0
@@ -177,6 +241,7 @@ public actor SwarmMaster {
         stateLoopTask?.cancel()
         housekeepingTask?.cancel()
         for continuation in telemetryContinuations.values { continuation.finish() }
+        for continuation in transportContinuations.values { continuation.finish() }
         for connection in connections.values { connection.cancel() }
     }
 
@@ -185,8 +250,10 @@ public actor SwarmMaster {
     /// Dials one UDP connection per roster duck *without* loading a show,
     /// so time sync, telemetry and the transport commands that need no
     /// show (`stop`, `panic`, `seek`) work — e.g. a standalone CLI that
-    /// only wants to kill the flock. Replaces any previous connections
-    /// (a playing show is stopped first, see `load`). `load()` does this
+    /// only wants to kill the flock. Ducks already dialed at the same
+    /// host:port keep their live connection (and watchdog state); ducks
+    /// that left the roster are hung up on, newcomers and movers dialed.
+    /// A playing show is stopped first (see `load`). `load()` does this
     /// itself; `play()` still requires a loaded show.
     public func connect(roster rosterURL: URL) async throws {
         let entries = try [RosterEntry].load(contentsOf: rosterURL)
@@ -210,8 +277,10 @@ public actor SwarmMaster {
 
     // MARK: Public API — show / transport
 
-    /// Parses `showURL`, loads the roster from `rosterURL`, opens one UDP
-    /// connection per duck (pinned to `masterPort`), and fans out `load`
+    /// Parses `showURL`, loads the roster from `rosterURL`, brings the
+    /// dialed set in line with it (one UDP connection per duck, pinned to
+    /// `masterPort`; see `connect(roster:)` — unchanged ducks keep their
+    /// connection), and fans out `load`
     /// commands — retried up to `SwarmLinkInfo.commandMaxAttempts` times at
     /// `SwarmLinkInfo.commandRetryIntervalMs` — waiting for every duck's
     /// ACK/NACK/timeout. This is the "heavy" call: by the time it returns,
@@ -221,12 +290,26 @@ public actor SwarmMaster {
     /// If a show is armed/playing, `stop` is fanned out (and awaited) first
     /// so no duck is left running its last commanded velocity while the
     /// master silently switches shows.
+    ///
+    /// A `play()` issued while this is under way throws `loadInProgress`;
+    /// any other command issued meanwhile (panic, stop, seek, another load)
+    /// wins — this load then returns `.superseded` for every roster duck
+    /// without touching the show or the transport.
     public func load(show showURL: URL, roster rosterURL: URL) async throws -> [DuckID: LoadOutcome] {
-        let decodedShow = try Show.load(contentsOf: showURL)
-        let sha = try Show.sha256(of: showURL)
-        let entries = try [RosterEntry].load(contentsOf: rosterURL)
+        let ticket = issueCommand()
+        loadsInProgress += 1
+        defer { loadsInProgress -= 1 }
+
+        // The file reads run off the actor: a stalled volume (an online-only
+        // cloud placeholder, a network share) must not hold the actor — and
+        // a `panic` queued behind this load — for the duration of the read.
+        let (decodedShow, sha, entries) = try await Task.detached {
+            (try Show.load(contentsOf: showURL), try Show.sha256(of: showURL), try [RosterEntry].load(contentsOf: rosterURL))
+        }.value
+        guard ticket == issuedCommands else { return Self.supersededOutcomes(for: entries) }
 
         await stopIfTransportActive()
+        guard ticket == issuedCommands else { return Self.supersededOutcomes(for: entries) }
         rewire(entries: entries)
 
         self.show = decodedShow
@@ -235,6 +318,7 @@ public actor SwarmMaster {
         self.transport = .stopped
         self.stateSeq = 0
         self.cueShowTime = 0
+        self.armedFromShowTime = nil
         self.playGeneration += 1
         clock.stop()
 
@@ -271,10 +355,13 @@ public actor SwarmMaster {
     /// retry loop has finished. Starts from the show-time set by a prior
     /// `seek()` while stopped, if any, else from 0. Throws
     /// `SwarmMasterError.notLoaded` when no show has been loaded in this
-    /// instance (the agents need the show id).
+    /// instance (the agents need the show id) and
+    /// `SwarmMasterError.loadInProgress` while a `load()` is under way.
     @discardableResult
     public func play(at leadTimeNs: Int64 = 300_000_000) async throws -> [DuckID: CommandStatus] {
+        guard loadsInProgress == 0 else { throw SwarmMasterError.loadInProgress }
         guard show != nil else { throw SwarmMasterError.notLoaded }
+        _ = issueCommand()
         let now = MasterClock.nowNanoseconds()
         let atMasterTime = now + max(0, leadTimeNs)
         let fromShowTime = cueShowTime
@@ -282,6 +369,7 @@ public actor SwarmMaster {
 
         transport = .armed
         clock.stop()
+        armedFromShowTime = fromShowTime
         playGeneration += 1
         let generation = playGeneration
         startStateLoopIfNeeded()
@@ -305,6 +393,7 @@ public actor SwarmMaster {
     /// master can steer ducks it did not start (they NACK if not playing).
     @discardableResult
     public func seek(to showTime: Double) async -> [DuckID: CommandStatus] {
+        _ = issueCommand()
         let now = MasterClock.nowNanoseconds()
         switch transport {
         case .stopped:
@@ -312,6 +401,7 @@ public actor SwarmMaster {
         case .armed, .playing:
             playGeneration += 1
             clock.seek(to: showTime, atMasterTimeNs: now)
+            armedFromShowTime = nil
             transport = .playing
             startStateLoopIfNeeded()
         }
@@ -322,6 +412,7 @@ public actor SwarmMaster {
     /// Resets the cue point, so the next `play()` starts from 0.
     @discardableResult
     public func stop() async -> [DuckID: CommandStatus] {
+        _ = issueCommand()
         haltTransport()
         return await fanOut(.stop)
     }
@@ -330,6 +421,7 @@ public actor SwarmMaster {
     /// Needs no loaded show — only connections (`connect(roster:)`).
     @discardableResult
     public func panic() async -> [DuckID: CommandStatus] {
+        _ = issueCommand()
         haltTransport()
         return await fanOut(.panic)
     }
@@ -366,14 +458,55 @@ public actor SwarmMaster {
         transport
     }
 
+    /// A live feed of `currentTransport` *changes* (stopped → armed →
+    /// playing → stopped …), including the armed → playing transition the
+    /// scheduled start performs on its own after a `play()` lead time.
+    /// Same lifecycle as `telemetryEvents()`: independent per call,
+    /// unregisters on finish/cancel, keeps only the newest few events.
+    public func transportEvents() -> AsyncStream<Transport> {
+        let id = UUID()
+        return AsyncStream(Transport.self, bufferingPolicy: .bufferingNewest(16)) { continuation in
+            transportContinuations[id] = continuation
+            continuation.onTermination = { [weak self] _ in
+                Task { await self?.removeTransportContinuation(id) }
+            }
+        }
+    }
+
+    /// Id of the show loaded by the last successful `load()`, or `nil`
+    /// when nothing is loaded (what the agents were told in `load`/`play`:
+    /// the file name minus `.duckshow.json`).
+    public var currentShowID: String? {
+        show == nil ? nil : showID
+    }
+
+    /// The roster of the last `load()`/`connect()`, keyed by duck id —
+    /// which cast role each dialed duck is standing in for.
+    public var currentRoster: [DuckID: RosterEntry] {
+        roster
+    }
+
     /// Number of live `telemetryEvents()` subscribers (test hook).
     var telemetrySubscriberCount: Int {
         telemetryContinuations.count
     }
 
-    /// Master's own show-time estimate right now, if playing.
+    /// Master's own show-time estimate right now: `nil` while stopped, the
+    /// cued start position while armed (the lead time is still running),
+    /// the running clock while playing.
     public func currentShowTime() -> Double? {
-        clock.showTime()
+        clock.showTime() ?? (transport == .armed ? armedFromShowTime : nil)
+    }
+
+    /// Transport, show, show clock, roster, telemetry and lost set read at
+    /// one instant — the OSC facade's full status push is built from this
+    /// so a `load` landing between separate reads can never produce a push
+    /// describing a state the master was never in.
+    public func statusSnapshot() -> SwarmStatusSnapshot {
+        SwarmStatusSnapshot(
+            transport: transport, showID: currentShowID, showTime: currentShowTime(),
+            roster: roster, telemetry: telemetryStore, lostDucks: lostDucks
+        )
     }
 
     // MARK: Playback epoch
@@ -384,6 +517,7 @@ public actor SwarmMaster {
         // bumped playGeneration (and/or left .armed) and wins.
         guard generation == playGeneration, transport == .armed else { return }
         clock.play(at: atMasterTime, fromShowTime: fromShowTime)
+        armedFromShowTime = nil
         transport = .playing
     }
 
@@ -391,40 +525,84 @@ public actor SwarmMaster {
         transport = .stopped
         clock.stop()
         cueShowTime = 0
+        armedFromShowTime = nil
         playGeneration += 1
         stopStateLoop()
     }
 
+    /// Takes the next command ticket (see `issuedCommands`).
+    private func issueCommand() -> Int {
+        issuedCommands += 1
+        return issuedCommands
+    }
+
+    /// The outcome of a `load` that gave up because a newer command was
+    /// issued while it was suspended.
+    private static func supersededOutcomes(for entries: [RosterEntry]) -> [DuckID: LoadOutcome] {
+        var outcomes: [DuckID: LoadOutcome] = [:]
+        for entry in entries { outcomes[entry.id] = LoadOutcome(status: .superseded) }
+        return outcomes
+    }
+
     /// `load()`/`connect()` while a show is armed/playing: send `stop` and
-    /// wait for the ACKs/timeouts before the connections are torn down.
+    /// wait for the ACKs/timeouts before the connections are touched. Part
+    /// of the caller's command, so it takes no ticket of its own.
     private func stopIfTransportActive() async {
         guard transport != .stopped else { return }
-        _ = await stop()
+        haltTransport()
+        _ = await fanOut(.stop)
     }
 
     // MARK: Connection lifecycle
 
+    /// Brings the dialed set in line with `entries` *without* hanging up on
+    /// ducks whose host:port is unchanged.
+    ///
+    /// Never cancel-and-immediately-redial the same fixed local port → same
+    /// peer: the fresh UDP `NWConnection` lands in `.waiting(EADDRINUSE)`
+    /// and Network.framework never retries it (the cancelled socket is
+    /// still closing), so the master would be deaf and mute to that duck
+    /// for good. That was exactly what every `load()` after `connect()`
+    /// did — the OSC facade's every show. Keeping the live flow also keeps
+    /// the duck's watchdog state honest: a duck that was lost stays lost
+    /// until it actually reports again.
+    ///
+    /// Deliberately supersedes nothing: a command still retrying to an
+    /// unchanged duck (a `panic` that landed during the caller's stop-first
+    /// phase, say) keeps its flow and its remaining attempts; a retry to a
+    /// duck that left the roster ends as `connectionFailed` on its next
+    /// attempt.
     private func rewire(entries: [RosterEntry]) {
-        teardownConnections()
+        stopStateLoop()
         let now = MasterClock.nowNanoseconds()
-        let ids = Set(entries.map(\.id))
-        // Forget ducks that are no longer on the roster...
-        for stale in Set(lastTelemetryNs.keys).union(telemetryStore.keys).union(neverReportedLost).subtracting(ids) {
+        let incoming = entries.indexedByID()
+        let ids = Set(incoming.keys)
+        // Hang up on, and forget, ducks that are no longer on the roster...
+        let known = Set(connections.keys).union(lastTelemetryNs.keys).union(telemetryStore.keys).union(neverReportedLost)
+        for stale in known.subtracting(ids) {
+            connections.removeValue(forKey: stale)?.cancel()
             lastTelemetryNs[stale] = nil
             telemetryStore[stale] = nil
             neverReportedLost.remove(stale)
         }
-        roster = entries.indexedByID()
         for entry in entries {
-            let connection = makeConnection(for: entry)
-            connections[entry.id] = connection
-            // ...and restart the watchdog for everyone on it: a duck that
+            if let previous = roster[entry.id], previous.host == entry.host, previous.port == entry.port,
+               connections[entry.id] != nil {
+                continue // same duck at the same address: its flow carries on
+            }
+            // ...dial newcomers and ducks that moved (hanging up on the old
+            // address first — a different 4-tuple, so the fresh dial cannot
+            // collide with it), and (re)start their watchdog: a duck that
             // never reports after this point is `lost` after the threshold
             // even though it has no telemetry entry yet.
+            connections[entry.id]?.cancel()
+            let connection = makeConnection(for: entry)
+            connections[entry.id] = connection
             lastTelemetryNs[entry.id] = now
             neverReportedLost.remove(entry.id)
             startReceiving(duckID: entry.id, connection: connection)
         }
+        roster = incoming
         startHousekeepingIfNeeded()
     }
 
@@ -441,25 +619,31 @@ public actor SwarmMaster {
         let connection = NWConnection(host: host, port: port, using: params)
         let duckID = entry.id
         connection.stateUpdateHandler = { [weak self, weak connection] state in
-            guard let self, let connection, case .failed = state else { return }
-            Task { await self.scheduleRedial(duckID: duckID, replacing: connection) }
+            guard let self, let connection else { return }
+            switch state {
+            case .failed, .waiting:
+                // `.waiting` is terminal in practice for a UDP dial that
+                // could not bind (EADDRINUSE while a cancelled socket on
+                // the same 4-tuple closes) — Network.framework only
+                // re-evaluates it on a path change. Treat it like `.failed`.
+                Task { await self.scheduleRedial(duckID: duckID, replacing: connection) }
+            default:
+                break
+            }
         }
         connection.start(queue: networkQueue)
         return connection
     }
 
-    private func teardownConnections() {
-        stopStateLoop()
-        _ = supersedeInFlightCommands()
-        for connection in connections.values { connection.cancel() }
-        connections.removeAll()
-    }
-
-    /// A per-duck connection reported `.failed` or a receive error: replace
-    /// it after a short backoff, provided it is still the one on file (a
-    /// `load()`/`connect()` in between already replaced or cancelled it).
+    /// A per-duck connection reported `.failed`, `.waiting` or a receive
+    /// error: hang up on it *now* (so its socket, if it has one, is released
+    /// during the backoff) and dial a fresh one after `redialBackoffNs`,
+    /// provided it is still the one on file (a `load()`/`connect()` in
+    /// between already replaced or cancelled it). Sends in the meantime
+    /// fail quietly; every command is retried anyway.
     private func scheduleRedial(duckID: DuckID, replacing failed: NWConnection) {
         guard connections[duckID] === failed else { return }
+        failed.cancel()
         Task { [weak self] in
             try? await Task.sleep(nanoseconds: self?.redialBackoffNs ?? 0)
             await self?.redial(duckID: duckID, replacing: failed)
@@ -468,7 +652,6 @@ public actor SwarmMaster {
 
     private func redial(duckID: DuckID, replacing failed: NWConnection) {
         guard connections[duckID] === failed, let entry = roster[duckID] else { return }
-        failed.cancel()
         let fresh = makeConnection(for: entry)
         connections[duckID] = fresh
         startReceiving(duckID: duckID, connection: fresh)
@@ -671,14 +854,23 @@ public actor SwarmMaster {
 
     /// Sends one `state` tick to every duck; returns whether the loop
     /// should keep running (only while armed/playing, per the API contract).
+    /// Also where the show ends: once the master's show clock passes
+    /// `meta.duration` the transport drops to `.stopped` (no `stop` is
+    /// fanned out — the agents end playback themselves at that instant,
+    /// docs/swarmlink-protocol.md §5, and a `stop` after a `seek` past the
+    /// end would only race them).
     private func publishStateTick() -> Bool {
         guard !Task.isCancelled, transport == .armed || transport == .playing else { return false }
+        if transport == .playing, let show, let showTime = clock.showTime(), showTime >= show.meta.duration {
+            haltTransport()
+            return false
+        }
         stateSeq += 1
         let message = StateMessage(
             seq: stateSeq,
             show: showID,
             transport: transport,
-            showTime: clock.showTime() ?? 0,
+            showTime: currentShowTime() ?? 0,
             masterTime: MasterClock.nowNanoseconds()
         )
         guard let data = try? JSONEncoder().encode(message) else { return true }
@@ -730,5 +922,9 @@ public actor SwarmMaster {
 
     private func removeTelemetryContinuation(_ id: UUID) {
         telemetryContinuations.removeValue(forKey: id)
+    }
+
+    private func removeTransportContinuation(_ id: UUID) {
+        transportContinuations.removeValue(forKey: id)
     }
 }

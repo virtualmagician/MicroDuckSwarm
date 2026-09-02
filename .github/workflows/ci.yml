@@ -33,8 +33,12 @@ jobs:
 
   swift:
     runs-on: macos-latest
+    timeout-minutes: 8
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
       - name: Cache .build
         uses: actions/cache@v4
         with:
@@ -48,3 +52,6 @@ jobs:
       - name: Swift test
         run: swift test
         working-directory: SwarmLink
+      - name: OSC e2e
+        timeout-minutes: 5
+        run: ./scripts/e2e_osc.sh

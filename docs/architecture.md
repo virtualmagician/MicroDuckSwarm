@@ -23,7 +23,7 @@ StageWizard (Mac) ── robotShow cue ──▶ SwarmLink (Swift package)
 | `python/duck_agent` | Python (stdlib) | On-duck daemon: SwarmLink agent side (time sync, commands, telemetry), 50 Hz playback into `robotd`. |
 | `python/mock_duck` | Python (stdlib) | Protocol-faithful fake `robotd` (Unix socket + TCP). Records every intent with timestamps for assertions. Dev without hardware. |
 | `python/tools/showmaster.py` | Python (stdlib) | Reference master CLI (protocol conformance + e2e tests). |
-| `SwarmLink` | Swift 6 (zero deps) | Production master engine: roster, clock, command fan-out, telemetry/preflight. Embeds in StageWizard as the `robotShow` cue player; `swarmctl` CLI + OSC facade for external rigs. |
+| `SwarmLink` | Swift 6 (zero deps) | Production master engine: roster, clock, command fan-out, telemetry/preflight. `swarmctl` CLI; `swarmctl serve` exposes the OSC facade (`docs/osc-facade.md`) for external rigs; later embeds in StageWizard as the `robotShow` cue player. |
 
 Both masters implement `docs/swarmlink-protocol.md`; both robot ends implement `docs/robotd-api.md`. The docs are the contracts — change docs first, then code.
 
@@ -39,7 +39,7 @@ Master↔agent clock sync well under 10 ms on a dedicated AP (min-RTT NTP-style 
 
 - **M0 (now, pre-hardware):** everything in this repo running against `mock_duck` + the browser simulator. Format, agent, mock, SwarmLink skeleton, e2e demo.
 - **M1 (first duck):** hardware bring-up — latency measurements, `robot.setMode` semantics, battery/boot timing, camera access for servo cues, watchdog behavior on the local socket.
-- **M2:** show-grade core — agent as systemd unit, provisioning scripts, OSC facade on SwarmLink, 2–3 ducks to music from a `swarmctl`/OSC GO.
+- **M2:** show-grade core — agent as systemd unit, provisioning scripts, 2–3 ducks to music from a `swarmctl`/OSC GO. (OSC facade: done 2026-09-02, pre-hardware.)
 - **M3:** full flock — preflight dashboard, timeline editor with beat grid, rehearsal tools (seek/loop/solo), servo cues (laser/color homing, marker follow).
 - **M4+:** NPU person following, overhead tag tracking for true formations, Blender import.
 - **StageWizard integration** (the `robotShow` cue type embedding SwarmLink) is **parked** until the hardware is in hand and everything above it is ready; the OSC facade covers triggering in the meantime.
@@ -47,4 +47,5 @@ Master↔agent clock sync well under 10 ms on a dedicated AP (min-RTT NTP-style 
 ## Decisions log
 
 - 2026-09-01 — Engine as a Swift package used both ways (StageWizard cue type + OSC facade). Authoring = record infra + minimal timeline UI in parallel. V1 spatial scope: in-place + loose walks + servo cues; no overhead tracking. Duck-agent in Python first. Custom `.onnx` policy triggering in scope via `requires.policies` + `mode` events.
+- 2026-09-02 — OSC facade shipped (`swarmctl serve`, docs/osc-facade.md): StageWizard/StageWand-style contract, own MIT codec ported; reviewed by a second adversarial workflow (31 findings → 26 fixed, 4 refuted-as-spec-conformant). Swift↔Python interop is now gated by `scripts/e2e_osc.sh` in CI's macOS job.
 - 2026-09-01 (later) — StageWizard integration parked until hardware arrives and the rest is ready. M0 hardened by an adversarial review workflow (88 findings → 72 fixed); CI added; e2e verifier now checks curve values, rates, and end-of-show ordering.
