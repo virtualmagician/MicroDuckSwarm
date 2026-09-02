@@ -40,8 +40,8 @@ Master↔agent clock sync well under 10 ms on a dedicated AP (min-RTT NTP-style 
 - **M0 (now, pre-hardware):** everything in this repo running against `mock_duck` + the browser simulator. Format, agent, mock, SwarmLink skeleton, e2e demo.
 - **M1 (first duck):** hardware bring-up — latency measurements, `robot.setMode` semantics, battery/boot timing, camera access for servo cues, watchdog behavior on the local socket, and the duck-agent's achieved tick rate on the RK3566 (Python reaches ~38 Hz on a dev Mac and ~16 Hz on a loaded CI VM; if the duck cannot hold ≥ 40 Hz, port the tick loop to Rust).
 - **M2:** show-grade core — agent as systemd unit, provisioning scripts, 2–3 ducks to music from a `swarmctl`/OSC GO. (OSC facade: done 2026-09-02, pre-hardware.)
-- **M3:** full flock — preflight dashboard, timeline editor with beat grid, rehearsal tools (seek/loop/solo), servo cues (laser/color homing, marker follow).
-- **M4+:** NPU person following, overhead tag tracking for true formations, Blender import.
+- **M3:** full flock — preflight dashboard, timeline editor with beat grid, rehearsal tools (seek/loop/solo), servo cues (laser/color homing, marker follow), and the 3D stage viewer (`docs/viewer.md`) — kinematic, dependency-free, house/three-quarter/top cameras.
+- **M4+:** NPU person following, overhead tag tracking for true formations, Blender import, real-policy preview (MuJoCo-WASM + onnxruntime-web driving one hero duck through the viewer's pose interface).
 - **StageWizard integration** (the `robotShow` cue type embedding SwarmLink) is **parked** until the hardware is in hand and everything above it is ready; the OSC facade covers triggering in the meantime.
 
 ## Decisions log
