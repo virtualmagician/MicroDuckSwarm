@@ -69,3 +69,14 @@ Any robotd error ▶ FAULT: robot.stop, report last_error, accept load/panic.
 ```
 
 The invariant that matters on stage: **a duck never improvises to catch up.** It performs from its local copy on its disciplined clock, joins late only within the 2 s grace, and otherwise sits the number out looking composed.
+
+## 6 · Puppet stream (master → one agent, unicast, ≤ 50 Hz, unacknowledged)
+
+```
+{"v":1, "type":"puppet", "seq": 1042, "master_time": <master_ns>,
+ "move": {"vx": 0.1, "vy": 0.0, "vyaw": 0.0}, "head": {"neck_pitch": 0, "head_pitch": -0.2, "head_yaw": 0, "head_roll": 0},
+ "pose": {"z": 0, "roll": 0, "pitch": 0, "active": false}, "mouth": {"open": 0.0},
+ "do": "kick_left", "sound": "chirp"}
+```
+
+Every field except `seq` is optional; a packet carries only what the sender wants to assert this tick. Loss-tolerant by design (the next packet comes in 20 ms), so no ACK and no retry; agents drop packets with a `seq` ≤ the last one seen. A packet is **fresh for 250 ms** (the deadman): while fresh, `move` is forwarded directly in IDLE/LOADED and *added* to the timeline's locomotion while PLAYING (clamped to the validation limits), and `head`/`pose`/`mouth` override the timeline; when the stream goes stale, puppet influence is removed — locomotion zeroed at once when not playing. `do`/`sound` fire once per `seq` that carries them. Values are validated against the same limits as show files; out-of-range packets are clamped, malformed ones dropped. Telemetry adds `"puppet": true|false`. Panic, stop, and load are unaffected by puppet traffic and always win. See `docs/authoring.md`.

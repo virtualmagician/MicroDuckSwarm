@@ -107,6 +107,10 @@ Shows that need non-stock policies declare them:
 
 Limits live in `python/duckshow/limits.py` as data, not scattered constants; the validator reports every violation with role, track, and `t`.
 
+## Editor and tool fields
+
+Tools may keep their own state in a top-level `"editor"` object (for example the timeline editor's per-role stage start marks under `editor.marks`). Loaders ignore it like any unknown field; editors preserve unknown fields on round-trip. Recorder-generated curve tracks are decimated to keyframes on value change (or at least every 100 ms) with `interp: "linear"` — see `docs/authoring.md`.
+
 ## Compiled form
 
 None in v1 — agents parse the JSON directly and sample on the fly (a 5-minute, 10-duck show is well under a megabyte). If parsing ever matters on the RK3566, add a compiled form *behind the same sampler API*.
