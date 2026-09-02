@@ -40,12 +40,13 @@ SAMPLE_WINDOW_S = 0.5
 
 # Rate floor: the tick loop is nominally 50 Hz (docs/architecture.md), but
 # a threaded Python process on a shared/non-RT machine measurably runs
-# below that (~38 Hz observed on a quiet dev Mac). This floor is set well
-# below realistic achieved rates so it only trips on a real regression
-# (e.g. a loop that silently degraded to ~10 Hz or slower), not machine
-# noise.
-MIN_AVG_HZ = 20.0
-MAX_P95_GAP_MS = 100.0
+# below that: ~38 Hz on a quiet dev Mac, ~16 Hz on a GitHub macos-latest
+# runner with two mock ducks, two agents and swarmctl all sharing the VM.
+# This floor only exists to trip on a real regression (a loop that
+# silently degraded to a few Hz), never on runner speed. Agent tick
+# throughput on the real RK3566 is an M1 measurement item.
+MIN_AVG_HZ = 12.0
+MAX_P95_GAP_MS = 150.0
 
 CONTINUOUS_METHODS = {"robot.head", "robot.move", "robot.pose", "robot.mouth"}
 
