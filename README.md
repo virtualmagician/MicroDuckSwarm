@@ -72,11 +72,14 @@ Pre-hardware. MicroDuck units ship late 2026. Everything here runs today against
 |---|---|
 | Cross-duck event sync (localhost, mock ducks) | **1.3 ms** measured, against a ~20 ms perceptual budget |
 | Clock discipline | NTP-style over UDP, min-RTT filtered, slew-limited |
-| Tests | 326 Python, 175 Swift, 146 editor |
+| Tests | 330 Python, 175 Swift, 224 editor |
 | End-to-end gates | 3: Python master, Swift master over OSC, recorder round-trip |
+| Physics bake | **3.6 s** for the eight-duck, 64 s show (25,600 frames, 8,602 frames/sec) |
 | Third-party runtime dependencies | **0** |
 
-That zero is deliberate and load-bearing. Python is standard-library only so the agent runs on a stock Armbian image. SwarmLink uses only system frameworks. The editor has no build step and no CDN, so it opens at a venue with no internet.
+That zero is deliberate and load-bearing. Python is standard-library only so the agent runs on a stock Armbian image. SwarmLink uses only system frameworks. The editor has no build step and no CDN, so it opens at a venue with no internet. The physics baker in `tools/bake/` is the one exception, and it is an optional developer tool: nothing in the repo imports it, no duck installs it, and everything works with it absent.
+
+**Provisioning** (`deploy/`, `docs/provisioning.md`) is written but untested against hardware, which every script says in its own header.
 
 ## Roadmap
 
@@ -84,13 +87,13 @@ Not built yet, and what unblocks each item.
 
 | Not built | Trigger |
 |---|---|
-| **Provisioning:** systemd unit, rsync deploy, `.onnx` policy push | Hardware. Depends on service ordering on Armbian, real filesystem paths, and `robotd` restart behaviour mid-session. |
 | **Hardware bring-up:** latency and jitter measurement, `robot.setMode` timing, battery and boot timing, deadman behaviour under load | Hardware. |
 | **Rust port of the agent tick loop** | Only if the RK3566 cannot hold 40 Hz in Python. The `robotd` deadman is 500 ms, so a stalled tick loop zeroes velocity. |
 | **DuckSwarm.app:** SwiftUI shell around SwarmLink, editor in a WKWebView, recorder, preflight dashboard | Real telemetry. The dashboard shows battery, RSSI, clock offset and heartbeat age; the thresholds are unknown until measured. |
 | **Servo cues:** laser homing, colour-beacon homing, marker following | Camera access for our agent alongside `mediad`, which owns it for WebRTC. Untested. |
-| **Create Preview:** baked real-policy physics (MuJoCo plus the shipped ONNX policies) replayed through the viewer's pose interface | A populated `assets/microduck/` with Pollen's MJCF and meshes. The renderer already takes a pose stream, so the substitution is additive. See [`docs/viewer.md`](docs/viewer.md). |
-| **Intended-versus-actual drift diff:** planned and simulated paths drawn together | Follows the bake. Quantifies dead-reckoning drift, which the ducks cannot measure themselves (no localization). |
+| **Intended-versus-actual drift diff:** planned and simulated paths drawn together | Nothing. Both paths are now on disk in comparable coordinates. This is the next thing to build. |
+| **Physically simulated skills** in the bake | Ambiguity in the show format, not missing capability. Several skill events have no documented hand-off rule (two `sit_toggle` events 2 s apart against a 2 s ramp), so the baker logs them unsimulated rather than guessing. |
+| **BAM actuator model** in the bake | Porting `microduck_rl`'s Python implementation. Until then the bake uses stock MuJoCo actuators, which is a fidelity gap in front of the ordinary sim-to-real one. |
 | **Overhead tag tracking** for tight walking formations | Only if in-place work and loose blocking prove insufficient in rehearsal. |
 | **Markerless person following** on the onboard NPU (~0.8 TOPS) | After marker-based servo cues work. |
 | **Blender import** for spatial authoring | Only if timeline authoring proves too slow for longer pieces. |
@@ -107,13 +110,18 @@ Most of this is gated on hardware. MicroDuck currently quotes a four-to-six mont
 | `docs/robotd-api.md` | Verified MicroDuck `robotd` JSON-RPC surface (API v17) |
 | `docs/osc-facade.md` | OSC 1.0 control surface for external rigs |
 | `docs/authoring.md` | Puppeteering, `swarmctl record`, the timeline editor |
-| `docs/viewer.md` | The 3D stage viewer, and the planned baked-physics preview |
+| `docs/viewer.md` | The 3D stage viewer and the baked-physics preview |
+| `docs/bake-parts.md` | What the bake needs, where each part comes from, and its licence |
+| `docs/bake-format.md` | The `duckbake/1` pose-cache format |
+| `docs/provisioning.md` | Installing the agent on a duck, and pushing shows and policies |
 | `python/duckshow/` | Format library: parse, validate, sample at 50 Hz |
 | `python/duck_agent/` | On-duck agent: clock discipline, local playback, telemetry, puppet channel |
 | `python/mock_duck/` | Protocol-faithful mock `robotd`, with a timestamped intent log |
 | `python/tools/` | Reference show master, stdlib OSC send and listen, puppet streamer |
 | `SwarmLink/` | Swift 6 package: master engine, `swarmctl` CLI, OSC facade, recorder |
-| `editor/` | Zero-dependency timeline editor and WebGL2 stage viewer |
+| `editor/` | Zero-dependency timeline editor, WebGL2 stage viewer, bake playback |
+| `tools/bake/` | Optional native physics baker (MuJoCo plus the shipped policies) |
+| `deploy/` | Systemd unit and provisioning scripts, untested against hardware |
 | `shows/` | Example choreographies, including the eight-duck `octet` |
 | `scripts/` | Launcher and three end-to-end gates |
 
@@ -151,12 +159,30 @@ Three ways into a `.duckshow` file, detailed in [`docs/authoring.md`](docs/autho
 
 - **Puppet with a gamepad.** `swarmctl record` streams a controller to one duck over the live puppet channel and captures the intent stream as that role's tracks, one role at a time, layering onto a show that plays back around you.
 - **Scripted recordings.** `--input script:<file.json>` replays timed input frames instead of a live controller. Reproducible, which is how CI exercises the recorder.
-- **The timeline editor.** Keyframes and events on a beat grid, with the 3D stage above showing the whole cast.
+- **The timeline editor.** Keyframes and events on a beat grid, with the 3D stage above showing the whole cast. Roles can be renamed from their lane header, and **S** and **M** solo and mute a duck for rehearsal: a soloed or muted duck holds its neutral pose and dims in the 3D view. Solo and mute are session state and never touch the show file.
 
 The puppet channel doubles as a show-night nudge layer. Puppeteering a duck mid-playback *adds* to its locomotion and *overrides* its head and pose while packets stay fresh (250 ms deadman), then hands control back to the timeline. Panic and stop mute it outright, because the safety invariants always win.
 
+### Create Preview: baked physics
+
+The kinematic viewer answers questions about staging. It cannot tell you whether the real policies will survive the choreography. `tools/bake/` does: it drives a MuJoCo simulation of each role against the shipped ONNX policies and writes a `duckbake/1` pose cache, which the editor replays through the same renderer. Physics is a render step, not a live mode, so scrubbing keeps working because you are scrubbing recorded data.
+
+```bash
+cd tools/bake
+python3.12 -m venv .venv && .venv/bin/pip install -r requirements.txt   # once
+.venv/bin/python3 bake_show.py ../../shows/octet/octet.duckshow.json /tmp/octet.duckbake.json
+```
+
+The eight-duck, 64 second octet bakes in 3.6 seconds. Load the cache in the editor and the badge changes from KINEMATIC PREVIEW to BAKED PHYSICS; a cache whose show hash does not match is refused rather than replayed misleadingly.
+
+Read the bake log inside the cache, because it is the honest part. Skills are not physically simulated yet and are recorded as such, roller mode is held rather than run through the wrong model, and the actuator model is stock MuJoCo rather than the BAM model the policies were trained against. A bake raises confidence. It does not replace a rehearsal.
+
+Requires `assets/microduck/`, which you supply yourself (see below). Format in [`docs/bake-format.md`](docs/bake-format.md), parts and setup in [`docs/bake-parts.md`](docs/bake-parts.md).
+
 ## Assets and licensing
 
-This repository contains **no Pollen Robotics files**. MicroDuck's meshes, MJCF model and hardware design files are licensed CC BY-SA-NC and are not redistributed here. The duck in the viewer is our own geometry, built from primitives. The planned physics preview ([`docs/viewer.md`](docs/viewer.md)) loads Pollen's model from a gitignored `assets/microduck/` that you supply yourself, the way an emulator does not ship a BIOS.
+This repository contains **no Pollen Robotics files**. MicroDuck's meshes, MJCF model and hardware design files are licensed CC BY-SA-NC and are not redistributed here.
+
+The duck in the viewer is our own geometry, built from primitives, and it is what a fresh clone renders. If you supply Pollen's assets in a gitignored `assets/microduck/` (the way an emulator does not ship a BIOS, see [`docs/bake-parts.md`](docs/bake-parts.md) §2), the viewer uses the real robot meshes instead and the physics bake becomes available. Absent, both fall back silently and everything still works.
 
 MIT, see [LICENSE](LICENSE). MicroDuck is a product of [Pollen Robotics](https://pollen-robotics.com/) and [Hugging Face](https://huggingface.co/pollen-robotics). This is an independent, unaffiliated project, built by an enthusiast with admiration for the original.
