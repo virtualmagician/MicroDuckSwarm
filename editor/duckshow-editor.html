@@ -236,6 +236,7 @@
   <span class="field"><label for="f-music">music file</label><input id="f-music" type="text"></span>
   <input id="open-file" type="file" accept=".json,application/json" class="hidden">
   <input id="audio-file" type="file" accept="audio/*" class="hidden">
+  <input id="bake-file" type="file" accept=".json,application/json" class="hidden">
 </header>
 
 <div id="toolbar">
@@ -265,7 +266,7 @@
 <main id="main">
   <div id="workspace">
     <section id="stage-section">
-      <h2>stage <span class="count" style="font-weight:400">1 house · 2 ¾ · 3 top · drag orbit · scroll dolly · drag mark in top view</span><button id="btn-viewer-names" class="toggle" aria-pressed="false" title="Show/hide each duck's role name above its head (remembered in this browser)">names</button></h2>
+      <h2>stage <span class="count" style="font-weight:400">1 house · 2 ¾ · 3 top · drag orbit · scroll dolly · drag mark in top view</span><button id="btn-viewer-names" class="toggle" aria-pressed="false" title="Show/hide each duck's role name above its head (remembered in this browser)">names</button><button id="btn-bake-open" title="Load a baked pose cache (a .duckbake.json from tools/bake) and play it back in place of the kinematic preview — docs/viewer.md &quot;Create Preview&quot;">Play Baked…</button><button id="btn-bake-exit" class="hidden" title="Back to the live kinematic preview">Kinematic ↩</button></h2>
       <div id="viewer-wrap">
         <canvas id="stage"></canvas>
         <div id="viewer-role-labels"></div>
@@ -323,6 +324,8 @@ import {
   mixCamera, cameraEase, CAMERA_TRANSITION_MS,
 } from './viewer-gl.js';
 import { DUCK_HEIGHT_M } from './viewer-duck.js';
+import * as bakeCache from './bake-cache.js'; // Feature A: baked-physics pose cache playback (docs/viewer.md "Create Preview")
+import { loadRealDuckAssets } from './duck-mesh.js'; // Feature B: real MicroDuck meshes when assets/microduck/ is present
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -372,6 +375,18 @@ const state = {
   // dv.createRehearsalState() here only as a same-shape placeholder before
   // that runs.
   rehearsal: dv.createRehearsalState(),
+  // Feature A (docs/viewer.md "Create Preview"): the exact bytes last
+  // loaded from a file/demo/URL — the only thing a baked cache's
+  // show.sha256 can be honestly checked against (see bake-cache.js). Set
+  // in loadShowText(); cleared the moment any edit lands (setShow's own
+  // dirty:true branch) or by New, since neither has a source file to
+  // re-hash against. showText === null means "cannot verify" — the open
+  // flow refuses to play a cache rather than guess.
+  showText: null,
+  // The validated duckbake/1 document currently playing, or null for the
+  // live kinematic preview (the normal state). Non-null only after its
+  // show.sha256 has matched showText above — see loadBakeCache().
+  bakeCache: null,
 };
 
 function duration() { return state.norm?.meta.duration ?? 0; }
@@ -405,6 +420,17 @@ function setShow(show, { dirty, resetHistory = false } = {}) {
   state.issues = core.validate(show);
   if (resetHistory) { state.history.length = 0; state.future.length = 0; }
   if (dirty !== undefined) state.dirty = dirty;
+  // An edit (commit/undo/redo all pass dirty:true) means the live
+  // document no longer matches the bytes state.showText captured at
+  // load — a baked cache's show.sha256 can no longer be honestly
+  // checked against it (see loadBakeCache()). A fresh load passes
+  // dirty:false and sets state.showText itself, right after this call.
+  if (dirty === true) state.showText = null;
+  // Playing a baked cache is tied to one specific loaded show; any edit
+  // (or a fresh load — see loadShowText/btn-new/boot below) exits it
+  // rather than silently keep replaying stale recorded data against a
+  // document that has since changed underneath it.
+  if (state.bakeCache) exitBakeMode({ quiet: true });
   const roleSet = new Set(roles());
   for (const r of [...state.collapsed]) if (!roleSet.has(r)) state.collapsed.delete(r);
   if (state.selection && !selectionValid()) state.selection = null;
@@ -1417,7 +1443,94 @@ const viewer = {
   namesOn: loadViewerNamesPref(),
   roleLabelEls: new Map(), // role -> persistent DOM node, reused across frames (never recreated per paint)
   neutralRoles: new Set(), // dv.resolveNeutralRoles(state.rehearsal, roles()) — recomputed in syncViewerShow(), read every paintViewer()
+  realMesh: null, // Feature B (docs/viewer.md): a loadRealDuckAssets() result once assets/microduck/ has been found and loaded, else null (primitive duck)
 };
+
+// ---------------------------------------------------------------------------
+// Feature A — Create Preview playback (docs/viewer.md "Create Preview
+// (baked physics)"). The renderer needs no changes at all for this: it
+// already just draws whatever pose array draw() is handed
+// (docs/viewer.md item 3, "Pose in, pixels out") — playing a cache means
+// swapping *where paintViewer() gets that array from*, nothing else.
+// Scrubbing, the playhead, camera, trails and selection all keep working
+// exactly as they do for the kinematic path because they are the same
+// code either way; only the pose/trail source below differs.
+// ---------------------------------------------------------------------------
+
+/** btn-bake-open / bake-file: validate, hash-check against the loaded show, and (only if both pass) start playback. */
+async function loadBakeCache(file) {
+  let text;
+  try { text = await file.text(); } catch (err) { status(`cannot read ${file.name}: ${err.message}`, 'error'); return; }
+  let raw;
+  try { raw = JSON.parse(text); } catch (err) { status(`cannot open ${file.name}: not valid JSON (${err.message})`, 'error'); return; }
+  try { bakeCache.validateBakeCache(raw); } catch (err) { status(`cannot open ${file.name}: ${err.message}`, 'error'); return; }
+
+  if (!state.showText) {
+    status(`cannot verify ${file.name} against the loaded show — it has been edited since it was opened (or never loaded from a file). Reload the original .duckshow.json, then try again.`, 'error');
+    return;
+  }
+  const match = await bakeCache.checkShowHashMatch(raw, state.showText);
+  if (!match.ok) {
+    // Say so plainly rather than replaying something misleading
+    // (docs/viewer.md Feature A) — refuse outright, stay in kinematic
+    // mode, and name both hashes so a mismatch is diagnosable, not just
+    // asserted.
+    status(`${file.name}: does not match the loaded show (hash mismatch) — baked from a different or since-edited show.duckshow.json. Cache expects show ${match.expected.slice(0, 12)}…, loaded show is ${match.actual.slice(0, 12)}…. Not playing it back.`, 'error');
+    return;
+  }
+
+  state.bakeCache = raw;
+  pause();
+  const summary = bakeCache.summarize(raw);
+  const notes = [];
+  if (summary.unsimulatedRoles.length) notes.push(`${summary.unsimulatedRoles.length} unsimulated`);
+  if (summary.fallenRoles.length) notes.push(`${summary.fallenRoles.length} fell`);
+  status(`playing baked physics — ${file.name}: ${summary.roles} roles, ${summary.duration}s${notes.length ? ' · ' + notes.join(' · ') : ''}`, 'ok');
+  updateBakeUi();
+  renderAll();
+}
+
+/** The way back to the live kinematic preview (docs/viewer.md Feature A). */
+function exitBakeMode({ quiet = false } = {}) {
+  if (!state.bakeCache) return;
+  state.bakeCache = null;
+  if (!quiet) status('back to the kinematic preview');
+  updateBakeUi();
+  renderAll();
+}
+
+function updateBakeUi() {
+  const active = Boolean(state.bakeCache);
+  const badge = $('viewer-badge');
+  if (badge) badge.textContent = active ? 'baked physics' : 'kinematic preview';
+  const exitBtn = $('btn-bake-exit');
+  if (exitBtn) exitBtn.classList.toggle('hidden', !active);
+}
+
+/** Per-frame paint while a baked cache is playing — the pose/trail counterpart to paintViewer()'s kinematic path below. */
+function paintBakedViewer() {
+  const cache = state.bakeCache;
+  const t = state.playhead;
+  const roleSet = new Set(roles());
+  const poses = bakeCache.poseAllAtTime(cache, t).filter((p) => roleSet.has(p.role));
+  const trails = {};
+  for (const role of cache.roles) {
+    if (!roleSet.has(role)) continue;
+    trails[role] = bakeCache.bakeTrail(cache, role, t, dv.TRAIL_MAX_POINTS, role === viewer.selectedRole);
+  }
+  viewer.renderer.setTrails(trails);
+  viewer.renderer.setSelected(viewer.selectedRole);
+  viewer.renderer.draw(poses);
+  // Skill/sound events still come straight from the show's own tracks —
+  // a pose cache doesn't carry them (docs/bake-format.md: "sound events
+  // ... are not logged", and `do` events are what the log's
+  // skill_unsimulated entries are about, not a pose-cache field), so
+  // this half of a frame is identical to the kinematic path.
+  const labels = dv.deriveEventLabels(state.norm, t, dv.DEFAULT_EVENT_LABEL_WINDOW);
+  viewer.lastLabels = labels;
+  paintEventLabels(labels);
+  updateRoleLabelPositions();
+}
 
 /** Shows (or updates) the "viewer unavailable" overlay banner over the stage canvas. */
 function showViewerBanner(text) {
@@ -1452,6 +1565,11 @@ function initViewer() {
         status('3D stage viewer: GPU context restored', 'ok');
         syncViewerShow();
         paintViewer();
+        // A fresh GL context has no real-duck mesh buffers (see
+        // viewer-gl.js's own onContextLost handler, which drops the
+        // dead reference) — re-fetch/re-upload them if they were
+        // present before. Silent no-op if assets/microduck/ is absent.
+        loadRealMeshAssets();
       },
     });
   } catch (err) {
@@ -1461,6 +1579,29 @@ function initViewer() {
     return;
   }
   viewer.renderer.setCamera('house');
+}
+
+// ---------------------------------------------------------------------------
+// Feature B — real MicroDuck meshes when assets/microduck/ is present
+// (docs/viewer.md "real meshes when available"). Entirely additive to the
+// renderer: StageRenderer.setRealDuckAssets() swaps every duck's draw
+// path from the primitive model to the real one; the primitive duck
+// stays fully intact and is what a fresh clone (no assets/microduck/)
+// keeps seeing. Never throws, never logs a console error on failure —
+// see duck-mesh.js's loadRealDuckAssets() for why: absence is the
+// expected default state, not a bug.
+// ---------------------------------------------------------------------------
+async function loadRealMeshAssets() {
+  if (!viewer.renderer || !viewer.renderer.gl) return;
+  const real = await loadRealDuckAssets(viewer.renderer.gl);
+  if (!real) return; // assets/microduck/ absent, or something in it didn't load — primitive duck stays in use, silently
+  viewer.renderer.setRealDuckAssets(real);
+  viewer.realMesh = real;
+  status(
+    `real MicroDuck meshes loaded: ${real.meshCount} unique meshes, ${real.perDuckTriangleCount.toLocaleString()} triangles/duck (${real.uniqueTriangleCount.toLocaleString()} unique geometry, shared across every duck)`,
+    'ok',
+  );
+  paintViewer();
 }
 
 /** Structural sync (cast colours, start marks, dead-reckoned paths) — call after any show edit. */
@@ -1501,6 +1642,7 @@ function syncViewerShow() {
 /** Per-frame paint (poses/trails/labels at the current playhead) — render on change only, no permanent loop. */
 function paintViewer() {
   if (!viewer.renderer || !state.show) return;
+  if (state.bakeCache) { paintBakedViewer(); return; }
   // state.norm here too (see syncViewerShow): deriveFrame's per-role
   // derivePose() and deriveEventLabels() each normalize independently, and
   // an already-normalized doc makes that O(1) instead of a full reparse of
@@ -1906,6 +2048,11 @@ function loadShowText(text, fileName) {
     pause();
     state.selection = null; state.collapsed.clear(); state.fileName = fileName; state.fileHandle = null; state.playhead = 0;
     setShow(show, { dirty: false, resetHistory: true });
+    // Captured AFTER setShow (whose dirty:false branch leaves showText
+    // alone) — these are the exact bytes a baked cache's show.sha256
+    // can be checked against (bake-cache.js checkShowHashMatch), until
+    // the next edit invalidates it (see setShow's dirty:true branch).
+    state.showText = text;
     zoomFit();
     setViewerCameraPreset('house');
     const errs = state.issues.filter((i) => i.severity === 'error').length;
@@ -1925,6 +2072,16 @@ $('open-file').onchange = async (e) => {
   loadShowText(await file.text(), file.name);
   e.target.value = '';
 };
+
+// Feature A (docs/viewer.md "Create Preview") — open a baked pose cache
+// and play it back; see loadBakeCache()/exitBakeMode() above.
+$('btn-bake-open').onclick = () => $('bake-file').click();
+$('bake-file').onchange = async (e) => {
+  const file = e.target.files[0];
+  if (file) await loadBakeCache(file);
+  e.target.value = '';
+};
+$('btn-bake-exit').onclick = () => exitBakeMode();
 
 async function save() {
   let text;
@@ -1957,6 +2114,7 @@ $('btn-new').onclick = () => {
   const show = core.newShow({ name: 'Untitled', duration: 30, bpm: 120, roles: ['lead'] });
   pause(); state.selection = null; state.collapsed.clear(); state.fileName = 'untitled.duckshow.json'; state.fileHandle = null; state.playhead = 0;
   setShow(show, { dirty: false, resetHistory: true }); zoomFit();
+  state.showText = null; // no source file to verify a baked cache's hash against (see loadBakeCache)
   setViewerCameraPreset('house');
   status('new show');
 };
@@ -2089,6 +2247,11 @@ async function boot() {
   window.__duckshowEditorBooted = true;
   applyWorkspaceH(clampWorkspaceH(loadWorkspaceH()));
   initViewer();
+  // Fire-and-forget: fetches + parses assets/microduck/ if present (up to
+  // ~24 MB of STL over the local dev server) and swaps in the real duck
+  // once ready, repainting itself — never blocks the rest of boot(), and
+  // resolves to a silent no-op when the directory is absent (Feature B).
+  loadRealMeshAssets();
   state.show = null;
   setShow(starterShow(), { dirty: false, resetHistory: true });
   state.fileName = 'starter.duckshow.json';

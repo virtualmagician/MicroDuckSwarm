@@ -35,6 +35,12 @@ import {
   buildDuckAssets, disposeDuckAssets, drawDuck, updateWalkState,
   DIMMED_FACTOR as DUCK_DIMMED_FACTOR,
 } from './viewer-duck.js';
+// Real-mesh duck (docs/viewer.md Feature B) — same mutual-import shape as
+// viewer-duck.js above (that module also imports mat4/mesh helpers back
+// from this file); see duck-mesh.js's own header for why. Never touched
+// unless setRealDuckAssets() has been called with a successful load —
+// the primitive path above is completely unchanged when it hasn't been.
+import { drawRealDuck, disposeRealDuckAssets } from './duck-mesh.js';
 
 // ---------------------------------------------------------------------------
 // Small scalar helpers
@@ -267,6 +273,47 @@ export function mat4FromZRotation(rad) {
     0, 0, 1, 0,
     0, 0, 0, 1,
   ]);
+}
+
+/**
+ * Rotation-only mat4 from a unit quaternion in MuJoCo's own [w,x,y,z]
+ * order (docs/bake-parts.md §1a; every quat= attribute in a Pollen MJCF
+ * file, Feature B "real meshes when available"). Standard formula,
+ * verified by hand against this file's own mat4FromZRotation/
+ * mat4FromXRotation for the equivalent single-axis quaternion (same
+ * column-major layout, same handedness) — see duck-mesh.js's own
+ * coordinate-conversion comment for the worked check. Translation is
+ * identity; chain with mat4FromTranslation for a full transform, exactly
+ * like every other mat4From*Rotation helper here.
+ */
+export function mat4FromQuat(q) {
+  const w = q[0], x = q[1], y = q[2], z = q[3];
+  const x2 = x + x, y2 = y + y, z2 = z + z;
+  const xx = x * x2, xy = x * y2, xz = x * z2;
+  const yy = y * y2, yz = y * z2, zz = z * z2;
+  const wx = w * x2, wy = w * y2, wz = w * z2;
+  return new Float32Array([
+    1 - (yy + zz), xy + wz, xz - wy, 0,
+    xy - wz, 1 - (xx + zz), yz + wx, 0,
+    xz + wy, yz - wx, 1 - (xx + yy), 0,
+    0, 0, 0, 1,
+  ]);
+}
+
+/**
+ * Rotation-only mat4 for `angle` radians about an arbitrary (not
+ * necessarily unit) `axis` — built as the equivalent quaternion and fed
+ * through mat4FromQuat above, rather than a second hand-derived matrix
+ * formula, so the two can never drift out of sync with each other's
+ * handedness. Every joint in the Pollen MJCF this project reads happens
+ * to use axis="0 0 1" (duck-mesh.js), but this stays general rather than
+ * hard-coding that.
+ */
+export function mat4FromAxisAngle(axis, angle) {
+  const len = Math.hypot(axis[0], axis[1], axis[2]) || 1;
+  const half = angle / 2;
+  const s = Math.sin(half) / len;
+  return mat4FromQuat([Math.cos(half), axis[0] * s, axis[1] * s, axis[2] * s]);
 }
 
 export function mat4Translate(a, v) {
@@ -1240,6 +1287,15 @@ export class StageRenderer {
     this._cameraRAF = null;
     this._lastPoses = [];
     this._walkStates = new Map();
+    // Real MicroDuck mesh (docs/viewer.md Feature B) — null until
+    // setRealDuckAssets() hands one over (duckshow-editor.html's own
+    // async probe/load, see duck-mesh.js's loadRealDuckAssets); every
+    // duck draws with the primitive model above until then, and again
+    // immediately if clearRealDuckAssets() is ever called or a GL
+    // context is lost (a fresh context has no uploaded real-duck
+    // buffers, so this stays null across restoration — the caller is
+    // responsible for re-loading if it wants real meshes back).
+    this._realDuck = null;
     this._lastFrameTime = now();
     this._aspect = 1;
     this._disposed = false;
@@ -1262,6 +1318,13 @@ export class StageRenderer {
       // so the next live setTrails() recreates them instead of trying to
       // bufferSubData into a buffer that no longer exists.
       this._trailBuffers.clear();
+      // The real-duck mesh buffers (if any were loaded) are dead zombie
+      // handles too, same reasoning as the trail buffers above — drop
+      // the reference so drawing falls back to the primitive duck rather
+      // than binding a buffer from the dead context. duckshow-editor.html
+      // re-loads real meshes on context restoration (see its own
+      // onContextRestored handler).
+      this._realDuck = null;
       if (this._onContextLost) this._onContextLost();
     };
     this._handleContextRestored = () => {
@@ -1297,6 +1360,28 @@ export class StageRenderer {
     this._castByRole = new Map(this._cast.map((c) => [c.role, c]));
     return this;
   }
+
+  /**
+   * Switch every duck from the primitive model to the real MicroDuck
+   * mesh (docs/viewer.md Feature B) — `real` is a duck-mesh.js
+   * loadRealDuckAssets() result. Disposes whatever real-duck GL
+   * resources were previously loaded first, so calling this again (e.g.
+   * after a re-fetch) never leaks buffers.
+   */
+  setRealDuckAssets(real) {
+    if (this._realDuck) disposeRealDuckAssets(this.gl, this._realDuck);
+    this._realDuck = real || null;
+    return this;
+  }
+
+  /** Back to the primitive duck for every role — releases the real-duck GL buffers. */
+  clearRealDuckAssets() {
+    if (this._realDuck) disposeRealDuckAssets(this.gl, this._realDuck);
+    this._realDuck = null;
+    return this;
+  }
+
+  hasRealDuckAssets() { return Boolean(this._realDuck); }
 
   setMarks(marks) {
     this._marks = (marks || []).map((m) => ({ ...m }));
@@ -1628,8 +1713,13 @@ export class StageRenderer {
       // it isn't performing, so a bright highlight on it would read as a
       // contradiction, not an accent.
       const rimBoost = pose.role === this._selected && !pose.dimmed ? 0.9 : 0.0;
+      const dim = pose.dimmed ? DUCK_DIMMED_FACTOR : 1;
 
-      drawDuck(gl, this._lit, this._duckAssets, rootModel, pose, walkState, color, rimBoost, pose.dimmed ? DUCK_DIMMED_FACTOR : 1);
+      if (this._realDuck) {
+        drawRealDuck(gl, this._lit, this._realDuck, rootModel, pose, walkState, color, rimBoost, dim);
+      } else {
+        drawDuck(gl, this._lit, this._duckAssets, rootModel, pose, walkState, color, rimBoost, dim);
+      }
     }
   }
 
@@ -1646,6 +1736,7 @@ export class StageRenderer {
     freeGlMesh(gl, this._unitDisc);
     for (const buf of this._trailBuffers.values()) gl.deleteBuffer(buf.vbo);
     disposeDuckAssets(gl, this._duckAssets);
+    if (this._realDuck) disposeRealDuckAssets(gl, this._realDuck);
   }
 }
 

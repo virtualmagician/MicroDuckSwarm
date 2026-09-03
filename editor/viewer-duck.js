@@ -237,7 +237,7 @@ function mixColor(base, tint, t) {
  * times faster than the distance they'd actually covered, a blur instead
  * of the waddle the art direction asks for.
  */
-function legSwing(walkPhase, standAmount, side) {
+export function legSwing(walkPhase, standAmount, side) {
   const phase = walkPhase + (side < 0 ? Math.PI : 0);
   const thigh = Math.sin(phase) * 0.5 * standAmount;
   const lift = Math.max(0, Math.sin(phase + 0.55));

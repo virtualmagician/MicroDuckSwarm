@@ -10,8 +10,8 @@
 //     "type": "module") to this file, which registers every suite in one
 //     process.
 //
-// Either way, exactly the nine suites below run, once. Keep this list in
-// sync when adding a test file.
+// Either way, exactly the suites below run, once. Keep this list in sync
+// when adding a test file.
 import './sampler.test.mjs';
 import './validator.test.mjs';
 import './roundtrip.test.mjs';
@@ -21,3 +21,6 @@ import './beatgrid.test.mjs';
 import './viewer-gl.test.mjs';
 import './viewer-pose.test.mjs';
 import './rehearsal.test.mjs';
+import './stl-parser.test.mjs';
+import './bake-cache.test.mjs';
+import './asset-probe.test.mjs';

@@ -1,0 +1,28 @@
+# tools/bake — the native physics baker. Pinned per docs/bake-format.md.
+#
+# THIS IS NOT COVERED BY CLAUDE.md #1 ("Python is stdlib-only, no pip
+# dependencies, ever"). That rule is about python/ (duck-agent, the
+# duckshow parser, mock_duck) — it must keep running on a stock Armbian
+# image with nothing installed. tools/bake/ is a separate, optional
+# developer tool: never imported by python/, never installed on a duck,
+# not required to use the editor or run a show. See docs/bake-format.md
+# "Why this is exempt from CLAUDE.md #1" and docs/bake-parts.md §3.3's
+# open tension, which this directory's existence resolves the way that
+# document already recommended (a structurally separate tools/bake/,
+# never python/tools/).
+#
+# Setup (Python 3.12 specifically — see below):
+#   cd tools/bake
+#   python3.12 -m venv .venv
+#   .venv/bin/pip install -r requirements.txt
+#
+# Python 3.12 is required, not just this repo's general 3.10+ floor.
+# mujoco and onnxruntime don't care, but the optional BAM actuator path
+# (docs/bake-parts.md §3.5, not implemented yet — see docs/bake-format.md
+# "What isn't simulated") pins better-actuator-models to >=3.12,<3.13.
+# Using 3.12 for the whole venv now means adding that package later is a
+# pip install, not a venv rebuild.
+
+mujoco==3.3.7
+onnxruntime==1.20.1
+numpy==2.2.6

@@ -16,21 +16,28 @@ All of the following live in `pollen-robotics/microduck_rl`, under `src/mjlab_mi
 
 | Artifact | Size | Needed for | Status |
 |---|---|---|---|
-| `robot_walk.xml` + `robot_walk_backlash.xml` | 32,017 B / 34,104 B | Legged walk-only model (trunk/head contacts stripped — cheap falls) | Confirmed present; license inferred |
-| `robot_allcollisions.xml` + `_backlash` | 32,898 B / 34,985 B | Full-collision legged model — needed for stand/sit/ground-pick/kick/roulade, i.e. every `do` skill event and the `pose.z` crouch | Confirmed present; license inferred |
-| `robot_allcollisions_rollers.xml` + `_backlash` | 35,688 B / 37,775 B | Standalone roller-skate model (own passive wheel joints/bodies, does **not** `<include>` the leg files) — for `mode: "roller"` | Confirmed present; license inferred |
-| `scene.xml`, `scene_walk.xml`, `scene_backlash.xml`, `scene_walk_backlash.xml`, `scene_rollers.xml`, `scene_ball.xml` | 1.2–2.6 KB each | Floor + light + STAND/SIT/FOLD keyframes wrapping a robot file | Confirmed present; license inferred |
+| `robot_walk.xml` + `robot_walk_backlash.xml` | 32,023 B / 34,110 B | Legged walk-only model (trunk/head contacts stripped — cheap falls) | Confirmed present; license inferred; re-verified 2026-09-03 |
+| `robot_groundcontact.xml` + `robot_groundcontact_backlash.xml` | 32,904 B / 34,991 B | Full-collision legged model — needed for stand/sit/ground-pick/kick/roulade, i.e. every `do` skill event and the `pose.z` crouch. **Renamed upstream** — see note below | Confirmed present; license inferred; re-verified 2026-09-03 |
+| `robot_groundcontact_rollers.xml` + `robot_groundcontact_rollers_backlash.xml` | 35,693 B / 37,780 B | Standalone roller-skate model (own passive wheel joints/bodies, does **not** `<include>` the leg files) — for `mode: "roller"`. **Renamed upstream** — see note below | Confirmed present; license inferred; re-verified 2026-09-03 |
+| `scene.xml`, `scene_walk.xml`, `scene_backlash.xml`, `scene_walk_backlash.xml`, `scene_rollers.xml`, `scene_ball.xml` | 1.2–2.6 KB each | Floor + light + STAND/SIT/FOLD keyframes wrapping a robot file | Confirmed present; license inferred; re-verified 2026-09-03 |
 | `additional.xml`, `joints_properties.xml`, `sensors.xml` | 611 B / 1,780 B / 357 B | Injected into every export (actuator/sensor definitions) | Confirmed present; license inferred |
 | `ball.xml` | 706 B | 70 mm/15 g prop for the `kick_left`/`kick_right` skills | Confirmed present; license inferred |
-| `config_mjcf_*.json` (6 files) | ~1.8–2.2 KB each | `onshape-to-robot` export recipes (CAD source URL, `max_stl_size: 1.0` MB, sed post-processing) — reference only, not needed at bake time | Confirmed present; license inferred |
-| 47 STL meshes, `assets/` subdir | 26,080,648 B (~26.08 MB) | All visual/collision geometry | Confirmed present; license is the one explicit statement in the README (below) |
-| 47 matching `.part` sidecars | ~18 KB total | `onshape-to-robot` metadata, not geometry — safe to skip | Confirmed present |
+| `config_mjcf_*.json` (7 files as of 2026-09-03, up from 6) | ~1.5–2.2 KB each | `onshape-to-robot` export recipes (CAD source URL, `max_stl_size: 1.0` MB, sed post-processing) — reference only, not needed at bake time | Confirmed present; license inferred; re-verified 2026-09-03 |
+| 43 STL meshes, `assets/` subdir | 23,581,712 B (~23.58 MB) | All visual/collision geometry | Confirmed present; license is the one explicit statement in the README (below) |
+| 43 matching `.part` sidecars | 16,626 B (~16.6 KB) total | `onshape-to-robot` metadata, not geometry — safe to skip | Confirmed present |
+
+**Re-verified against upstream 2026-09-03, via the GitHub API** (`repos/pollen-robotics/microduck_rl/git/trees/develop?recursive=1` — `microduck_rl`'s default branch is `develop`, not `main`, same drift §3.5/§3.6 already flag). Upstream is under active development; re-check before trusting these names again. Two things changed since this table was first written:
+
+- **43 STL meshes, not 47** (and 43 `.part` sidecars, not 47) — sizes above are updated to match.
+- **The "full-collision" and roller MJCF files were renamed, and the old name was reassigned to a different file.** The model actually `<include>`d by `scene.xml`, `scene_backlash.xml`, and `scene_ball.xml` today — the one carrying every `do`-skill collision surface, previously named `robot_allcollisions.xml` in this table — is now named **`robot_groundcontact.xml`** (+ `robot_groundcontact_backlash.xml`), and (confirmed by direct read of `config_mjcf_groundcontact.json`'s `ignore` block) keeps a curated subset of collision geoms — soles, legs, `power_support`, both head shells, `jaw`, both upper legs, `hip_l`, the NP-F970 battery, both trunk shells — rather than literally every mesh. The roller variant moved with it: **`robot_groundcontact_rollers.xml`** (+ `_backlash`), `<include>`d by `scene_rollers.xml`. A file literally named `robot_allcollisions.xml` (43,020 B, confirmed present, every geom there *does* get a matching collision copy) still exists upstream, but it no longer has a `_backlash` sibling, and it is `<include>`d only by two scenes this document didn't previously know about — `scene_allcollisions.xml` and a new `scene_apartment.xml` (which also pulls in a demo `apartment.xml` floorplan, plus a build-time `add_backlash.py` script and an `allcollisions_contacts.xml` fed only to `robot_allcollisions.xml`'s own export config). None of that feeds the walk/backlash/rollers/ball matrix a bake driver needs, so the table above and §2 below no longer list plain `robot_allcollisions.xml` as required — the sparse-checkout in §2 pulls it in anyway (it fetches the whole directory, not a filtered subset), it's just not on the needed list.
 
 **Explicitly excluded:** `src/mjlab_microduck/robot/xl330_test_bench/` (its own MJCF + 11 STL, 774,024 B) is a servo calibration test-bench rig, not the duck. Don't fetch it.
 
-**License, quoted verbatim** (`microduck_rl/README.md`, License section, Strand 1):
-> This project is licensed under the Apache 2.0 License. See the LICENSE file for details.
-> Hardware design files are licensed under Creative Commons BY-SA-NC.
+**License, quoted verbatim** (`microduck_rl/README.md`, License section; Strand 1 originally, re-fetched 2026-09-03 — wording has shifted slightly since, noted below):
+> This project is licensed under the Apache 2.0 License. See the [LICENSE](LICENSE) file for details.
+> 3D model files are licensed under Creative Commons BY-SA-NC.
+
+(Strand 1's original quote had the second line as *"Hardware design files are licensed under Creative Commons BY-SA-NC."* The file now says *"3D model files"* instead — same restriction, no change in meaning found, noted only because this line claims to be verbatim.)
 
 That is the *entire* licensing text in the repo — no per-directory `LICENSE`/`NOTICE`, no SPDX headers in the XML/JSON files fetched, no explicit path enumeration. **All three strands independently converge on the same conservative reading** — everything in the table above (MJCF, scene wrappers, export configs, STL, `.part`) is CAD-derived or a direct export of the physical assembly, so it falls under "hardware design files" = CC BY-SA-NC — but **all three also flag this as their best-supported inference, not a directly quotable per-file rule.** Treat it exactly as `docs/viewer.md` already does: non-commercial, user-supplied, never vendored, never relabeled by this MIT repo.
 
@@ -38,7 +45,7 @@ Two duplicate-mesh pairs share git blob SHAs under two filenames each (e.g. `lef
 
 ### 1b. Trained ONNX policies — Apache-2.0
 
-Nine policies live in `pollen-robotics/microduck`, directory `policies/` (not in `microduck_rl` — that repo has only the exporter script, no weights).
+**Moved upstream — re-verified 2026-09-03.** Nine policies used to live in `pollen-robotics/microduck`, directory `policies/`; that path is now a 404 (`GET /repos/pollen-robotics/microduck/contents/policies` → `404 Not Found`, confirmed via the GitHub API today). Upstream relocated them to the standalone Hugging Face model repo **`pollen-robotics/microduck-policies`** — same nine `.onnx` files, byte-identical sizes to the table below, confirmed via `HEAD` requests against `https://huggingface.co/pollen-robotics/microduck-policies/resolve/main/<file>` today. §2's fetch commands are updated accordingly. (Still not in `microduck_rl` either way — that repo has only the exporter script, no weights.)
 
 | File | Size | Boot behavior in the reference Space |
 |---|---|---|
@@ -51,13 +58,14 @@ Nine policies live in `pollen-robotics/microduck`, directory `policies/` (not in
 | `roller.onnx` | 793,685 B | lazy (roller mode) |
 | `roller_crouch.onnx` | 793,685 B | lazy (roller mode) |
 | `roulade.onnx` | 793,685 B | eager |
-| `policies/README.md` | 3,547 B | — provenance + contract notes |
+| `policies/README.md` | 3,547 B at its old GitHub location; now 28 B at the HF repo's root `README.md` (re-verified 2026-09-03) | — provenance + contract notes (see caveat below — the provenance text quoted from this file is no longer present at the new location) |
+| `manifest.json` *(new upstream, 2026-09-03, not previously catalogued)* | 1,524 B | Machine-readable policy roster at the HF repo's root — `obs_len`/`action_len`, and per-policy `kind`/`command` encoding. Not investigated further; out of scope for this pass |
 
 All ≈ 793.7 KB, `obs[1,61] -> actions[1,14]` (confirmed independently by `docs/robotd-api.md`'s own `robot.modelApi`/policy-slot description — real robotd validates policies against this exact shape). **The observation normalizer is baked into the ONNX graph** — `scripts/export.py` traces `actor(normalizer(obs))`, so a consumer does not reimplement normalization (Strand 1).
 
-**Provenance caveat, quoted from `policies/README.md`:** these specific files were *"Copied from `apirrone/microduck_runtime` at commit `5f3b314`"* (roulade at a different commit). That source repo returned HTTP 404 when Strand 1 checked it — private, renamed, or deleted, unconfirmed which. It is not possible from this repo's research to verify these exact binaries were produced by `microduck_rl`'s current training code.
+**Provenance caveat, quoted from `policies/README.md`:** these specific files were *"Copied from `apirrone/microduck_runtime` at commit `5f3b314`"* (roulade at a different commit). That source repo returned HTTP 404 when Strand 1 checked it — private, renamed, or deleted, unconfirmed which. It is not possible from this repo's research to verify these exact binaries were produced by `microduck_rl`'s current training code. (The 28-byte `README.md` now at the policies' new Hugging Face location, re-checked 2026-09-03, is just Markdown front matter — `license: apache-2.0` — and no longer carries this provenance sentence anywhere; this quote can no longer be re-confirmed at the current location, though nothing found suggests it was retracted, just dropped when the file was replaced.)
 
-**Licensing — flagged disagreement between strands.** Strand 1 and Strand 2 each independently confirmed Apache-2.0 for these files two ways: the `pollen-robotics/microduck` repo's GitHub-reported license *and* the standalone Hugging Face model `pollen-robotics/microduck-policies`, tagged `license: apache-2.0`. **Strand 3's own parts list, working from README-level access only, marked this same fact `"confirmed": false`.** Two independently-sourced confirmations against one unconfirmed flag — treat Apache-2.0 as the working assumption, but this is exactly the kind of thing worth a five-minute re-check (`https://api.github.com/repos/pollen-robotics/microduck` → `license.spdx_id`) before it matters for redistribution.
+**Licensing — flagged disagreement between strands, now independently re-checked a third way.** Strand 1 and Strand 2 each independently confirmed Apache-2.0 for these files two ways: the `pollen-robotics/microduck` repo's GitHub-reported license *and* the standalone Hugging Face model `pollen-robotics/microduck-policies`, tagged `license: apache-2.0`. **Strand 3's own parts list, working from README-level access only, marked this same fact `"confirmed": false`.** Two independently-sourced confirmations against one unconfirmed flag — treat Apache-2.0 as the working assumption, but this is exactly the kind of thing worth a five-minute re-check before it matters for redistribution. **Re-checked 2026-09-03:** `GET https://api.github.com/repos/pollen-robotics/microduck` → `license.spdx_id` = `"Apache-2.0"`. `GET https://huggingface.co/api/models/pollen-robotics/microduck-policies` → `tags` includes `"license:apache-2.0"` and `cardData.license` = `"apache-2.0"`. Both confirmations hold, directly, today.
 
 ### 1c. Browser-path runtime (only if the browser bake is built — see §3)
 
@@ -97,21 +105,26 @@ assets/microduck/
   mjcf/
     robot_walk.xml
     robot_walk_backlash.xml
-    robot_allcollisions.xml
-    robot_allcollisions_backlash.xml
-    robot_allcollisions_rollers.xml
-    robot_allcollisions_rollers_backlash.xml
+    robot_groundcontact.xml
+    robot_groundcontact_backlash.xml
+    robot_groundcontact_rollers.xml
+    robot_groundcontact_rollers_backlash.xml
     scene.xml  scene_walk.xml  scene_backlash.xml  scene_walk_backlash.xml
     scene_rollers.xml  scene_ball.xml  ball.xml
     additional.xml  joints_properties.xml  sensors.xml
-    assets/              ← the 47 STL files (this is the MJCF compiler's meshdir="assets",
+    assets/              ← the 43 STL files (this is the MJCF compiler's meshdir="assets",
                             so keeping this exact relative name lets the XML files load
                             unmodified — do not rename it)
+    (plus whatever else the unfiltered sparse-checkout below brings along — as of
+     2026-09-03 that also includes robot_allcollisions.xml, scene_allcollisions.xml,
+     scene_apartment.xml, apartment.xml, add_backlash.py, allcollisions_contacts.xml,
+     and 7 config_mjcf_*.json files; harmless to leave in place, none of it is read
+     by anything above — see the §1a note on the renamed full-collision file)
   policies/
     alpha_walking.onnx  alpha_stand.onnx  alpha_sitstand.onnx  alpha_ground_pick.onnx
     ball_kick_left.onnx  ball_kick_right.onnx  roller.onnx  roller_crouch.onnx
     roulade.onnx
-    README.md
+    README.md  manifest.json
 ```
 
 ### Fetch commands
@@ -130,25 +143,21 @@ git -C .src-rl sparse-checkout set src/mjlab_microduck/robot/microduck
 mv .src-rl/src/mjlab_microduck/robot/microduck mjcf
 rm -rf .src-rl
 
-# --- 2. Trained policies (Apache-2.0 — see §1b) ---
-git clone --filter=blob:none --sparse --depth 1 \
-  https://github.com/pollen-robotics/microduck.git .src-policies
-git -C .src-policies sparse-checkout set policies
-mv .src-policies/policies policies
-rm -rf .src-policies
-
-cd ../..
-```
-
-If `git sparse-checkout` isn't available (very old git), the 9 policy files are small enough to fetch individually instead:
-
-```bash
-base="https://raw.githubusercontent.com/pollen-robotics/microduck/main/policies"
+# --- 2. Trained policies (Apache-2.0 — see §1b). Verified 2026-09-03: these are no
+#         longer under pollen-robotics/microduck's `policies/` directory — that path
+#         is a 404 today. Upstream moved them to the standalone Hugging Face model
+#         repo pollen-robotics/microduck-policies. Plain HTTPS below; no git-lfs and
+#         no huggingface_hub package needed, so this still costs nothing but curl. ---
+mkdir -p policies
+base="https://huggingface.co/pollen-robotics/microduck-policies/resolve/main"
 for f in alpha_walking alpha_stand alpha_sitstand alpha_ground_pick \
          ball_kick_left ball_kick_right roller roller_crouch roulade; do
-  curl -fsSL -o "assets/microduck/policies/${f}.onnx" "${base}/${f}.onnx"
+  curl -fsSL -o "policies/${f}.onnx" "${base}/${f}.onnx"
 done
-curl -fsSL -o assets/microduck/policies/README.md "${base}/README.md"
+curl -fsSL -o policies/README.md "${base}/README.md"
+curl -fsSL -o policies/manifest.json "${base}/manifest.json"
+
+cd ../..
 ```
 
 ### Verify the fetch
@@ -156,8 +165,8 @@ curl -fsSL -o assets/microduck/policies/README.md "${base}/README.md"
 Sanity-check against the confirmed sizes in §1a/§1b — a short read or a bad partial fetch will show up as a wrong file count or a wildly different total:
 
 ```bash
-find assets/microduck/mjcf/assets -name '*.stl' | wc -l    # expect 47
-du -sh assets/microduck/mjcf/assets                          # expect ~26 MB
+find assets/microduck/mjcf/assets -name '*.stl' | wc -l    # expect 43 (re-verified 2026-09-03)
+du -sh assets/microduck/mjcf/assets                          # expect ~23.6 MB
 du -sh assets/microduck/policies                             # expect ~7.1 MB
 shasum -a 256 assets/microduck/policies/*.onnx > /tmp/policy-hashes.txt
 ```
@@ -292,7 +301,7 @@ Things no strand could confirm without hardware, without running the actual code
 
 **Licensing / provenance**
 - Whether "hardware design files" in `microduck_rl`'s license clause is meant file-by-file to include the MJCF XML (not just STL/CAD) is not stated anywhere fetched — all three strands read it the same conservative way, but none of them found a sentence that actually enumerates paths.
-- The ONNX policy weights' Apache-2.0 status: confirmed two ways by Strand 1 and Strand 2, flagged unconfirmed by Strand 3's own parts list. Worth a direct re-check (see §1b) before it matters for redistribution.
+- ~~The ONNX policy weights' Apache-2.0 status: confirmed two ways by Strand 1 and Strand 2, flagged unconfirmed by Strand 3's own parts list.~~ **Re-checked directly, 2026-09-03 — see §1b.** `api.github.com/repos/pollen-robotics/microduck` → `license.spdx_id` = `Apache-2.0`; the Hugging Face model `pollen-robotics/microduck-policies` → `license:apache-2.0` in `tags` and `cardData.license`. Both hold.
 - `apirrone/microduck_runtime`, the repo `policies/README.md` names as the actual source of the shipped `.onnx` files, returns HTTP 404. Private, renamed, or deleted — nobody could tell from outside. Means the shipped policies' relationship to `microduck_rl`'s current training code as published is not fully traceable.
 - Whether Pollen would grant explicit permission for this kind of reuse is a question for Pollen, not for research against their public repos. `docs/viewer.md` already suggests asking; still unsent as of this document.
 
