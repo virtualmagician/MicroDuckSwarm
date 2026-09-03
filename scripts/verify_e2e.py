@@ -116,6 +116,72 @@ def sample_near(entries, method, target_show_time, t0, window_s=SAMPLE_WINDOW_S)
     return best_params
 
 
+def interpolate_at(entries, method, field, target_show_time, t0, window_s=SAMPLE_WINDOW_S):
+    """Linearly interpolate `field` to exactly `target_show_time`, using the
+    two samples that bracket it.
+
+    Picking the single nearest sample (the old sample_near) makes the value
+    depend on the achieved tick rate: at ~16 Hz on a loaded CI runner the
+    nearest sample can be 30 ms away, and on a steep part of a curve that is
+    a large value error with no defect behind it. Interpolating removes the
+    tick-rate sensitivity, so the check measures the choreography rather
+    than the machine.
+    """
+    if t0 is None:
+        return None
+    before = after = None  # (show_time, value)
+    for e in entries:
+        msg = e.get("msg", {})
+        if msg.get("method") != method:
+            continue
+        params = msg.get("params") or {}
+        if field not in params:
+            continue
+        st = e["rx_wall"] - t0
+        if abs(st - target_show_time) > window_s:
+            continue
+        pt = (st, params[field])
+        if st <= target_show_time and (before is None or st > before[0]):
+            before = pt
+        if st >= target_show_time and (after is None or st < after[0]):
+            after = pt
+    if before and after:
+        (t_a, v_a), (t_b, v_b) = before, after
+        if t_b - t_a < 1e-9:
+            return v_a
+        f = (target_show_time - t_a) / (t_b - t_a)
+        return v_a + (v_b - v_a) * f
+    if before:
+        return before[1]
+    if after:
+        return after[1]
+    return None
+
+
+def peak_between(entries, method, field, t_from, t_to, t0):
+    """The maximum of `field` over a show-time window.
+
+    A peak is a peak: asking for the value at the exact instant of a maximum
+    only works if a sample happens to land there, which is a coin flip at low
+    tick rates. The choreography's claim is that the mouth fully opens during
+    the gape, so that is what gets checked.
+    """
+    if t0 is None:
+        return None
+    best = None
+    for e in entries:
+        msg = e.get("msg", {})
+        if msg.get("method") != method:
+            continue
+        params = msg.get("params") or {}
+        if field not in params:
+            continue
+        st = e["rx_wall"] - t0
+        if t_from <= st <= t_to and (best is None or params[field] > best):
+            best = params[field]
+    return best
+
+
 def rate_stats(entries, method):
     """(avg_hz, p95_gap_ms, count) for a continuous-notification stream,
     or None if there are fewer than 2 samples to measure a rate from.
@@ -182,18 +248,18 @@ def main():
           "robot.stop at show end", "no robot.stop at show end")
 
     print("lead curve values (sampled near known points on the demo show):")
-    hp = sample_near(lead, "robot.head", 1.0, t0_lead)
-    check(hp is not None and abs(hp.get("head_pitch", 999) - (-0.30)) <= HEAD_ANGLE_TOL,
-          f"head_pitch@~1.0s = {hp.get('head_pitch') if hp else None} (target -0.30)",
-          f"head_pitch@~1.0s = {hp.get('head_pitch') if hp else 'no sample'} (target -0.30 +/-{HEAD_ANGLE_TOL})")
-    hy = sample_near(lead, "robot.head", 6.0, t0_lead)
-    check(hy is not None and abs(hy.get("head_yaw", 999) - 0.6) <= HEAD_ANGLE_TOL,
-          f"head_yaw@~6.0s = {hy.get('head_yaw') if hy else None} (target 0.6)",
-          f"head_yaw@~6.0s = {hy.get('head_yaw') if hy else 'no sample'} (target 0.6 +/-{HEAD_ANGLE_TOL})")
-    mo = sample_near(lead, "robot.mouth", 9.3, t0_lead)
-    check(mo is not None and mo.get("open", -1) >= MOUTH_OPEN_MIN_AT_PEAK,
-          f"mouth open@~9.3s = {mo.get('open') if mo else None} (peak, target >= {MOUTH_OPEN_MIN_AT_PEAK})",
-          f"mouth open@~9.3s = {mo.get('open') if mo else 'no sample'} (target >= {MOUTH_OPEN_MIN_AT_PEAK})")
+    hp = interpolate_at(lead, "robot.head", "head_pitch", 1.0, t0_lead)
+    check(hp is not None and abs(hp - (-0.30)) <= HEAD_ANGLE_TOL,
+          f"head_pitch@1.0s = {hp if hp is None else round(hp, 4)} (target -0.30, interpolated)",
+          f"head_pitch@1.0s = {'no sample' if hp is None else round(hp, 4)} (target -0.30 +/-{HEAD_ANGLE_TOL}, interpolated)")
+    hy = interpolate_at(lead, "robot.head", "head_yaw", 6.0, t0_lead)
+    check(hy is not None and abs(hy - 0.6) <= HEAD_ANGLE_TOL,
+          f"head_yaw@6.0s = {hy if hy is None else round(hy, 4)} (target 0.6, interpolated)",
+          f"head_yaw@6.0s = {'no sample' if hy is None else round(hy, 4)} (target 0.6 +/-{HEAD_ANGLE_TOL}, interpolated)")
+    mo = peak_between(lead, "robot.mouth", "open", 9.0, 9.8, t0_lead)
+    check(mo is not None and mo >= MOUTH_OPEN_MIN_AT_PEAK,
+          f"mouth peak over 9.0-9.8s = {mo if mo is None else round(mo, 4)} (target >= {MOUTH_OPEN_MIN_AT_PEAK})",
+          f"mouth peak over 9.0-9.8s = {'no sample' if mo is None else round(mo, 4)} (target >= {MOUTH_OPEN_MIN_AT_PEAK})")
 
     if t0_lead is not None:
         vx_bad = []
@@ -235,10 +301,13 @@ def main():
         check(key in wing_ev, f"event {key} fired", f"event {key} missing")
 
     print("wing curve values (sampled near known points on the demo show):")
-    pz = sample_near(wing, "robot.pose", 10.5, t0_wing)
-    check(pz is not None and abs(pz.get("z", 999) - (-0.03)) <= POSE_Z_TOL and pz.get("active") is True,
-          f"pose z@~10.5s = {pz.get('z') if pz else None}, active={pz.get('active') if pz else None} (target -0.03, True)",
-          f"pose z@~10.5s = {pz.get('z') if pz else 'no sample'}, active={pz.get('active') if pz else None} "
+    pz = interpolate_at(wing, "robot.pose", "z", 10.5, t0_wing)
+    pz_active = sample_near(wing, "robot.pose", 10.5, t0_wing)
+    active_ok = pz_active is not None and pz_active.get("active") is True
+    check(pz is not None and abs(pz - (-0.03)) <= POSE_Z_TOL and active_ok,
+          f"pose z@10.5s = {pz if pz is None else round(pz, 5)}, active={pz_active.get('active') if pz_active else None} "
+          f"(target -0.03, True; z interpolated)",
+          f"pose z@10.5s = {'no sample' if pz is None else round(pz, 5)}, active={pz_active.get('active') if pz_active else None} "
           f"(target -0.03 +/-{POSE_Z_TOL}, active=True)")
     pa = sample_near(wing, "robot.pose", 11.6, t0_wing)
     check(pa is not None and pa.get("active") is False,
