@@ -33,6 +33,15 @@ export const DEFAULT_INTERP = INTERP_LINEAR;
 export const SKILLS = Object.freeze(['ground_pick', 'kick_left', 'kick_right', 'sit_toggle', 'roulade']);
 export const SOUND_TAGS = Object.freeze(['alarm', 'greet', 'inquire', 'peck', 'chirp', 'coo', 'wheee']);
 
+// The only two drive-mode strings real robotd accepts over the wire
+// (docs/robotd-api.md "Custom .onnx policies & modes"). There is no
+// mechanism to register a custom-named mode -- a custom-trained gait is
+// installed by pointing a fixed policy *slot* at a different .onnx file
+// (requires.policies[].slot), never by inventing a new mode string. A
+// `mode` event's value must be one of these two. Mirrors
+// python/duckshow/limits.py's DRIVE_MODES.
+export const DRIVE_MODES = Object.freeze(['walk', 'roller']);
+
 export const CURVE_TRACKS = Object.freeze(['locomotion', 'head', 'pose', 'mouth']);
 export const ALL_TRACKS = Object.freeze(['locomotion', 'head', 'pose', 'mouth', 'events', 'servo']);
 
@@ -259,14 +268,23 @@ function parseMeta(d) {
   };
 }
 
+// Mirrors python/duckshow/loader.py's _parse_policy: name/file/sha256/slot
+// are all required strings. There is deliberately no `mode` field -- the
+// drive-mode string sent at runtime by a `mode` event is always just
+// "walk" or "roller" (see DRIVE_MODES / checkModeValue below), completely
+// independent of which policy is behind a given slot. A `.duckshow` file
+// written before that was clarified may still carry a `mode` key on a
+// policy entry; it is simply never read here, same "unknown fields are
+// ignored everywhere" discipline as the rest of this format -- and since
+// serializeShow() writes the original parsed document (never this
+// normalized view), that stray key is neither required nor re-emitted.
 function parsePolicy(d) {
   d = requireDict(d, 'requires.policies[]');
   return {
     name: requireStr(get(d, 'name'), 'requires.policies[].name'),
-    mode: requireStr(get(d, 'mode'), 'requires.policies[].mode'),
     file: requireStr(get(d, 'file'), 'requires.policies[].file'),
     sha256: requireStr(get(d, 'sha256'), 'requires.policies[].sha256'),
-    slot: get(d, 'slot'),
+    slot: requireStr(get(d, 'slot'), 'requires.policies[].slot'),
   };
 }
 
@@ -601,10 +619,19 @@ function checkEventFields(issues, role, e) {
   }
 }
 
-function checkModeDeclared(issues, role, events, declaredModes) {
+// Mirrors python/duckshow/validator.py's _check_mode_value: a `mode`
+// event's value must be a real robotd drive mode -- real hardware accepts
+// exactly "walk" or "roller" over the wire and has no mechanism to
+// register a custom-named mode (docs/robotd-api.md "Custom .onnx policies
+// & modes"; docs/duckshow-format.md "Custom .onnx policies"). A
+// custom-trained gait is installed by pointing a fixed policy *slot* at a
+// different .onnx file (requires.policies[]), never by inventing a new
+// mode string, so `requires.policies` plays no part in whether a `mode`
+// event is valid.
+function checkModeValue(issues, role, events) {
   for (const e of events) {
-    if (e.mode !== null && !declaredModes.has(e.mode)) {
-      issue(issues, 'warning', role, 'events', e.t, `mode event references ${pyRepr(e.mode)}, not declared in requires.policies`);
+    if (e.mode !== null && !DRIVE_MODES.includes(e.mode)) {
+      issue(issues, 'error', role, 'events', e.t, `mode=${pyRepr(e.mode)} is not a valid drive mode (expected one of ${pyTuple(DRIVE_MODES)})`);
     }
   }
 }
@@ -673,8 +700,6 @@ export function validate(show, limits = DEFAULT_LIMITS) {
 
   checkMetaDuration(issues, norm);
 
-  const declaredModes = new Set(norm.requires.policies.map((p) => p.mode));
-
   for (const member of norm.cast) {
     const role = member.role;
     if (!norm.tracks.has(role)) {
@@ -710,7 +735,7 @@ export function validate(show, limits = DEFAULT_LIMITS) {
       checkEventFields(issues, role, e);
     }
     checkEventDensity(issues, role, tracks.events, limits);
-    checkModeDeclared(issues, role, tracks.events, declaredModes);
+    checkModeValue(issues, role, tracks.events);
     checkModeLocomotionOverlap(issues, role, norm, tracks.events, limits);
 
     checkServo(issues, role, tracks.servo);
@@ -1026,6 +1051,66 @@ export function removeRole(show, role) {
   if (Array.isArray(next.cast)) next.cast = next.cast.filter((c) => !(c && c.role === role));
   if (isPlainObject(next.tracks)) delete next.tracks[role];
   if (isPlainObject(next.editor) && isPlainObject(next.editor.marks)) delete next.editor.marks[role];
+  return next;
+}
+
+/**
+ * Rename a role, rewriting every place its name is a key: the `cast`
+ * entry, the `tracks` key, and any `editor.marks` entry. One atomic edit —
+ * either the whole show is rewritten consistently and the new show is
+ * returned, or (on validation failure) it throws and `show` is never
+ * touched, never even cloned.
+ *
+ * `to` is trimmed of surrounding whitespace before use. Renaming to the
+ * same name (after trimming) is a no-op that still returns a fresh clone,
+ * not an error.
+ *
+ * The `cast` array entry is rewritten **in place** (same index), never
+ * removed and re-appended — this keeps the role's position in cast order
+ * stable across a rename. That matters beyond tidiness: the timeline's
+ * lane header colour (`duckshow-editor.html`'s `roleColor()`) is indexed
+ * by cast order, so preserving the index keeps every *other* role's
+ * header colour untouched by this rename. The 3D viewer's palette
+ * (`roleColorPalette` in duckshow-viewer.js) is a different, independent
+ * scheme — indexed by each role's rank in the *alphabetically sorted*
+ * name set, by design, so that the palette survives a cast *reorder*
+ * unchanged (see that function's tests). A rename changes the name set,
+ * which can shift that alphabetical rank for roles this function never
+ * touches. This function cannot fix that from here — it has no palette to
+ * preserve, only a show document — so both `StageViewer.setShow` and
+ * duckshow-editor.html's own `syncViewerShow()` separately call
+ * `roleColorPaletteContinuous` (duckshow-viewer.js) on every edit instead
+ * of a bare `roleColorPalette`, to carry the previous palette forward
+ * across a same-shape, single-role rename instead of recomputing it; see
+ * that function's doc comment.
+ *
+ * @throws {RangeError} `from` is not in the cast, `to` is empty or
+ *   whitespace-only after trimming, or `to` (trimmed) already names a
+ *   *different* role in the cast.
+ */
+export function renameRole(show, from, to) {
+  if (typeof from !== 'string' || from === '') throw new RangeError('from must be a non-empty role name');
+  const cast = Array.isArray(show.cast) ? show.cast : [];
+  if (!cast.some((c) => c && c.role === from)) throw new RangeError(`role not in cast: ${pyReprStr(from)}`);
+  const trimmed = typeof to === 'string' ? to.trim() : '';
+  if (trimmed === '') throw new RangeError('role name cannot be empty');
+  if (trimmed !== from && cast.some((c) => c && c.role === trimmed)) {
+    throw new RangeError(`a role named ${pyReprStr(trimmed)} already exists`);
+  }
+
+  const next = clone(show);
+  if (trimmed === from) return next; // no-op rename; still a fresh object per the "-> new show" contract
+
+  next.cast = next.cast.map((c) => (c && c.role === from ? { ...c, role: trimmed } : c));
+  if (isPlainObject(next.tracks) && Object.prototype.hasOwnProperty.call(next.tracks, from)) {
+    next.tracks[trimmed] = next.tracks[from];
+    delete next.tracks[from];
+  }
+  if (isPlainObject(next.editor) && isPlainObject(next.editor.marks)
+      && Object.prototype.hasOwnProperty.call(next.editor.marks, from)) {
+    next.editor.marks[trimmed] = next.editor.marks[from];
+    delete next.editor.marks[from];
+  }
   return next;
 }
 

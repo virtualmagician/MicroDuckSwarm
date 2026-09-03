@@ -268,8 +268,11 @@ export function deriveTrail(path, t, maxPoints = TRAIL_MAX_POINTS, boost = false
 // ---------------------------------------------------------------------------
 // Event labels — skills/sounds have no pose, so they surface as a floating
 // label for a short window around their fire time (docs/viewer.md §4/editor
-// integration). `mode` events are not shown: they select a policy, not a
-// visible action.
+// integration). `mode` events are not shown: a mode event switches drive
+// mode ("walk"/"roller"), which has no visible pose of its own to label —
+// it is not the same thing as installing a custom .onnx (that is a
+// pre-show config step: pointing a fixed policy slot at a file, see
+// docs/duckshow-format.md "Custom .onnx policies").
 // ---------------------------------------------------------------------------
 
 export const DEFAULT_EVENT_LABEL_WINDOW = { before: 0.1, after: 1.0 };
@@ -337,6 +340,28 @@ function toHex2(v) { return Math.round(clamp(v, 0, 1) * 255).toString(16).padSta
 function rgbToHex(rgb) { return `#${toHex2(rgb[0])}${toHex2(rgb[1])}${toHex2(rgb[2])}`; }
 
 /**
+ * If `prevRoles` and `newRoles` are the same length and differ at exactly
+ * one index, that's an in-place rename (`{from, to}` at that index) —
+ * exactly the shape `core.renameRole` produces. Any other change (add,
+ * remove, reorder, more than one differing slot) returns null. Used by
+ * `roleColorPaletteContinuous` below to carry colours forward across a
+ * rename; see its doc comment.
+ */
+export function singleRenameAt(prevRoles, newRoles) {
+  if (!Array.isArray(prevRoles) || !Array.isArray(newRoles) || prevRoles.length !== newRoles.length) return null;
+  let from = null, to = null, diffCount = 0;
+  for (let i = 0; i < prevRoles.length; i++) {
+    if (prevRoles[i] !== newRoles[i]) {
+      diffCount++;
+      if (diffCount > 1) return null;
+      from = prevRoles[i];
+      to = newRoles[i];
+    }
+  }
+  return diffCount === 1 ? { from, to } : null;
+}
+
+/**
  * role -> {role,hue,saturation,lightness,rgb:[r,g,b] (0..1),hex} for every
  * name in `roleNames`. Deterministic per role, order-independent.
  */
@@ -352,6 +377,52 @@ export function roleColorPalette(roleNames, opts = {}) {
     palette.set(role, { role, hue, saturation: s, lightness: l, rgb, hex: rgbToHex(rgb) });
   });
   return palette;
+}
+
+/**
+ * `roleColorPalette` for `roleNames`, but reusing `prevPalette` (that same
+ * function's result from the previous call, keyed by `prevRoleNames`)
+ * instead of recomputing from scratch when exactly one role was renamed in
+ * place (`singleRenameAt` above) — every unaffected role keeps its exact
+ * previous colour object, and the renamed role carries its own previous
+ * colour forward under the new name. Any other change (add, remove,
+ * reorder, more than one rename at once, or no usable previous palette)
+ * falls back to a full, fresh `roleColorPalette(roleNames)`.
+ *
+ * Why this needs to exist at all: `roleColorPalette` is deliberately a
+ * pure function of the *set* of role names, sorted alphabetically — that
+ * is what makes it survive a cast *reorder* untouched (see its own tests).
+ * The flip side is that a *rename* changes the name set, which can shift
+ * that alphabetical rank — and so the hue — for every OTHER role too. A
+ * live authoring session (`StageViewer`, and `duckshow-editor.html`'s own
+ * hand-rolled equivalent) calls this on every edit instead, so "rename one
+ * duck" never means "half the flock changes colour" mid-show-design.
+ * `roleColorPalette` itself is left exactly as-is: this wraps it rather
+ * than changing its sort, so the "stable under cast reorder" contract
+ * those tests pin down stays intact for every other caller.
+ */
+export function roleColorPaletteContinuous(prevRoleNames, prevPalette, roleNames) {
+  if (Array.isArray(prevRoleNames) && prevPalette && prevPalette.size) {
+    const renamed = singleRenameAt(prevRoleNames, roleNames);
+    if (renamed) {
+      const fromColor = prevPalette.get(renamed.from);
+      if (fromColor) {
+        const palette = new Map();
+        let ok = true;
+        for (const role of roleNames) {
+          if (role === renamed.to) {
+            palette.set(role, { ...fromColor, role });
+          } else {
+            const existing = prevPalette.get(role);
+            if (!existing) { ok = false; break; }
+            palette.set(role, existing);
+          }
+        }
+        if (ok) return palette;
+      }
+    }
+  }
+  return roleColorPalette(roleNames);
 }
 
 // ---------------------------------------------------------------------------
@@ -540,6 +611,7 @@ export class StageViewer {
 
   /** Load a show: precomputes every role's dead-reckoned path and palette. Call once per edit. */
   setShow(show) {
+    const prevNorm = this._show ? normalizeShow(this._show) : null;
     this._show = show;
     const norm = normalizeShow(show);
     this._marks = resolveMarks(show);
@@ -547,7 +619,12 @@ export class StageViewer {
     for (const member of norm.cast) {
       this._paths.set(member.role, precomputeRolePath(show, member.role, this._marks.get(member.role), this._dt));
     }
-    this._palette = roleColorPalette(norm.roleNames());
+    // roleColorPaletteContinuous (see its own doc comment): carries colours
+    // forward across an in-place rename instead of letting a rename's
+    // change to the alphabetically-sorted name set reshuffle every OTHER
+    // role's hue too — a real risk of roleColorPalette's own, deliberate,
+    // order-independent design (nasty mid-show-design surprise otherwise).
+    this._palette = roleColorPaletteContinuous(prevNorm ? prevNorm.roleNames() : null, this._palette, norm.roleNames());
     if (typeof this.renderer.setPalette === 'function') this.renderer.setPalette(this._palette);
     this._scheduleRender();
   }

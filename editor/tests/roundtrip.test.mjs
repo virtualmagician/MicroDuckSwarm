@@ -16,7 +16,7 @@ const WITH_UNKNOWNS = `{
   "format": "duckshow/1",
   "x_top_level": {"nested": [1, 2, {"deep": true}]},
   "meta": {"name": "Unknowns", "duration": 4.0, "x_meta": "keep", "music": {"bpm": 90, "x_music": 1}},
-  "requires": {"policies": [{"name": "p", "mode": "roller", "file": "p.onnx", "sha256": "abc", "x_policy": 7}], "x_requires": null},
+  "requires": {"policies": [{"name": "p", "mode": "roller", "file": "p.onnx", "sha256": "abc", "slot": "walk", "x_policy": 7}], "x_requires": null},
   "cast": [{"role": "lead", "notes": "n", "x_cast": [true]}],
   "tracks": {
     "lead": {

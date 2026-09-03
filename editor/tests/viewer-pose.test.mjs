@@ -12,6 +12,7 @@ import {
   deriveTrail,
   deriveEventLabels, DEFAULT_EVENT_LABEL_WINDOW,
   roleColorPalette, PALETTE_SATURATION, PALETTE_LIGHTNESS,
+  singleRenameAt, roleColorPaletteContinuous,
   easeInOutCubic, blendCameraStates, easeCamera, cameraPresetState,
   CAMERA_PRESET_NAMES, CAMERA_EASE_DURATION,
   StageViewer,
@@ -228,6 +229,84 @@ describe('role colour palette', () => {
     const palette = roleColorPalette(many);
     const hues = [...palette.values()].map((v) => v.hue);
     assert.equal(new Set(hues.map((h) => Math.round(h * 100))).size, many.length, 'no two roles collided on a hue');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Rename-safe palette continuity (docs/viewer.md-adjacent: role-rename
+// feature). roleColorPalette above is deliberately a pure function of the
+// alphabetically-sorted *name set*, which is what makes it order-stable —
+// but it means a rename, which changes that set, can shift another role's
+// alphabetical rank (and hue) too. roleColorPaletteContinuous is the fix
+// for a *live* editing session; roleColorPalette itself is untouched.
+// ---------------------------------------------------------------------------
+
+describe('singleRenameAt', () => {
+  test('detects an in-place rename: same length, exactly one differing slot', () => {
+    assert.deepEqual(singleRenameAt(['a', 'b', 'c'], ['a', 'zzz', 'c']), { from: 'b', to: 'zzz' });
+    assert.deepEqual(singleRenameAt(['lead'], ['front']), { from: 'lead', to: 'front' });
+  });
+
+  test('returns null for anything that is not exactly one renamed slot', () => {
+    assert.equal(singleRenameAt(['a', 'b'], ['a', 'b']), null); // nothing changed
+    assert.equal(singleRenameAt(['a', 'b'], ['a', 'b', 'c']), null); // a role was added
+    assert.equal(singleRenameAt(['a', 'b', 'c'], ['a', 'b']), null); // a role was removed
+    assert.equal(singleRenameAt(['a', 'b'], ['b', 'a']), null); // reorder, not a rename
+    assert.equal(singleRenameAt(['a', 'b', 'c'], ['x', 'y', 'c']), null); // two slots differ
+    assert.equal(singleRenameAt(null, ['a']), null);
+    assert.equal(singleRenameAt(['a'], null), null);
+  });
+});
+
+describe('roleColorPaletteContinuous', () => {
+  const roles = ['lead', 'wing', 'left'];
+
+  test('a single in-place rename carries every colour forward, including the renamed role\'s own', () => {
+    const p1 = roleColorPalette(roles);
+    const renamed = ['lead', 'front', 'left']; // 'wing' -> 'front', same slot
+    const p2 = roleColorPaletteContinuous(roles, p1, renamed);
+    assert.equal(p2.get('lead'), p1.get('lead'), 'unaffected role should be the exact same colour object');
+    assert.equal(p2.get('left'), p1.get('left'), 'unaffected role should be the exact same colour object');
+    assert.deepEqual({ ...p2.get('front'), role: 'wing' }, p1.get('wing'), "renamed role keeps its own previous colour");
+    assert.equal(p2.get('front').role, 'front');
+    assert.equal(p2.has('wing'), false);
+  });
+
+  test('anything other than a single in-place rename falls back to a fresh roleColorPalette', () => {
+    const p1 = roleColorPalette(roles);
+    // add
+    assert.deepEqual(roleColorPaletteContinuous(roles, p1, [...roles, 'tail']), roleColorPalette([...roles, 'tail']));
+    // remove
+    assert.deepEqual(roleColorPaletteContinuous(roles, p1, ['lead', 'left']), roleColorPalette(['lead', 'left']));
+    // reorder (no rename) — same result either way since roleColorPalette is order-independent, but must not throw or drop entries
+    assert.deepEqual(roleColorPaletteContinuous(roles, p1, [...roles].reverse()), roleColorPalette(roles));
+    // no previous palette at all (first load)
+    assert.deepEqual(roleColorPaletteContinuous(null, null, roles), roleColorPalette(roles));
+  });
+
+  test('two renames at once are not treated as a single in-place rename', () => {
+    const p1 = roleColorPalette(roles);
+    const bothRenamed = ['front', 'flank', 'left'];
+    const p2 = roleColorPaletteContinuous(roles, p1, bothRenamed);
+    assert.deepEqual(p2, roleColorPalette(bothRenamed));
+  });
+});
+
+describe('StageViewer carries palette colours across a role rename', () => {
+  test('setShow with an in-place-renamed cast keeps every other role\'s colour object identical', () => {
+    const palettes = [];
+    const viewer = new StageViewer(null, { render: () => {}, setPalette: (p) => palettes.push(p) });
+    viewer.setShow(show({ lead: {}, wing: {}, left: {} }));
+    const before = palettes.at(-1);
+
+    const renamedDoc = show({ lead: {}, front: {}, left: {} }, { cast: ['lead', 'front', 'left'] });
+    viewer.setShow(renamedDoc);
+    const after = palettes.at(-1);
+
+    assert.equal(after.get('lead'), before.get('lead'));
+    assert.equal(after.get('left'), before.get('left'));
+    assert.equal(after.get('front').hex, before.get('wing').hex, "renamed role keeps its own previous colour too");
+    assert.equal(after.has('wing'), false);
   });
 });
 

@@ -99,6 +99,8 @@ This keeps the repo cleanly MIT with no third-party assets in it, keeps the defa
 
 Worth doing anyway: ask Pollen whether they will grant explicit permission for an open-source authoring tool for their robot. It costs an email and would let us simplify all of the above.
 
+See `docs/bake-parts.md` for the full parts list, exact asset-setup commands, and a browser-vs-native feasibility verdict with real numbers.
+
 ## Tests
 
 `node --test editor/tests` — pure logic only, no GL context: pose derivation from a show (dead reckoning matches `duckshow-core.js`'s existing `integrate`, head/pose/mouth pass through, `walkPhase` advances with speed and holds when stopped), the role-colour palette (ten distinguishable hues, deterministic per role, stable across reorderings), camera preset interpolation, and the matrix maths (multiply, invert, perspective, lookAt) against hand-computed values. Rendering itself is verified by eye against the art direction above.

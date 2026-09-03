@@ -104,6 +104,7 @@
   .lane-head { display: flex; flex-direction: column; justify-content: center; padding: 0 6px; border-bottom: 1px solid var(--line); overflow: hidden; }
   .lane-head.group { flex-direction: row; align-items: center; gap: 6px; background: var(--group); font-weight: 600; }
   .lane-head.group .name { flex: 1; overflow: hidden; text-overflow: ellipsis; }
+  .lane-head.group .name input { width: 100%; font: inherit; font-weight: inherit; font-size: 11px; padding: 0 3px; min-height: 18px; }
   .lane-head.group button { min-height: 18px; padding: 0 5px; font-size: 11px; }
   .lane-head .title { color: var(--fg2); font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; }
   .lane-head .readout { font-family: var(--mono); font-size: 11px; display: flex; flex-wrap: wrap; gap: 0 8px; margin-top: 2px; }
@@ -150,6 +151,23 @@
     padding: 1px 6px; border-radius: 3px; background: var(--bg3); border: 1px solid var(--line); color: var(--fg);
   }
   .viewer-label.sound { opacity: 0.65; }
+  /* Persistent per-role name labels (docs/viewer.md-adjacent: not the
+     skill/sound event labels above, a separate always-on overlay). The
+     stage floor is fixed light regardless of the editor's own dark/light
+     theme (docs/viewer.md "Colour"), so the pill deliberately does NOT use
+     the --bg3/--fg theme tokens .viewer-label uses — a dark-theme pill
+     would otherwise sit unreadably dark-on-dark against nothing, since here
+     it's always over the light floor, not over the editor chrome. */
+  #viewer-role-labels { position: absolute; inset: 0; pointer-events: none; overflow: hidden; }
+  .role-label {
+    position: absolute; transform: translate(-50%, -100%); white-space: nowrap; font-size: 10px;
+    display: flex; align-items: center; gap: 4px; padding: 2px 7px 2px 5px; border-radius: 999px;
+    background: rgba(255,255,255,0.85); border: 1px solid rgba(0,0,0,0.14); color: #1a1d23;
+    font-weight: 500; letter-spacing: 0.01em; box-shadow: 0 1px 2px rgba(0,0,0,0.12);
+  }
+  .role-label i { display: inline-block; width: 6px; height: 6px; border-radius: 50%; flex: none; }
+  .role-label.selected { border-color: var(--sel); box-shadow: 0 0 0 1px var(--sel); font-weight: 700; }
+  #stage-section h2 button { min-height: 18px; padding: 0 7px; font-size: 10px; margin-left: 6px; }
   #stage-legend { padding: 0 8px 6px; color: var(--fg2); font-size: 11px; display: flex; flex-wrap: wrap; gap: 4px 10px; }
   #stage-legend i { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 4px; vertical-align: middle; }
   #stage-legend span { cursor: pointer; }
@@ -230,9 +248,10 @@
 <main id="main">
   <div id="workspace">
     <section id="stage-section">
-      <h2>stage <span class="count" style="font-weight:400">1 house · 2 ¾ · 3 top · drag orbit · scroll dolly · drag mark in top view</span></h2>
+      <h2>stage <span class="count" style="font-weight:400">1 house · 2 ¾ · 3 top · drag orbit · scroll dolly · drag mark in top view</span><button id="btn-viewer-names" class="toggle" aria-pressed="false" title="Show/hide each duck's role name above its head (remembered in this browser)">names</button></h2>
       <div id="viewer-wrap">
         <canvas id="stage"></canvas>
+        <div id="viewer-role-labels"></div>
         <div id="viewer-labels"></div>
         <div id="viewer-badge">kinematic preview</div>
       </div>
@@ -308,6 +327,8 @@ const DEMO_URL = '../shows/demo/demo.duckshow.json';
 const VIEWER_ORBIT_SPEED = 0.008;   // radians per pixel of drag
 const VIEWER_DOLLY_SPEED = 0.0015;  // exponential distance change per wheel-delta unit
 const VIEWER_MARK_HIT_M = 0.28;     // metres — pick radius for grabbing a start mark in Top view
+const ROLE_LABEL_HEIGHT_M = DUCK_HEIGHT_M + 0.05; // world Y for a name pill — just above the head
+const VIEWER_NAMES_KEY = 'duckshow-editor:viewer-names';
 
 const $ = (id) => document.getElementById(id);
 // Pointer capture keeps a drag alive outside the canvas; synthetic/stale pointers may throw, which is harmless.
@@ -548,7 +569,8 @@ function rebuildHeaders() {
       const cast = state.norm.cast.find((c) => c.role === lane.role);
       const collapsed = state.collapsed.has(lane.role);
       el.innerHTML = `<button class="collapse" title="${collapsed ? 'expand' : 'collapse'}">${collapsed ? '▸' : '▾'}</button>`
-        + `<span class="name" style="color:${roleColor(lane.role)}" title="click to highlight this duck in the stage viewer"></span><button class="remove danger" title="remove role">✕</button>`;
+        + `<span class="name" style="color:${roleColor(lane.role)}" title="click to highlight this duck in the stage viewer"></span>`
+        + `<button class="rename" title="Rename role">✎</button><button class="remove danger" title="remove role">✕</button>`;
       el.querySelector('.name').textContent = lane.role + (cast?.notes ? ` · ${cast.notes}` : '');
       el.querySelector('.collapse').onclick = () => { state.collapsed.has(lane.role) ? state.collapsed.delete(lane.role) : state.collapsed.add(lane.role); renderAll(); };
       el.querySelector('.remove').onclick = () => {
@@ -558,6 +580,7 @@ function rebuildHeaders() {
         ev.stopPropagation();
         setViewerSelectedRole(state.viewerSelectedRole === lane.role ? null : lane.role);
       };
+      el.querySelector('.rename').onclick = (ev) => { ev.stopPropagation(); startRoleRename(lane.role, el); };
       if (state.viewerSelectedRole === lane.role) el.classList.add('viewer-selected');
     } else if (lane.kind === 'curve') {
       el.innerHTML = `<div class="title">${lane.track}</div><div class="readout"></div>`;
@@ -568,6 +591,57 @@ function rebuildHeaders() {
     }
     headersEl.appendChild(el);
   }
+}
+
+/**
+ * Turns a lane header's `.name` span into an inline text input, in place —
+ * the pencil affordance next to it (double-click stays free for adding
+ * keyframes, which lives entirely on the lanes canvas, a different element).
+ * Enter commits via core.renameRole (which alone rewrites the cast entry,
+ * tracks key and editor.marks key atomically); on rejection the show is
+ * left untouched, the reason is shown in the status bar, and the field
+ * stays open to fix and retry. Escape or clicking away cancels outright.
+ * A commit also carries the current selection, the viewer's selected role
+ * and the lane's collapsed/expanded state across the rename by name, so
+ * none of them go silently stale or point at a role that no longer exists.
+ */
+function startRoleRename(role, headerEl) {
+  const nameEl = headerEl.querySelector('.name');
+  if (!nameEl || nameEl.querySelector('input')) return; // already editing this lane
+  nameEl.replaceChildren();
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.value = role;
+  nameEl.appendChild(input);
+  input.focus();
+  input.select();
+
+  let settled = false;
+  const cancel = () => { if (settled) return; settled = true; renderAll(); };
+  const submit = () => {
+    if (settled) return;
+    const to = input.value;
+    let next;
+    try {
+      next = core.renameRole(state.show, role, to);
+    } catch (err) {
+      status(err.message, 'error');
+      return; // invalid: stay in edit mode so the typo can be fixed and retried
+    }
+    settled = true;
+    const trimmed = to.trim();
+    if (state.selection && state.selection.role === role) state.selection = { ...state.selection, role: trimmed };
+    if (state.viewerSelectedRole === role) state.viewerSelectedRole = trimmed;
+    if (state.collapsed.has(role)) { state.collapsed.delete(role); state.collapsed.add(trimmed); }
+    commit(next);
+    status(trimmed === role ? `role "${role}" unchanged` : `renamed role "${role}" → "${trimmed}"`);
+  };
+  input.addEventListener('keydown', (ev) => {
+    if (ev.key === 'Enter') { ev.preventDefault(); submit(); }
+    else if (ev.key === 'Escape') { ev.preventDefault(); cancel(); }
+  });
+  input.addEventListener('blur', cancel);
+  input.addEventListener('click', (ev) => ev.stopPropagation()); // don't let it bubble to .name's "select in viewer" handler
 }
 
 function updateReadouts() {
@@ -1076,20 +1150,22 @@ function renderInspector() {
   kindSel.value = kind;
   kindSel.onchange = () => {
     const k = kindSel.value;
-    const v = k === 'do' ? core.SKILLS[0] : (k === 'sound' ? core.SOUND_TAGS[0] : (declaredModes()[0] ?? 'default'));
+    const v = k === 'do' ? core.SKILLS[0] : (k === 'sound' ? core.SOUND_TAGS[0] : core.DRIVE_MODES[0]);
     commit(core.setEventAction(state.show, sel.role, sel.index, k, v));
   };
   row('action', kindSel);
   if (kind === 'mode') {
-    const inp = document.createElement('input'); inp.type = 'text'; inp.value = e.mode ?? ''; inp.setAttribute('list', 'declared-modes');
-    let dl = $('declared-modes');
-    if (!dl) { dl = document.createElement('datalist'); dl.id = 'declared-modes'; document.body.appendChild(dl); }
-    dl.replaceChildren(...declaredModes().map((m) => { const o = document.createElement('option'); o.value = m; return o; }));
-    inp.onchange = () => commit(core.setEventAction(state.show, sel.role, sel.index, 'mode', inp.value));
-    row('mode', inp);
-    const hint = document.createElement('div'); hint.className = 'full hint';
-    hint.textContent = declaredModes().length ? `declared: ${declaredModes().join(', ')}` : 'no policies declared in requires.policies (warning, not error)';
-    body.appendChild(hint);
+    // Real robotd accepts exactly "walk" or "roller" over the wire (see
+    // core.DRIVE_MODES) -- a fixed dropdown, not free text against a
+    // requires.policies-derived datalist: a mode event never names a
+    // policy, and requires.policies plays no part in whether it is valid
+    // (docs/duckshow-format.md "Custom .onnx policies").
+    const vs = document.createElement('select');
+    for (const v of core.DRIVE_MODES) { const o = document.createElement('option'); o.value = v; o.textContent = v; vs.appendChild(o); }
+    if (!core.DRIVE_MODES.includes(e.mode)) { const o = document.createElement('option'); o.value = String(e.mode); o.textContent = `${e.mode} (invalid)`; vs.appendChild(o); }
+    vs.value = String(e.mode ?? core.DRIVE_MODES[0]);
+    vs.onchange = () => commit(core.setEventAction(state.show, sel.role, sel.index, 'mode', vs.value));
+    row('mode', vs);
   } else {
     const vs = document.createElement('select');
     for (const v of (kind === 'do' ? core.SKILLS : core.SOUND_TAGS)) { const o = document.createElement('option'); o.value = v; o.textContent = v; vs.appendChild(o); }
@@ -1107,8 +1183,6 @@ function renderInspector() {
   const del = document.createElement('button'); del.textContent = 'delete (⌫)'; del.className = 'danger full'; del.onclick = deleteSelection;
   body.appendChild(del);
 }
-
-function declaredModes() { return state.norm.requires.policies.map((p) => p.mode); }
 
 function cycleSelectedInterp() {
   const sel = state.selection;
@@ -1238,6 +1312,19 @@ $('btn-add-role').onclick = () => {
 // orbit/dolly state between drags, and projecting a world point to a
 // screen-space label) that the renderer's per-call API doesn't itself keep.
 // ---------------------------------------------------------------------------
+// Per-role floating name labels above each duck's head — a browser
+// preference, never part of the show file (docs/viewer.md "Layout" sets
+// that precedent for the splitter position; this follows the same rule).
+function loadViewerNamesPref() {
+  try {
+    const v = localStorage.getItem(VIEWER_NAMES_KEY);
+    return v === null ? true : v === '1'; // no stored preference yet: default on
+  } catch (_) { return true; } // private mode / storage disabled
+}
+function saveViewerNamesPref(on) {
+  try { localStorage.setItem(VIEWER_NAMES_KEY, on ? '1' : '0'); } catch (_) { /* private mode / storage disabled */ }
+}
+
 const viewer = {
   renderer: null,
   camera: { ...CAMERA_PRESETS.house },
@@ -1248,6 +1335,9 @@ const viewer = {
   selectedRole: null,
   dragging: null,
   lastLabels: [],
+  roleNames: [], // previous sync's cast order — lets roleColorPaletteContinuous detect an in-place rename
+  namesOn: loadViewerNamesPref(),
+  roleLabelEls: new Map(), // role -> persistent DOM node, reused across frames (never recreated per paint)
 };
 
 /** Shows (or updates) the "viewer unavailable" overlay banner over the stage canvas. */
@@ -1301,7 +1391,13 @@ function syncViewerShow() {
   const roleSet = new Set(roleNames);
   if (state.viewerSelectedRole && !roleSet.has(state.viewerSelectedRole)) state.viewerSelectedRole = null;
   viewer.selectedRole = state.viewerSelectedRole;
-  viewer.palette = dv.roleColorPalette(roleNames);
+  // roleColorPaletteContinuous, not a bare roleColorPalette(roleNames): a
+  // rename changes the alphabetically-sorted name set roleColorPalette
+  // indexes into, which (by that function's own deliberate, tested design)
+  // can shift every OTHER role's hue too. This carries colours forward
+  // across an in-place rename instead — see its doc comment.
+  viewer.palette = dv.roleColorPaletteContinuous(viewer.roleNames, viewer.palette, roleNames);
+  viewer.roleNames = roleNames;
   viewer.marks = dv.resolveMarks(state.show); // needs the raw doc: editor.marks lives outside normalizeShow()'s output
   // state.norm, not state.show: marks are already resolved above, so
   // nothing downstream needs the raw document's "editor" field here, and
@@ -1316,6 +1412,7 @@ function syncViewerShow() {
     return { role, x: m.x, y: m.y, heading: m.heading };
   }));
   renderViewerLegend();
+  rebuildRoleLabelEls(roleNames);
 }
 
 /** Per-frame paint (poses/trails/labels at the current playhead) — render on change only, no permanent loop. */
@@ -1338,6 +1435,7 @@ function paintViewer() {
   viewer.renderer.draw(frame.poses);
   viewer.lastLabels = frame.labels;
   paintEventLabels(frame.labels);
+  updateRoleLabelPositions();
 }
 
 /** World point (show-space x/y, world-space height) -> canvas CSS-px, or null if behind the camera. */
@@ -1372,6 +1470,74 @@ function paintEventLabels(labels) {
     frag.appendChild(div);
   }
   host.replaceChildren(frag);
+}
+
+/**
+ * Creates/removes the per-role name-label DOM nodes to match the current
+ * cast, and refreshes each one's dot colour and text. Structural — called
+ * only from syncViewerShow() (i.e. on a real cast change: add/remove/
+ * rename), never per rendered frame. updateRoleLabelPositions() below is
+ * the per-frame half: it only ever touches these same nodes' position and
+ * visibility, so a frame of orbiting or scrubbing the playhead never calls
+ * createElement, matching the "reuse DOM nodes, don't recreate them" and
+ * "update only when the view actually changes" requirements.
+ */
+function rebuildRoleLabelEls(roleNames) {
+  const host = $('viewer-role-labels');
+  if (!host) return;
+  const roleSet = new Set(roleNames);
+  for (const [role, el] of viewer.roleLabelEls) {
+    if (!roleSet.has(role)) { el.remove(); viewer.roleLabelEls.delete(role); }
+  }
+  for (const role of roleNames) {
+    let el = viewer.roleLabelEls.get(role);
+    if (!el) {
+      el = document.createElement('div');
+      el.className = 'role-label hidden';
+      el.innerHTML = '<i></i><span class="t"></span>';
+      host.appendChild(el);
+      viewer.roleLabelEls.set(role, el);
+    }
+    const info = viewer.palette.get(role);
+    el.querySelector('i').style.background = info ? info.hex : roleColor(role);
+    el.querySelector('.t').textContent = role;
+  }
+}
+
+/**
+ * Per-frame half of the role-name labels: projects each duck's current
+ * head position to screen space (docs/viewer.md "Create Preview" sibling
+ * feature — same worldToScreen() the skill/sound event labels above use)
+ * and moves/hides the already-existing DOM node for it. No DOM creation
+ * here at all. Called from every place the camera or playhead can actually
+ * change (paintViewer, the preset-switch ease, manual orbit/dolly) — never
+ * on a timer, same "render on demand" rule the rest of the viewer follows.
+ */
+function updateRoleLabelPositions() {
+  const host = $('viewer-role-labels');
+  if (!host) return;
+  if (!viewer.namesOn || !viewer.renderer) { host.classList.add('hidden'); return; }
+  host.classList.remove('hidden');
+  const w = stageC.clientWidth || 1, h = stageC.clientHeight || 1;
+  const aspect = w / Math.max(1, h);
+  for (const [role, el] of viewer.roleLabelEls) {
+    const path = viewer.paths.get(role);
+    let screen = null;
+    if (path) {
+      const p = dv.sampleRolePath(path, state.playhead);
+      const world = mapPoseToWorld({ x: p.x, y: p.y }).position;
+      world[1] = ROLE_LABEL_HEIGHT_M;
+      screen = worldToScreen(viewer.camera, aspect, world, w, h);
+    }
+    if (!screen || screen.x < -60 || screen.x > w + 60 || screen.y < -30 || screen.y > h + 30) {
+      el.classList.add('hidden');
+      continue;
+    }
+    el.classList.remove('hidden');
+    el.style.left = `${screen.x}px`;
+    el.style.top = `${screen.y}px`;
+    el.classList.toggle('selected', role === viewer.selectedRole);
+  }
 }
 
 function renderViewerLegend() {
@@ -1417,6 +1583,7 @@ function easeViewerCameraForLabels(name) {
     const t = clamp((performance.now() - start) / CAMERA_TRANSITION_MS, 0, 1);
     viewer.camera = t < 1 ? mixCamera(from, to, cameraEase(t)) : to;
     paintEventLabels(viewer.lastLabels || []);
+    updateRoleLabelPositions();
     viewerCameraLabelRAF = t < 1 ? requestAnimationFrame(step) : null;
   };
   step();
@@ -1504,6 +1671,7 @@ stageC.addEventListener('pointermove', (ev) => {
   viewer.presetName = null; // manual orbit no longer matches a named preset
   viewer.renderer.setCamera(viewer.camera);
   paintEventLabels(viewer.lastLabels || []); // reproject at the new angle; poses/trails are unchanged so draw() isn't needed
+  updateRoleLabelPositions();
 });
 function endViewerDrag() {
   const d = viewer.dragging;
@@ -1526,6 +1694,7 @@ stageC.addEventListener('wheel', (ev) => {
   viewer.presetName = null;
   viewer.renderer.setCamera(viewer.camera);
   paintEventLabels(viewer.lastLabels || []);
+  updateRoleLabelPositions();
 }, { passive: false });
 
 // ---------------------------------------------------------------------------
@@ -1608,6 +1777,13 @@ $('btn-start').onclick = () => seek(0, { fromUser: true });
 $('btn-end').onclick = () => seek(duration(), { fromUser: true });
 $('btn-loop').onclick = (e) => { state.loop = !state.loop; e.currentTarget.setAttribute('aria-pressed', String(state.loop)); };
 $('btn-snap').onclick = (e) => { state.snap = !state.snap; e.currentTarget.setAttribute('aria-pressed', String(state.snap)); };
+$('btn-viewer-names').setAttribute('aria-pressed', String(viewer.namesOn)); // sync the button to the loaded-from-localStorage preference
+$('btn-viewer-names').onclick = (e) => {
+  viewer.namesOn = !viewer.namesOn;
+  e.currentTarget.setAttribute('aria-pressed', String(viewer.namesOn));
+  saveViewerNamesPref(viewer.namesOn);
+  updateRoleLabelPositions(); // show/hide immediately, no need to wait for the next real repaint
+};
 $('subdiv').onchange = (e) => { state.subdivision = Number(e.target.value); drawLanes(); };
 $('btn-zoom-in').onclick = () => zoomAt(1.5, state.layout.W / 2);
 $('btn-zoom-out').onclick = () => zoomAt(1 / 1.5, state.layout.W / 2);

@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import {
   addKeyframe, moveKeyframe, deleteKeyframe, setInterp, cycleInterp, keyframeIndexAt,
   addEvent, updateEvent, setEventAction, deleteEvent,
-  setMeta, addRole, removeRole, setMark, newShow, validate,
+  setMeta, addRole, removeRole, renameRole, setMark, newShow, validate,
 } from '../duckshow-core.js';
 
 function base() {
@@ -161,6 +161,56 @@ test('addRole appends cast + tracks entry; removeRole drops cast, tracks and mar
   assert.equal('lead' in out.tracks, false);
   assert.deepEqual(out.editor.marks, {});
   assert.deepEqual(validate(out), []);
+});
+
+test('renameRole rewrites cast (in place), tracks key and editor.marks key atomically', () => {
+  let out = pure((d) => renameRole(d, 'lead', 'front'));
+  assert.deepEqual(out.cast, [{ role: 'front', notes: 'front' }, { role: 'wing' }]); // same index; 'wing' untouched
+  assert.equal('lead' in out.tracks, false);
+  assert.deepEqual(out.tracks.front.locomotion, base().tracks.lead.locomotion);
+  assert.deepEqual(out.tracks.front.events, base().tracks.lead.events);
+  assert.equal('lead' in out.editor.marks, false);
+  assert.deepEqual(out.editor.marks.front, { x: 1, y: 0, heading: 0 });
+  assert.deepEqual(validate(out), []);
+
+  // a role with no editor.marks entry (only 'lead' has one in the fixture) renames cleanly too
+  out = pure((d) => renameRole(d, 'wing', 'flank'));
+  assert.deepEqual(out.cast, [{ role: 'lead', notes: 'front' }, { role: 'flank' }]); // 'lead' untouched, order preserved
+  assert.deepEqual(out.tracks.flank, {});
+  assert.equal('wing' in out.editor.marks, false);
+  assert.equal('flank' in out.editor.marks, false);
+});
+
+test('renameRole keeps cast ARRAY order even when the new name would sort differently — a rename never re-sorts the cast', () => {
+  const doc = {
+    format: 'duckshow/1', meta: { duration: 5 }, requires: { policies: [] },
+    cast: [{ role: 'a' }, { role: 'b' }, { role: 'c' }],
+    tracks: { a: {}, b: {}, c: {} },
+  };
+  const out = renameRole(doc, 'b', 'zzz'); // alphabetically 'zzz' sorts after 'c'; array order must not follow
+  assert.deepEqual(out.cast.map((c) => c.role), ['a', 'zzz', 'c']);
+});
+
+test('renameRole trims surrounding whitespace off the new name', () => {
+  const out = pure((d) => renameRole(d, 'wing', '  flank  '));
+  assert.deepEqual(out.cast[1], { role: 'flank' });
+});
+
+test('renameRole rejects empty, whitespace-only, an unknown role, or a name that collides with another role — show left untouched', () => {
+  const doc = base();
+  const frozen = JSON.stringify(doc);
+  assert.throws(() => renameRole(doc, 'lead', ''), RangeError);
+  assert.throws(() => renameRole(doc, 'lead', '   '), RangeError);
+  assert.throws(() => renameRole(doc, 'lead', 'wing'), RangeError); // collides with another role
+  assert.throws(() => renameRole(doc, 'ghost', 'x'), RangeError); // 'from' not in the cast
+  assert.equal(JSON.stringify(doc), frozen, 'show mutated by a rejected rename');
+});
+
+test('renameRole to its own (trimmed) name is a no-op, not an error', () => {
+  const doc = base();
+  const out = renameRole(doc, 'lead', '  lead  ');
+  assert.notEqual(out, doc); // still a fresh object, per the "-> new show" contract
+  assert.deepEqual(out, doc);
 });
 
 test('setMark writes editor.marks[role] with numeric fields only', () => {
