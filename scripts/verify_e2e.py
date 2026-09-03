@@ -30,7 +30,21 @@ EVENT_TIME_TOL_S = 0.06
 HEAD_ANGLE_TOL = 0.03
 POSE_Z_TOL = 0.005
 VX_TOL = 0.02
-MOUTH_OPEN_MIN_AT_PEAK = 0.97
+# The demo show's mouth gape is a smoothstep 0 -> 1 over 9.0-9.3 s, then back
+# to 0 by 9.8 s. We sample that curve on the agent's tick grid, so the closest
+# sample to the apex is off by up to half a tick period, and the ascending leg
+# is the steep one. Worked out against real tick gaps:
+#
+#   gap  26 ms (dev Mac)     -> best nearest sample 0.998
+#   gap  62 ms (CI average)  -> 0.970
+#   gap  94 ms (CI p95)      -> 0.934
+#   gap 120 ms               -> 0.896
+#
+# So anything at or above ~0.97 is unreachable on a loaded runner and would
+# fail for reasons that have nothing to do with the choreography. 0.85 still
+# fails loudly on the regressions that matter: a mouth track that never plays
+# reads 0.0, and a mis-scaled one reads about half.
+MOUTH_OPEN_MIN_AT_PEAK = 0.85
 
 # A sample must land within this many seconds of the target show_time to
 # count as "the sample near that point" -- generous enough to tolerate a
