@@ -11,21 +11,41 @@ Three modules, rendered into a canvas the editor already owns: `editor/duckshow-
 3. **Pose in, pixels out.** The renderer takes a plain array of per-duck poses (`{role, x, y, heading, headYaw, headPitch, headRoll, neckPitch, bodyZ, bodyRoll, bodyPitch, mouthOpen, walkPhase, resting}`) and draws them. `resting` (optional bool: is this duck at rest right now) exists because `walkPhase` is an unbounded accumulating angle — a renderer can't safely tell "moving" from "scrubbed elsewhere and back" by diffing it alone. It never reads a `.duckshow` file, never touches the sampler, never knows about time. This is what lets a MuJoCo-driven pose stream replace the kinematic one later without touching the renderer — one that has no notion of `resting` simply omits it.
 4. **60 fps with ten ducks** on a MacBook, and it must not spin the GPU when the playhead is parked (render on change, not on a permanent rAF loop).
 
+## Layout
+
+The editor is laid out like a video editor or game engine, not a document: **the 3D view sits centre-top and takes the majority of the window**, with the timeline in a panel below it and the inspector/validation to the side. The viewer is the primary surface — it is what you look at while working — and the timeline is the instrument you drive it with. The 3D panel resizes with the window and the split between viewer and timeline is draggable, with the position remembered per browser (localStorage, never in the show file).
+
 ## Art direction
 
-The reference is a real stage with the house dark, not a CAD viewport or a game engine demo. Restraint over spectacle: the ducks are the subject, everything else recedes.
+A clean, well-lit workspace — a game-engine viewport or a photographer's cyclorama, not a darkened theatre. The earlier dark-stage treatment was honest about what an audience sees but made the ducks nearly invisible while working; authoring needs to *see*. Judging house readability is what the House camera and the real stage are for.
 
-**Ground.** A dark stage floor that fades to black at the edges via a soft radial falloff, so the stage feels like a lit pool rather than a floating rectangle. A faint grid, one line per half metre, dim enough to read as texture rather than as a chart — it exists to give scale and parallax, not to be looked at. Start marks sit on the floor as thin rings in each role's colour.
+**Ground.** A light neutral grey floor, evenly lit, extending far enough to feel like a room rather than a platter, fading gently at the far edge so it does not end in a hard line. It is a measuring surface, so the grid is a real instrument, not texture:
 
-**Light.** One warm key from front-left and high, a cooler dimmer fill from the right, and a subtle rim from behind to separate the ducks from the dark. Lambert plus a low-exponent specular is plenty; skip PBR. Every duck gets a soft elliptical blob shadow on the floor, darkest directly under the body and falling off quickly — nothing sells "standing on a stage" more cheaply, and it makes vertical motion (crouch, sit) legible.
+- **1 metre major lines** — clearly visible, the reference you count in.
+- **10 centimetre minor lines** — lighter, for reading spacing and duck-scale distances at a glance.
+- Minor lines fade out as you dolly away so the floor never turns into moiré; major lines persist.
+- The two stage axes through the origin are tinted (one warm, one cool) so orientation is unambiguous from any camera, the way a 3D tool marks X and Z.
+- A duck is 25 cm tall and 14 cm wide, so it should read as roughly two and a half minor squares tall — that relationship is the whole point of the grid.
 
-**The duck.** Charming, unmistakably a duck, never cartoonish or cute-ugly. Built from smooth primitives: an egg-shaped body a touch taller than wide; a short neck; a rounded head noticeably smaller than the body; a flat wide beak that opens on `mouthOpen`; two thin legs with a visible knee, feet as small flat ellipses; a stub tail. Proportions from the real thing — 25 cm tall, 14 cm wide — so blocking distances are honest. Give it a slight forward lean at rest, the way a real biped stands. Smooth-shaded, with a soft matte body and a slightly glossier beak and eyes so the face catches light and the audience's eye goes where it should.
+**Light.** Neutral studio lighting on a light ground: a soft key from high front-left, a fill from the right, and enough ambient that shells and shadowed sides stay readable. Contact shadows now matter more, not less — on a light floor a soft grounded shadow is what stops the ducks looking pasted on. Keep them soft and neutral grey, never black.
 
-**Colour.** The floor and background are near-black with a faint warm bias, never pure `#000`. Each role gets one saturated hue used sparingly — the body stays a warm off-white/cream (MicroDuck ships in Cream, Graphite, Lavender, Sky, so cream is honest) and the role colour appears as a band, the start-mark ring, and the motion trail. Ten roles need ten distinguishable hues that survive a dark ground: walk the hue circle at even spacing, keep saturation and lightness constant, and skip the muddy yellow-greens.
+**The duck — model the real robot.** MicroDuck is a BDX-style walking robot, not a bathtub duck. Reference: Pollen's product photography and the MuJoCo model in their simulator (both in the scratchpad, for looking at only — never vendored; their meshes are CC BY-SA-NC).
 
-**Motion.** A walk cycle driven by `walkPhase`, which advances with speed — legs alternate, the body bobs slightly and rocks, the head counter-rotates a touch to stay level. It should read as a waddle, not a march. When velocity is zero the duck settles to a neutral stand rather than freezing mid-stride. Everything else (head, crouch, beak) comes straight from the pose.
+- **Head:** the dominant feature and the thing that makes it recognisable. A **rounded rectangular shell** — a capsule or loaf lying on its side, wider and deeper than it is tall, in white/cream (or the role's accent colour). Not a sphere and not a dome.
+- **Eye:** one **large circular camera lens on the front of the head**, nearly the height of the shell — a dark glossy disc with a visible concentric ring, set slightly proud. This single feature does most of the recognition work; make it big and get it crisp.
+- **Bill:** a flat **yellow** band wrapping the underside and front edge of the head shell, projecting forward as a broad spatula. Yellow, not orange. `mouthOpen` hinges it down and reveals a lighter interior.
+- **Neck:** a short dark articulated stack of small blocks joining head to body — mechanism, never a smooth organic neck.
+- **Body:** small relative to the legs. A **light grey/silver servo block** as the main torso mass, with darker mechanical parts and small rounded light-grey panels on the hips. Reads as machined parts, not a soft mass.
+- **Legs:** long, dark, visibly articulated — thigh and shin segments with a chunky silver joint block at the knee and hip. The legs carry most of the height.
+- **Feet:** large flat **yellow** feet, oversized and slightly upturned at the front, with a darker sole. Along with the lens and bill, they carry the silhouette.
+- **Colour split:** white/cream head shell, yellow bill and feet on every duck (that pairing is the product's identity — never recolour it per role), light grey body panels, dark mechanism. The **role hue tints the head shell and the hip panels only**, so the flock stays identifiable without losing the product's look.
+- **Posture:** a forward-leaning crouch, knees bent, head carried out in front of the feet. It should look ready to move even when standing.
 
-**Trails.** Each duck's dead-reckoned path drawn as a line in its role colour on the floor, brightest near the current position and fading toward the start, so the eye reads direction without an arrow.
+**Colour.** The floor and background are light neutral grey; the ducks are dark mechanism plus one accent, so they read as dark shapes on a light ground — the opposite of before, and much easier to see. Role hues must now be chosen for contrast against *light* grey: mid-to-deep saturated tones, not pastels. Bill and feet stay the signature orange on every duck, since that is the product's identity and it separates them from the role colour.
+
+**Motion.** A walk cycle driven by `walkPhase`, which advances with speed — legs alternate, the body bobs slightly and rocks, the head counter-rotates a touch to stay level. A waddle, not a march. At rest the duck settles into its standing crouch rather than freezing mid-stride. Everything else (head, crouch, bill) comes straight from the pose.
+
+**Trails.** Each duck's dead-reckoned path on the floor in its role colour, brightest near the current position and fading toward the start, so the eye reads direction without an arrow. Start marks are thin rings in the same colour — restrained; the ducks are the subject.
 
 ## Camera
 
