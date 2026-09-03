@@ -75,7 +75,7 @@ class ScriptedRobotd(FakeRobotd):
         fail: Optional[dict[str, tuple[int, str]]] = None,
         hang: Optional[set[str]] = None,
         delay: Optional[dict[str, float]] = None,
-        hello_api_version: int = 16,
+        hello_api_version: int = 17,
     ) -> None:
         self.fail = dict(fail or {})
         self.hang = set(hang or ())
@@ -338,16 +338,58 @@ class ExitPlayingTest(_AgentTestBase):
         self.assertTrue(self._wait_for_state("playing"))
 
     def test_held_sound_released_at_end_of_show(self) -> None:
+        # BUG 2: hold=5.0 outlives the 0.6s show, so end-of-show must force
+        # the release early -- and by then the hold has also been re-sent
+        # several times (the tick loop, not a single start call).
         with tempfile.TemporaryDirectory() as d:
             _, sha = _write_show(Path(d), "hold", duration=0.6, events=[{"t": 0.1, "sound": "alarm", "hold": 5.0}])
             self._start(shows_dir=Path(d))
             self.assertTrue(self._load("hold", sha)["ok"])
             self._wait_for_sync()
             self.assertTrue(self._play(show="hold")["ok"])
-            sounds = self.robotd.wait_for_method("robot.sound", count=2, timeout=4.0)
-            self.assertEqual([s["params"] for s in sounds], [{"tag": "alarm", "hold": True}, {"tag": "alarm", "hold": False}])
             self.assertTrue(self._wait_for_state("loaded"))
             self.assertTrue(self.robotd.by_method("robot.stop"))
+            sounds = [s["params"] for s in self.robotd.by_method("robot.sound")]
+            self.assertTrue(sounds, "expected at least one robot.sound call")
+            self.assertEqual(sounds[0], {"tag": "alarm", "hold": True})
+            self.assertEqual(sounds[-1], {"tag": "alarm", "hold": False})
+            holds_true = [s for s in sounds if s == {"tag": "alarm", "hold": True}]
+            self.assertGreater(len(holds_true), 1, "hold:true must be re-sent, not just started once")
+            releases = [s for s in sounds if s == {"tag": "alarm", "hold": False}]
+            self.assertEqual(len(releases), 1, "release must be sent exactly once")
+
+    def test_held_sound_resent_at_tick_rate(self) -> None:
+        # BUG 2: a held sound is not a start-call-then-timer; hold:true
+        # must keep arriving at roughly the 50 Hz tick rate for it to
+        # keep sounding on real hardware (docs/duckshow-format.md "Held
+        # sounds").
+        with tempfile.TemporaryDirectory() as d:
+            _, sha = _write_show(Path(d), "hold", duration=20.0, events=[{"t": 0.1, "sound": "alarm", "hold": 0.5}])
+            self._start(shows_dir=Path(d))
+            self.assertTrue(self._load("hold", sha)["ok"])
+            self._wait_for_sync()
+            self.assertTrue(self._play(show="hold")["ok"])
+            # 0.5s of hold at ~50 Hz is roughly 25 ticks; ask for well
+            # under that so this doesn't depend on the hold's own timing.
+            self.assertTrue(
+                self._wait(lambda: len(self.robotd.by_method("robot.sound")) >= 8, timeout=2.0),
+                "hold:true was not re-sent at roughly tick rate",
+            )
+            self.assertTrue(
+                self._wait(
+                    lambda: self.robotd.by_method("robot.sound")
+                    and self.robotd.by_method("robot.sound")[-1]["params"] == {"tag": "alarm", "hold": False},
+                    timeout=2.0,
+                ),
+                "hold was never released",
+            )
+            time.sleep(0.15)  # nothing should trickle in after the release
+            sounds = [s["params"] for s in self.robotd.by_method("robot.sound")]
+            self.assertEqual(sounds[-1], {"tag": "alarm", "hold": False})
+            releases = [s for s in sounds if s == {"tag": "alarm", "hold": False}]
+            self.assertEqual(len(releases), 1, "release must be sent exactly once")
+            holds_true = [s for s in sounds if s == {"tag": "alarm", "hold": True}]
+            self.assertGreater(len(holds_true), 5, "expected the hold to be re-sent repeatedly, not just started once")
 
     def test_held_sound_released_on_stop(self) -> None:
         with tempfile.TemporaryDirectory() as d:
@@ -356,13 +398,56 @@ class ExitPlayingTest(_AgentTestBase):
             self.assertTrue(self._load("hold", sha)["ok"])
             self._wait_for_sync()
             self.assertTrue(self._play(show="hold")["ok"])
-            self.robotd.wait_for_method("robot.sound", count=1, timeout=3.0)
+            # Let a few resends happen before stopping, so this genuinely
+            # interrupts an ongoing hold rather than racing its very start.
+            self.assertTrue(self._wait(lambda: len(self.robotd.by_method("robot.sound")) >= 5, timeout=2.0))
             stop_id = self.master.send_cmd(self.agent_addr, "stop")
             acks = self.master.wait_for_ack(stop_id)
             self.assertTrue(acks and acks[0]["ok"], acks)
-            sounds = self.robotd.wait_for_method("robot.sound", count=2, timeout=2.0)
-            self.assertEqual(sounds[-1]["params"], {"tag": "alarm", "hold": False})
+            self.assertTrue(
+                self._wait(
+                    lambda: self.robotd.by_method("robot.sound")
+                    and self.robotd.by_method("robot.sound")[-1]["params"] == {"tag": "alarm", "hold": False},
+                    timeout=2.0,
+                )
+            )
+            n_after_release = len(self.robotd.by_method("robot.sound"))
+            time.sleep(0.2)  # give the tick loop several chances to (wrongly) keep resending
+            self.assertEqual(
+                len(self.robotd.by_method("robot.sound")), n_after_release, "resending must stop once stop releases the hold"
+            )
+            releases = [s["params"] for s in self.robotd.by_method("robot.sound") if s["params"] == {"tag": "alarm", "hold": False}]
+            self.assertEqual(len(releases), 1, "release must be sent exactly once")
             self.assertEqual(self.agent.state, "loaded")
+
+    def test_panic_during_held_sound_stops_resend_and_releases(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            _, sha = _write_show(Path(d), "hold", duration=20.0, events=[{"t": 0.1, "sound": "alarm", "hold": 5.0}])
+            self._start(shows_dir=Path(d))
+            self.assertTrue(self._load("hold", sha)["ok"])
+            self._wait_for_sync()
+            self.assertTrue(self._play(show="hold")["ok"])
+            self.assertTrue(self._wait(lambda: len(self.robotd.by_method("robot.sound")) >= 5, timeout=2.0))
+            panic_id = self.master.send_cmd(self.agent_addr, "panic")
+            acks = self.master.wait_for_ack(panic_id)
+            self.assertTrue(acks and acks[0]["ok"], acks)
+            self.assertTrue(self._wait_for_state("idle"))
+            self.assertTrue(
+                self._wait(
+                    lambda: any(
+                        s["params"] == {"tag": "alarm", "hold": False} for s in self.robotd.by_method("robot.sound")
+                    ),
+                    timeout=2.0,
+                ),
+                "panic must release the held sound",
+            )
+            n_after_release = len(self.robotd.by_method("robot.sound"))
+            time.sleep(0.2)  # give the tick loop several chances to (wrongly) keep resending
+            self.assertEqual(
+                len(self.robotd.by_method("robot.sound")), n_after_release, "resending must stop once panic releases the hold"
+            )
+            releases = [s["params"] for s in self.robotd.by_method("robot.sound") if s["params"] == {"tag": "alarm", "hold": False}]
+            self.assertEqual(len(releases), 1, "release must be sent exactly once")
 
 
 # ---------------------------------------------------------------------------
@@ -541,7 +626,7 @@ class LoadTest(_AgentTestBase):
 
     def test_policy_failure_is_reported_in_telemetry(self) -> None:
         with tempfile.TemporaryDirectory() as d:
-            policy = {"name": "walk", "mode": "walk", "file": "policies/walk.onnx", "sha256": "0" * 64, "slot": "walk"}
+            policy = {"name": "walk", "file": "policies/walk.onnx", "sha256": "0" * 64, "slot": "walk"}
             _, bad_sha = _write_show(Path(d), "needs-policy", policies=[policy])
             _, good_sha = _write_show(Path(d), "plain")
             self._start(shows_dir=Path(d))
@@ -646,7 +731,7 @@ class _DropThenServe:
                     return
                 msg = json.loads(line)
                 if "id" in msg:
-                    resp = {"jsonrpc": "2.0", "id": msg["id"], "result": {"api_version": 16, "daemon_version": "x", "revision": "y"}}
+                    resp = {"jsonrpc": "2.0", "id": msg["id"], "result": {"api_version": 17, "daemon_version": "x", "revision": "y"}}
                     conn.sendall((json.dumps(resp) + "\n").encode())
         except (OSError, json.JSONDecodeError):
             return
@@ -721,7 +806,7 @@ class RobotdClientRobustnessTest(unittest.TestCase):
                 f = conn.makefile("rb")
                 line = f.readline()
                 msg = json.loads(line)
-                resp = {"jsonrpc": "2.0", "id": msg["id"], "result": {"api_version": 16, "daemon_version": "x", "revision": "y"}}
+                resp = {"jsonrpc": "2.0", "id": msg["id"], "result": {"api_version": 17, "daemon_version": "x", "revision": "y"}}
                 conn.sendall((json.dumps(resp) + "\n").encode())
                 time.sleep(5)  # never read again; the fd stays open (no EOF)
 

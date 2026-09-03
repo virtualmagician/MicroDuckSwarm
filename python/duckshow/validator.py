@@ -13,7 +13,7 @@ import math
 from dataclasses import dataclass
 from typing import Optional
 
-from .limits import DEFAULT_LIMITS, Limits, SKILLS, SOUND_TAGS
+from .limits import DEFAULT_LIMITS, DRIVE_MODES, Limits, SKILLS, SOUND_TAGS
 from .model import VALID_INTERPS, Show
 from .sampler import Sampler
 
@@ -148,15 +148,24 @@ def _check_event_fields(issues, role, e) -> None:
         _error(issues, role, "events", e.t, f"hold={e.hold} is not a finite number")
 
 
-def _check_mode_declared(issues, role, events, declared_modes) -> None:
+def _check_mode_value(issues, role, events) -> None:
+    """A `mode` event's value must be a real robotd drive mode -- real
+    hardware accepts exactly "walk" or "roller" over the wire and has no
+    mechanism to register a custom-named mode (docs/robotd-api.md
+    "Custom .onnx policies & modes"; docs/duckshow-format.md "Custom
+    .onnx policies"). A custom-trained gait is installed by pointing a
+    fixed policy *slot* at a different .onnx file (requires.policies[]),
+    never by inventing a new mode string, so `requires.policies` plays
+    no part in whether a `mode` event is valid.
+    """
     for e in events:
-        if e.mode is not None and e.mode not in declared_modes:
-            _warning(
+        if e.mode is not None and e.mode not in DRIVE_MODES:
+            _error(
                 issues,
                 role,
                 "events",
                 e.t,
-                f"mode event references {e.mode!r}, not declared in requires.policies",
+                f"mode={e.mode!r} is not a valid drive mode (expected one of {DRIVE_MODES})",
             )
 
 
@@ -246,8 +255,6 @@ def validate(show: Show, limits: Limits = DEFAULT_LIMITS) -> list[Issue]:
 
     _check_meta_duration(issues, show)
 
-    declared_modes = {p.mode for p in show.requires.policies}
-
     for member in show.cast:
         role = member.role
         if role not in show.tracks:
@@ -275,7 +282,7 @@ def validate(show: Show, limits: Limits = DEFAULT_LIMITS) -> list[Issue]:
             _check_event_action(issues, role, e)
             _check_event_fields(issues, role, e)
         _check_event_density(issues, role, tracks.events, limits)
-        _check_mode_declared(issues, role, tracks.events, declared_modes)
+        _check_mode_value(issues, role, tracks.events)
         _check_mode_locomotion_overlap(issues, role, show, tracks.events, limits)
 
         _check_servo(issues, role, tracks.servo)

@@ -175,7 +175,7 @@ class LoadsShowStringTest(unittest.TestCase):
           "format": "duckshow/1",
           "meta": {"duration": 5.0},
           "requires": {"policies": [
-            {"name": "moonwalk", "mode": "moonwalk", "file": "policies/moonwalk.onnx",
+            {"name": "moonwalk", "file": "policies/moonwalk.onnx",
              "sha256": "abc123", "slot": "walk"}
           ]},
           "cast": [{"role": "lead"}],
@@ -185,7 +185,10 @@ class LoadsShowStringTest(unittest.TestCase):
         show = loads_show(text)
         self.assertEqual(len(show.requires.policies), 1)
         p = show.requires.policies[0]
-        self.assertEqual(p.mode, "moonwalk")
+        # "name" is a human label only (docs/duckshow-format.md "Custom
+        # .onnx policies"), never sent over the wire; "slot" is what
+        # matters. There is no per-policy "mode" -- see duckshow/model.py.
+        self.assertEqual(p.name, "moonwalk")
         self.assertEqual(p.slot, "walk")
 
 

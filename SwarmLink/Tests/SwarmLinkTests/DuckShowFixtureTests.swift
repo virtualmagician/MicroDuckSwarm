@@ -7,15 +7,13 @@ import XCTest
 /// coincidence in two hand-written test suites (F67).
 ///
 /// python/duckshow is the canonical validator (docs/architecture.md);
-/// shows/fixtures/expected.json documents its per-fixture result. Where
-/// SwarmLink's `Show.validate()` already agrees, we assert Python's own
-/// expected values straight out of that file. One fixture is prefixed
-/// `divergent-`: SwarmLink's validator currently disagrees with the
-/// canonical one there (see expected.json's note field and F67's
-/// finding), and fixing that is a `DuckShow.swift` source change, not a
-/// test-only one -- so it gets its own test below asserting Swift's
-/// *current* behavior, clearly labeled as a known, tracked gap rather
-/// than silently matching or silently skipping it.
+/// shows/fixtures/expected.json documents its per-fixture result, and
+/// every fixture here asserts those same expected values -- there is
+/// currently no known divergence between the two validators. If a future
+/// change to either validator introduces one, give the fixture a
+/// `divergent-` filename prefix and pin Swift's own current behavior in
+/// its own clearly-labeled test here (see expected.json's `_comment`),
+/// rather than silently matching or silently skipping it.
 final class DuckShowFixtureTests: XCTestCase {
     private static var repoRoot: URL {
         URL(fileURLWithPath: #filePath)
@@ -84,11 +82,16 @@ final class DuckShowFixtureTests: XCTestCase {
         XCTAssertEqual(report.errors.count, expected?.errors ?? -1)
     }
 
-    func testUndeclaredModeMatchesCanonicalWarningCount() throws {
-        let expected = try Self.loadExpected()["warn-undeclared-mode"]
-        let report = try loadFixture("warn-undeclared-mode").validate()
+    func testUnknownModeMatchesCanonicalErrorCount() throws {
+        // Real robotd accepts exactly "walk"/"roller" as a mode event's
+        // value (docs/robotd-api.md "Custom .onnx policies & modes"); any
+        // other value is an error, not a warning -- see
+        // shows/fixtures/expected.json.
+        let expected = try Self.loadExpected()["invalid-unknown-mode"]
+        let report = try loadFixture("invalid-unknown-mode").validate()
         XCTAssertEqual(report.errors.count, expected?.errors ?? -1)
         XCTAssertEqual(report.warnings.count, expected?.warnings ?? -1)
+        XCTAssertTrue(report.errors.contains { $0.message.contains("not a valid drive mode") }, "\(report.errors)")
     }
 
     func testMissingTracksEntryMatchesCanonicalErrorCount() throws {
@@ -104,24 +107,15 @@ final class DuckShowFixtureTests: XCTestCase {
         XCTAssertTrue(report.errors.contains { $0.message.contains("no tracks entry") }, "\(report.errors)")
     }
 
-    // MARK: Known, tracked divergence from the canonical validator (F67)
-    //
-    // This intentionally does NOT assert expected.json's Python-side
-    // numbers -- it pins Swift's own current behavior so a future,
-    // unrelated change to DuckShow.swift can't silently shift it further
-    // from the canonical validator without a test noticing. When
-    // DuckShow.swift's validate() is brought in line with the doc /
-    // python/duckshow, flip it to assert against expected.json like the
-    // ones above, and delete this comment block.
-
-    func testUnsortedEventsMatchesCanonicalNoErrors() throws {
-        // Canonical (python/duckshow -- docs/duckshow-format.md only
-        // requires sorting for curve tracks, not the point-event track):
-        // 0 errors, 0 warnings -- see shows/fixtures/expected.json.
-        // Flipped to assert expected.json once DuckShow.swift's
-        // validateEvents() stopped applying the curve-track sort rule (F41).
-        let expected = try Self.loadExpected()["divergent-unsorted-events"]
-        let report = try loadFixture("divergent-unsorted-events").validate()
+    func testUnsortedEventsMatchesCanonicalNoErrorsOrWarnings() throws {
+        // docs/duckshow-format.md only requires sorting for curve tracks
+        // (locomotion/head/pose/mouth), not the point-event track, so
+        // python/duckshow correctly raises nothing here -- and so does
+        // DuckShow.swift's validateEvents(), which never applied the
+        // curve-track sort rule to events: 0 errors, 0 warnings on both
+        // sides -- see shows/fixtures/expected.json.
+        let expected = try Self.loadExpected()["valid-unsorted-events"]
+        let report = try loadFixture("valid-unsorted-events").validate()
         XCTAssertEqual(report.errors.count, expected?.errors ?? -1)
         XCTAssertEqual(report.warnings.count, expected?.warnings ?? -1)
     }

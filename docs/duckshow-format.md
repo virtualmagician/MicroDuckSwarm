@@ -67,10 +67,24 @@ Point events, exactly one action key per entry:
 | Key | Value | Maps to |
 |---|---|---|
 | `do` | skill name — exactly one of `ground_pick`, `kick_left`, `kick_right`, `sit_toggle`, `roulade`; anything else is a validation **error** | `robot.do` |
-| `sound` | sound tag — exactly one of `alarm`, `greet`, `inquire`, `peck`, `chirp`, `coo`, `wheee` (else validation **error**); optional `"hold": <seconds>` | `robot.sound` with `hold: true`, then `hold: false` after the given seconds (released early on stop/panic/end) |
-| `mode` | policy-mode name (string) | `robot.setMode` — see policy section below |
+| `sound` | sound tag — exactly one of `alarm`, `greet`, `inquire`, `peck`, `chirp`, `coo`, `wheee` (else validation **error**); optional `"hold": <seconds>` | `robot.sound` — see "Held sounds" below |
+| `mode` | drive mode — exactly `"walk"` or `"roller"`; anything else is a validation **error** | `robot.setMode` — see "Custom .onnx policies" below |
 
 Events fire once, at the first 50 Hz tick ≥ `t`. If playback starts *after* an event's `t` (late join, seek), the event is **skipped**, never replayed — except `mode` events, where the latest one ≤ the seek point is applied so the duck is in the right gait. If no `mode` event precedes that point, the current mode is left unchanged — shows that switch modes should place an explicit `mode` event at `t: 0.0` so every start and seek lands in a defined gait.
+
+#### Held sounds
+
+A `sound` event's `hold` is not a single start-then-stop pair. Per
+`duck-ipc-proto`, `hold: true` must keep arriving once per tick (a
+notification, the same cadence as `robot.mouth`) or robotd's hold state
+decays and the sound ends on its own — a client that fires `hold: true`
+once and then waits is a client that stops sustaining it almost
+immediately. duck-agent re-issues `robot.sound {tag, hold: true}` from its
+50 Hz tick loop for the event's `hold` seconds, then sends
+`robot.sound {tag, hold: false}` exactly once to release it deliberately —
+also triggered early, exactly once, by `stop`, `panic`, a fresh `load`, or
+end-of-show. A `sound` event with no `hold` is a single one-shot trigger:
+no re-sending, nothing to release.
 
 ### Servo track (`servo`) — reserved in v1
 
@@ -78,19 +92,25 @@ Declared in the spec so files can carry it, but v1 agents only honor `{"mode": "
 
 ## Custom .onnx policies (`requires.policies`)
 
-Shows that need non-stock policies declare them:
+Two distinct mechanisms here, and they must not be conflated (docs/robotd-api.md's "Custom .onnx policies & modes" has the full picture):
+
+1. **Which gait plays at runtime** is a `mode` event (above), sent over the wire as exactly `"walk"` or `"roller"` — the only two values real robotd accepts. There is no wire mechanism to name a custom mode.
+2. **What a given mode actually does** is a *pre-show configuration* question: a fixed **policy slot** (`walk`, `stand`, `sitstand`, `ground_pick`, `kick_left`, `kick_right`, `roulade`, and the roller-family equivalents) is pointed at a custom `.onnx` file, applied by restarting `robotd` during load-in — never mid-show.
+
+Shows that need a non-stock policy declare it so SwarmLink can provision it and duck-agent can verify it landed:
 
 ```json
 "requires": {
   "policies": [
-    { "name": "moonwalk", "mode": "moonwalk", "file": "policies/moonwalk.onnx",
+    { "name": "moonwalk", "file": "policies/moonwalk.onnx",
       "sha256": "…", "slot": "walk" }
   ]
 }
 ```
 
-- Provisioning is a **pre-show step**, never mid-show: SwarmLink pushes the `.onnx` to each cast duck, updates `robotd.toml`, and restarts `robotd` during load-in. The duck-agent verifies each required policy's `sha256` at LOAD and reports `policies_ok` in telemetry; preflight blocks the show otherwise.
-- `mode` events in tracks may then reference the declared mode name at runtime via `robot.setMode`.
+- `name` is a **human label only**, for logs and error messages — it is never sent to robotd. `slot` is the field that matters: it is the fixed policy slot this `.onnx` occupies once installed.
+- Provisioning is a **pre-show step**, never mid-show: SwarmLink pushes the `.onnx` to each cast duck, points `slot` at it in `robotd.toml`, and restarts `robotd` during load-in. The duck-agent verifies each required policy's `sha256` at LOAD and reports `policies_ok` in telemetry; preflight blocks the show otherwise.
+- Once installed, the custom gait plays through the *ordinary* `mode` event mechanism above — a `{"mode": "walk"}` (or `"roller"`) event, exactly like a show with no custom policies at all. A policy's `name` never appears on the wire; there is no "reference the declared mode" step, because there is no declared mode to reference.
 - Mode-switch constraints (standing still, switch latency) are a hardware question tracked for M1; the validator warns if a `mode` event overlaps nonzero locomotion within ±0.5 s.
 
 ## Validation limits (conservative defaults, tune on hardware)

@@ -1,0 +1,11 @@
+{
+  "format": "duckshow/1",
+  "meta": { "name": "Fixture: mode event uses a drive-mode value that is neither \"walk\" nor \"roller\"", "duration": 10.0 },
+  "requires": { "policies": [] },
+  "cast": [ { "role": "lead" } ],
+  "tracks": {
+    "lead": {
+      "events": [ { "t": 1.0, "mode": "sprint" } ]
+    }
+  }
+}

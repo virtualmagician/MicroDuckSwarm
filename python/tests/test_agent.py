@@ -94,7 +94,7 @@ class FakeRobotd:
                     result: object = {}
                     method = msg.get("method")
                     if method == "hello":
-                        result = {"api_version": 16, "daemon_version": "fake-1", "revision": "test"}
+                        result = {"api_version": 17, "daemon_version": "fake-1", "revision": "test"}
                     elif method == "robot.mode":
                         result = "idle"
                     elif method == "robot.safeToRestart":
@@ -276,9 +276,9 @@ class DuckAgentIntegrationTest(unittest.TestCase):
     def test_hello_sent_on_connect(self) -> None:
         hellos = self.robotd.wait_for_method("hello")
         self.assertEqual(len(hellos), 1)
-        self.assertEqual(hellos[0]["params"], {"api_version": 16})
+        self.assertEqual(hellos[0]["params"], {"api_version": 17})
         self.assertTrue(self._wait_for_connected(), "agent.robotd.connected never became true")
-        self.assertEqual(self.agent.robotd.hello_reply["api_version"], 16)
+        self.assertEqual(self.agent.robotd.hello_reply["api_version"], 17)
 
     # -- load --------------------------------------------------------------
 

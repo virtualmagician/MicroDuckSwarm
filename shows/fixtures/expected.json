@@ -1,5 +1,5 @@
 {
-  "_comment": "Expected python/duckshow validate() results for the fixtures in this directory (python/duckshow is the canonical validator -- docs/architecture.md, CLAUDE.md). Loaded by python/tests/test_validator.py and (for the subset that also fully matches spec in Swift today) SwarmLink/Tests/SwarmLinkTests/DuckShowFixtureTests.swift. See F67 for the two fixtures (prefixed 'divergent-'/tracked separately) where SwarmLink's Show.validate() currently disagrees with this reference -- that is a known gap tracked against DuckShow.swift, not something a tests-only change can close.",
+  "_comment": "Expected python/duckshow validate() results for the fixtures in this directory (python/duckshow is the canonical validator -- docs/architecture.md, CLAUDE.md). Loaded by python/tests/test_validator.py and SwarmLink/Tests/SwarmLinkTests/DuckShowFixtureTests.swift, which load the identical files and assert the identical numbers -- proving cross-language parity, not just two independently hand-tuned test suites. If a future change makes SwarmLink's Show.validate() disagree with this reference, give the fixture a 'divergent-' filename prefix and record the gap here (tracked against DuckShow.swift, not something a tests-only change can close); there is currently no such fixture.",
   "valid-baseline": {
     "errors": 0,
     "warnings": 0
@@ -9,10 +9,9 @@
     "warnings": 0,
     "error_substr": "no tracks entry"
   },
-  "divergent-unsorted-events": {
+  "valid-unsorted-events": {
     "errors": 0,
-    "warnings": 0,
-    "note": "docs/duckshow-format.md only requires sorting for curve tracks (locomotion/head/pose/mouth), not the point-event track, so python/duckshow correctly raises nothing here. SwarmLink's Show.validate() currently raises an error for this file (stricter than the doc) -- see F67."
+    "warnings": 0
   },
   "invalid-two-action-keys": {
     "errors": 1,
@@ -29,9 +28,9 @@
     "warnings": 0,
     "error_substr": "less than"
   },
-  "warn-undeclared-mode": {
-    "errors": 0,
-    "warnings": 1,
-    "warning_substr": "not declared"
+  "invalid-unknown-mode": {
+    "errors": 1,
+    "warnings": 0,
+    "error_substr": "not a valid drive mode"
   }
 }

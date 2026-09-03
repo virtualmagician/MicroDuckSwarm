@@ -72,7 +72,7 @@ final class DuckShowParityTests: XCTestCase {
         XCTAssertEqual(show.tracks["lead"]?.servo[0].duration, 1.0)
     }
 
-    func testPolicyStillRequiresNameModeFileSha() {
+    func testPolicyStillRequiresNameFileSha() {
         XCTAssertThrowsError(try decode("""
         {"format":"duckshow/1","meta":{"duration":5.0},
          "requires":{"policies":[{"name":"moonwalk","mode":"moonwalk"}]},
@@ -226,13 +226,25 @@ final class DuckShowParityTests: XCTestCase {
         XCTAssertTrue(overlapWarnings(show.validate()).isEmpty)
     }
 
-    func testUndeclaredModeIsWarningNotError() throws {
-        let show = try show(tracks: "{\"events\":[{\"t\":1.0,\"mode\":\"not_declared\"}]}")
+    func testUnknownModeValueIsErrorNotWarning() throws {
+        // Real robotd accepts exactly "walk"/"roller" as a mode event's
+        // value -- there is no such thing as a "declared" custom mode
+        // name, so an unrecognized value is an ERROR (docs/robotd-api.md
+        // "Custom .onnx policies & modes"), regardless of whether
+        // `requires.policies` declares anything at all.
+        let show = try show(tracks: "{\"events\":[{\"t\":1.0,\"mode\":\"not_a_real_mode\"}]}")
         let report = show.validate()
-        XCTAssertTrue(report.isValid)
-        XCTAssertTrue(report.warnings.contains { $0.message.contains("not declared in requires.policies") }, "\(report.warnings)")
+        XCTAssertFalse(report.isValid)
+        XCTAssertTrue(report.errors.contains { $0.message.contains("not a valid drive mode") }, "\(report.errors)")
+        XCTAssertTrue(report.warnings.isEmpty, "\(report.warnings)")
 
-        let declared = try self.show(tracks: "{\"events\":[{\"t\":1.0,\"mode\":\"roller\"}]}", requires: rollerPolicy)
-        XCTAssertFalse(declared.validate().warnings.contains { $0.message.contains("not declared") })
+        // A recognized drive-mode value is always valid, whether or not a
+        // policy declares that name -- `requires.policies` plays no part
+        // in whether a `mode` event is valid.
+        let declaredButIrrelevant = try self.show(tracks: "{\"events\":[{\"t\":1.0,\"mode\":\"roller\"}]}", requires: rollerPolicy)
+        XCTAssertTrue(declaredButIrrelevant.validate().isValid)
+
+        let undeclaredButValid = try self.show(tracks: "{\"events\":[{\"t\":1.0,\"mode\":\"roller\"}]}")
+        XCTAssertTrue(undeclaredButValid.validate().isValid)
     }
 }

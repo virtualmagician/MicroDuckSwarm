@@ -37,11 +37,21 @@ class Meta:
 
 @dataclass
 class PolicyRequirement:
+    """A required non-stock .onnx policy (docs/duckshow-format.md "Custom
+    .onnx policies"). `name` is a human label only -- for logs and error
+    messages -- and is never sent to robotd. `slot` is what matters: the
+    fixed robotd policy slot (`walk`, `stand`, `sitstand`, `ground_pick`,
+    `kick_left`, `kick_right`, `roulade`, or a roller-family equivalent)
+    this .onnx occupies once installed. There is no per-policy `mode`:
+    the drive-mode string sent at runtime by a `mode` event is always
+    just `"walk"` or `"roller"` (see Event.mode / limits.DRIVE_MODES),
+    completely independent of which policy is behind that slot.
+    """
+
     name: str
-    mode: str
     file: str
     sha256: str
-    slot: Optional[str] = None
+    slot: str
 
 
 @dataclass

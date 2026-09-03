@@ -8,7 +8,7 @@
 // Optionality mirrors the canonical loader in `python/duckshow/loader.py`
 // (docs/architecture.md names it the shared parse/validate implementation):
 // the only required fields are `format`, `meta.duration`, `cast[].role`,
-// every keyframe's `t`, and `requires.policies[].name/mode/file/sha256`.
+// every keyframe's `t`, and `requires.policies[].name/file/sha256`.
 // Everything else defaults exactly as the Python model does (scalars 0.0,
 // `pose.active` false, `interp` linear, `servo.mode` "hold", strings nil),
 // so a file that loads on every duck also loads on the master.
@@ -170,20 +170,31 @@ public struct Requirements: Codable, Sendable, Equatable {
 }
 
 /// A custom `.onnx` policy a show requires. See "Custom .onnx policies" in
-/// docs/duckshow-format.md.
+/// docs/duckshow-format.md. Mirrors Python's `PolicyRequirement`: `name` is
+/// a human label only -- for logs and error messages -- and is never sent
+/// to robotd. `slot` is what matters: the fixed robotd policy slot
+/// (`walk`, `stand`, `sitstand`, `ground_pick`, `kick_left`, `kick_right`,
+/// `roulade`, or a roller-family equivalent) this `.onnx` occupies once
+/// installed. There is deliberately no per-policy `mode` field: the
+/// drive-mode string sent at runtime by a `mode` event is always just
+/// `"walk"` or `"roller"` (see `Event.Action.mode` / `Show.driveModes`),
+/// completely independent of which policy is behind that slot. A `.duckshow`
+/// file written before that was clarified may still carry a `mode` key on a
+/// policy entry -- CodingKeys below doesn't list it, so JSONDecoder's
+/// default behavior of ignoring unrequested keys drops it silently rather
+/// than throwing (same "unknown fields are ignored everywhere" discipline
+/// as the rest of this format).
 public struct RequiredPolicy: Codable, Sendable, Equatable {
     public var name: String
-    public var mode: String
     public var file: String
     public var sha256: String
     /// Optional, like `PolicyRequirement.slot` in the Python model.
     public var slot: String?
 
-    private enum CodingKeys: String, CodingKey { case name, mode, file, sha256, slot }
+    private enum CodingKeys: String, CodingKey { case name, file, sha256, slot }
 
-    public init(name: String, mode: String, file: String, sha256: String, slot: String? = nil) {
+    public init(name: String, file: String, sha256: String, slot: String? = nil) {
         self.name = name
-        self.mode = mode
         self.file = file
         self.sha256 = sha256
         self.slot = slot
@@ -192,7 +203,6 @@ public struct RequiredPolicy: Codable, Sendable, Equatable {
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         name = try c.decode(String.self, forKey: .name)
-        mode = try c.decode(String.self, forKey: .mode)
         file = try c.decode(String.self, forKey: .file)
         sha256 = try c.decode(String.self, forKey: .sha256)
         slot = try c.decodeIfPresent(String.self, forKey: .slot)
@@ -569,7 +579,6 @@ public extension Show {
                 message: "track entry has no matching cast role"))
         }
 
-        let declaredModes = Set(requires.policies.map(\.mode))
         for (role, roleTracks) in tracks {
             validateLocomotion(roleTracks.locomotion, role: role, into: &report)
             validateHead(roleTracks.head, role: role, into: &report)
@@ -577,7 +586,7 @@ public extension Show {
             validateMouth(roleTracks.mouth, role: role, into: &report)
             validateEvents(roleTracks.events, role: role, into: &report)
             validateEventActionNames(roleTracks.events, role: role, into: &report)
-            validateModeDeclared(roleTracks.events, declaredModes: declaredModes, role: role, into: &report)
+            validateModeValue(roleTracks.events, role: role, into: &report)
             validateModeOverlap(roleTracks.events, locomotion: roleTracks.locomotion, role: role, into: &report)
         }
 
@@ -596,6 +605,14 @@ public extension Show {
     static let soundTags: [String] = [
         "alarm", "greet", "inquire", "peck", "chirp", "coo", "wheee"
     ]
+    // The only two drive-mode strings real robotd accepts over the wire
+    // (docs/robotd-api.md "Custom .onnx policies & modes"). There is no
+    // mechanism to register a custom-named mode -- a custom-trained gait
+    // is installed by pointing a fixed policy *slot* at a different .onnx
+    // file (requires.policies[].slot), never by inventing a new mode
+    // string. A `mode` event's value must be one of these two. Kept in
+    // sync with `python/duckshow/limits.py`'s `DRIVE_MODES`.
+    static let driveModes: [String] = ["walk", "roller"]
 
     // Limits — see docs/duckshow-format.md "Validation limits".
     private var limitVx: Double { 0.25 }
@@ -730,16 +747,21 @@ public extension Show {
         }
     }
 
-    /// Parity with `validator.py:_check_mode_declared`: a `mode` event that
-    /// names a mode not declared in `requires.policies` is a warning (stock
-    /// modes need no declaration, so never an error).
-    private func validateModeDeclared(
-        _ events: [Event], declaredModes: Set<String>, role: String, into report: inout ValidationReport
-    ) {
+    /// Parity with `validator.py:_check_mode_value`: a `mode` event's value
+    /// must be a real robotd drive mode -- real hardware accepts exactly
+    /// "walk" or "roller" over the wire and has no mechanism to register a
+    /// custom-named mode (docs/robotd-api.md "Custom .onnx policies &
+    /// modes"; docs/duckshow-format.md "Custom .onnx policies"). A
+    /// custom-trained gait is installed by pointing a fixed policy *slot*
+    /// at a different .onnx file (requires.policies[]), never by inventing
+    /// a new mode string, so `requires.policies` plays no part in whether a
+    /// `mode` event is valid -- unlike the old (incorrect) contract this
+    /// replaces, this is an ERROR, not a warning.
+    private func validateModeValue(_ events: [Event], role: String, into report: inout ValidationReport) {
         for event in events {
-            guard case .mode(let name) = event.action, !declaredModes.contains(name) else { continue }
-            report.warnings.append(ValidationIssue(role: role, track: "events", t: event.t,
-                message: "mode event references '\(name)', not declared in requires.policies"))
+            guard case .mode(let name) = event.action, !Self.driveModes.contains(name) else { continue }
+            report.errors.append(ValidationIssue(role: role, track: "events", t: event.t,
+                message: "mode='\(name)' is not a valid drive mode (expected one of \(Self.driveModes))"))
         }
     }
 

@@ -138,7 +138,7 @@ class EventValidationTest(unittest.TestCase):
         return Show(
             format="duckshow/1",
             meta=Meta(duration=10.0),
-            requires=Requires(policies=[PolicyRequirement(name="p", mode="roller", file="x.onnx", sha256="abc")]),
+            requires=Requires(),
             cast=[CastMember(role="lead")],
             tracks={"lead": RoleTracks(events=events)},
         )
@@ -163,18 +163,49 @@ class EventValidationTest(unittest.TestCase):
         issues = validate(show)
         self.assertTrue(_issues_by_message_substr(issues, "more than one action key"))
 
-    def test_undeclared_mode_is_warning(self) -> None:
-        show = self._show_with_events([Event(t=1.0, mode="not_declared")])
+    def test_mode_walk_validates_clean(self) -> None:
+        # Real robotd accepts exactly "walk"/"roller" over the wire
+        # (docs/robotd-api.md "Custom .onnx policies & modes") --
+        # requires.policies plays no part in whether this is valid.
+        show = self._show_with_events([Event(t=1.0, mode="walk")])
         issues = validate(show)
-        warnings = [i for i in issues if i.severity == "warning"]
-        self.assertTrue(any("not declared" in w.message for w in warnings))
-        # Undeclared mode is a warning, not an error -- load should not be blocked by it alone.
         self.assertEqual([i for i in issues if i.severity == "error"], [])
 
-    def test_declared_mode_no_warning(self) -> None:
+    def test_mode_roller_validates_clean(self) -> None:
         show = self._show_with_events([Event(t=1.0, mode="roller")])
         issues = validate(show)
-        self.assertFalse(_issues_by_message_substr(issues, "not declared"))
+        self.assertEqual([i for i in issues if i.severity == "error"], [])
+
+    def test_unknown_mode_is_error(self) -> None:
+        # BUG 1: a mode event must never carry anything but a real drive
+        # mode -- a custom-named mode (e.g. from a mis-authored show
+        # patterned on a custom policy's *label*) would be refused by
+        # real robotd, even though it passes against the mock.
+        show = self._show_with_events([Event(t=1.0, mode="moonwalk")])
+        issues = validate(show)
+        errors = _issues_by_message_substr(issues, "not a valid drive mode")
+        self.assertEqual(len(errors), 1)
+        self.assertIn("walk", errors[0].message)
+        self.assertIn("roller", errors[0].message)
+
+    def test_custom_policy_label_with_walk_mode_event_validates_clean(self) -> None:
+        # A show that declares a custom policy (whose `name` is a human
+        # label only) and drives it at runtime with an ordinary "walk"
+        # mode event -- the documented, correct pattern -- validates
+        # clean. The policy's label is never referenced by the event.
+        show = Show(
+            format="duckshow/1",
+            meta=Meta(duration=10.0),
+            requires=Requires(
+                policies=[
+                    PolicyRequirement(name="moonwalk", file="policies/moonwalk.onnx", sha256="abc", slot="walk")
+                ]
+            ),
+            cast=[CastMember(role="lead")],
+            tracks={"lead": RoleTracks(events=[Event(t=0.0, mode="walk")])},
+        )
+        issues = validate(show)
+        self.assertEqual([i for i in issues if i.severity == "error"], [])
 
 
 class ModeLocomotionOverlapTest(unittest.TestCase):
@@ -182,7 +213,7 @@ class ModeLocomotionOverlapTest(unittest.TestCase):
         show = Show(
             format="duckshow/1",
             meta=Meta(duration=10.0),
-            requires=Requires(policies=[PolicyRequirement(name="p", mode="roller", file="x.onnx", sha256="abc")]),
+            requires=Requires(),
             cast=[CastMember(role="lead")],
             tracks={
                 "lead": RoleTracks(
@@ -200,7 +231,7 @@ class ModeLocomotionOverlapTest(unittest.TestCase):
         show = Show(
             format="duckshow/1",
             meta=Meta(duration=10.0),
-            requires=Requires(policies=[PolicyRequirement(name="p", mode="roller", file="x.onnx", sha256="abc")]),
+            requires=Requires(),
             cast=[CastMember(role="lead")],
             tracks={
                 "lead": RoleTracks(
@@ -216,7 +247,7 @@ class ModeLocomotionOverlapTest(unittest.TestCase):
         show = Show(
             format="duckshow/1",
             meta=Meta(duration=10.0),
-            requires=Requires(policies=[PolicyRequirement(name="p", mode="roller", file="x.onnx", sha256="abc")]),
+            requires=Requires(),
             cast=[CastMember(role="lead")],
             tracks={
                 "lead": RoleTracks(
@@ -233,10 +264,11 @@ class FixtureParityTest(unittest.TestCase):
     """Data-driven regression coverage for shows/fixtures/*.duckshow.json
     against shows/fixtures/expected.json (F67): each fixture is a small,
     focused document with one thing wrong (or one thing that's actually
-    fine but easy to mistake for wrong -- see the 'divergent-' fixture).
+    fine but easy to mistake for wrong -- see 'valid-unsorted-events').
     These are also loaded from SwarmLink/Tests/SwarmLinkTests -- see
-    DuckShowFixtureTests.swift and expected.json's own "_comment" for the
-    one tracked cross-language divergence these fixtures pin down.
+    DuckShowFixtureTests.swift and expected.json's own "_comment". A
+    fixture whose Swift result diverges from this one gets a 'divergent-'
+    filename prefix; there is currently no such fixture.
     """
 
     @classmethod

@@ -12,7 +12,7 @@ to an optional callback. Writes are serialized by a lock so `notify()`
 and `request()` can both be called from the playback tick thread and
 the RPC-issuing thread without interleaving partial lines.
 
-On connect, `hello {"api_version": 16}` is sent and the reply logged
+On connect, `hello {"api_version": 17}` is sent and the reply logged
 (docs/robotd-api.md: "Version mismatch is reported, not refused").
 
 If the connection drops, a background thread reconnects with capped
@@ -44,7 +44,7 @@ from typing import Any, Callable, Optional
 
 logger = logging.getLogger("duck_agent.robotd_client")
 
-API_VERSION = 16
+API_VERSION = 17
 _RECV_BUFSIZE = 65536
 
 # Longest a notification may wait for the socket to accept it (module

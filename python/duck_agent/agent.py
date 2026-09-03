@@ -215,8 +215,15 @@ class DuckAgent:
         self._show_time_correction_target_s: float = 0.0
 
         self._playback_lock = threading.RLock()
-        # tag -> (release timer, identity token) for sounds started with hold
-        self._held_sounds: dict[str, tuple[threading.Timer, object]] = {}
+        # tag -> absolute monotonic_ns deadline for sounds started with
+        # hold=True. Per docs/duckshow-format.md ("Held sounds") this is
+        # not a one-shot timer: `_tick_loop` re-sends `hold: true` for
+        # every tag still in this dict on every tick (a notification per
+        # tick, like robot.mouth -- upstream's own hold state decays
+        # without it) and releases it exactly once, either when the
+        # deadline passes or when _take_held_sounds_locked empties the
+        # dict early (stop/panic/load/end-of-show).
+        self._held_sounds: dict[str, int] = {}
         # A stop that could not be delivered (link down / request failed)
         # is re-sent as soon as robotd is reachable again.
         self._stop_owed: bool = False
@@ -879,33 +886,54 @@ class DuckAgent:
 
     # -- sound hold/release ------------------------------------------------
 
-    def _register_held_sound_locked(self, tag: str, hold_s: float) -> None:
-        old = self._held_sounds.pop(tag, None)
-        if old is not None:
-            old[0].cancel()
-        token = object()
-        timer = threading.Timer(hold_s, self._release_sound, args=(tag, token))
-        timer.daemon = True
-        self._held_sounds[tag] = (timer, token)
-        timer.start()
+    def _register_held_sound_locked(self, tag: str, hold_s: float, now_ns: int) -> None:
+        """Track `tag` as held until `now_ns + hold_s`; `_tick_loop` takes
+        it from here (module docstring / class docstring on
+        `_held_sounds`): re-send `hold: true` every tick until the
+        deadline, then release exactly once.
+        """
+        self._held_sounds[tag] = now_ns + int(hold_s * 1e9)
 
     def _take_held_sounds_locked(self) -> list[str]:
-        """Cancel every pending release timer and hand back the tags that
-        are still sounding -- the caller must release them (a cancelled
-        timer alone would leave the loop running forever).
+        """Hand back the tags that are still (nominally) sounding -- the
+        caller must release them. Clearing the dict here is also what
+        stops `_tick_loop` from re-sending `hold: true` for them on the
+        very next tick.
         """
         held, self._held_sounds = self._held_sounds, {}
-        for timer, _token in held.values():
-            timer.cancel()
         return list(held.keys())
 
-    def _release_sound(self, tag: str, token: object) -> None:
-        with self._playback_lock:
-            entry = self._held_sounds.get(tag)
-            if entry is None or entry[1] is not token:
-                return  # already released (stop/panic/load) or re-held since
-            del self._held_sounds[tag]
-        self._send_sound_release(tag)
+    def _collect_held_sound_actions_locked(self, now_ns: int) -> tuple[list[str], list[str]]:
+        """Split currently-held tags into "still within `hold` seconds"
+        (re-send `hold: true` this tick) and "deadline reached" (release
+        once and stop tracking). Caller holds _playback_lock; called every
+        tick regardless of FSM state -- the dict is normally empty except
+        while PLAYING, since every other exit already emptied it via
+        `_take_held_sounds_locked`.
+        """
+        resend: list[str] = []
+        expired: list[str] = []
+        for tag, deadline_ns in list(self._held_sounds.items()):
+            if now_ns >= deadline_ns:
+                expired.append(tag)
+                del self._held_sounds[tag]
+            else:
+                resend.append(tag)
+        return resend, expired
+
+    def _resend_held_sound(self, tag: str) -> None:
+        """Re-notify a still-held sound. docs/duckshow-format.md ("Held
+        sounds"): `hold: true` is "a notification per tick, like the
+        mouth" -- fire-and-forget, same as robot.move/head/pose/mouth, so
+        a slow/unreachable robotd never stalls the tick loop waiting on a
+        reply for this. A disconnect is already handled by
+        `_on_robotd_state_change` -> `_enter_fault`, which empties
+        `_held_sounds`, so nothing further is owed from here.
+        """
+        try:
+            self.robotd.notify("robot.sound", {"tag": tag, "hold": True})
+        except RobotdDisconnected as exc:
+            logger.debug("%s: held-sound resend for %r failed: %s", self.duck_id, tag, exc)
 
     def _send_sound_release(self, tag: str) -> None:
         try:
@@ -934,17 +962,22 @@ class DuckAgent:
             elif kind == "sound":
                 # duckshow-format.md's event `hold` is a *duration in
                 # seconds*; robotd-api.md's robot.sound `hold` is a
-                # boolean start/stop flag ("start -> loop -> end via
-                # hold"). Reconciled here: hold=true starts the loop
-                # immediately, and a timer fires the release (hold=false)
-                # after `hold` seconds of real time.
+                # boolean start/loop/end flag that (per upstream) must
+                # keep arriving once per tick or it decays on its own.
+                # Reconciled here: this first hold=true starts the loop
+                # (a request, so a refusal -- e.g. BUSY -- is caught
+                # below like any other discrete call); _tick_loop then
+                # re-sends hold=true every tick for `hold` seconds
+                # (_register_held_sound_locked / _collect_held_sound_
+                # actions_locked) and sends hold=false exactly once when
+                # that elapses.
                 if event.hold is not None:
                     self.robotd.request(
                         "robot.sound", {"tag": event.sound, "hold": True}, timeout=ROBOTD_REQUEST_TIMEOUT_S
                     )
                     with self._playback_lock:
                         if self.state == "playing":
-                            self._register_held_sound_locked(event.sound, event.hold)
+                            self._register_held_sound_locked(event.sound, event.hold, time.monotonic_ns())
                             return
                     # Playback ended while the sound was starting.
                     self._send_sound_release(event.sound)
@@ -1019,12 +1052,23 @@ class DuckAgent:
                 puppet_epoch = self._puppet.epoch
                 if self.state not in ("idle", "loaded", "playing"):
                     puppet_actions = []
+                # Held sounds (docs/duckshow-format.md "Held sounds"):
+                # decide, once per tick, which tags still need hold=true
+                # re-sent and which just reached their deadline. Computed
+                # every tick regardless of state -- the dict is normally
+                # empty outside PLAYING, since every other exit already
+                # emptied it via _take_held_sounds_locked.
+                held_resend, held_expired = self._collect_held_sound_actions_locked(now_ns)
 
             # Discrete robotd requests happen outside the lock; puppet
             # actions go to their own thread so this loop's period never
             # depends on a robot.do round trip (module docstring).
             for event in events:
                 self._fire_event(event)
+            for tag in held_resend:
+                self._resend_held_sound(tag)
+            for tag in held_expired:
+                self._send_sound_release(tag)
             for kind, name in puppet_actions:
                 try:
                     self._puppet_actions.put_nowait((kind, name, puppet_epoch))

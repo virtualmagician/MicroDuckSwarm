@@ -25,7 +25,7 @@ from .state import DuckState
 
 logger = logging.getLogger("mock_duck")
 
-API_VERSION = 16
+API_VERSION = 17
 DAEMON_VERSION = "mock-0.1"
 
 JOINT_COUNT = 15  # docs/robotd-api.md: JOINT_NAMES, 15 (left leg x5, neck/head/mouth x5, right leg x5)

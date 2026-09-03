@@ -270,7 +270,6 @@ class LoadValidationAndPolicyTest(_AgentTestBase):
             (policy_dir / "walk.onnx").write_bytes(policy_bytes)
             policy = {
                 "name": "walk",
-                "mode": "walk",
                 "file": "policies/walk.onnx",
                 "sha256": _sha256_bytes(policy_bytes),
                 "slot": "walk",

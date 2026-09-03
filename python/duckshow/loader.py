@@ -101,10 +101,9 @@ def _parse_policy(d: dict[str, Any]) -> PolicyRequirement:
     d = _require_dict(d, "requires.policies[]")
     return PolicyRequirement(
         name=_require_str(d.get("name"), "requires.policies[].name"),
-        mode=_require_str(d.get("mode"), "requires.policies[].mode"),
         file=_require_str(d.get("file"), "requires.policies[].file"),
         sha256=_require_str(d.get("sha256"), "requires.policies[].sha256"),
-        slot=d.get("slot"),
+        slot=_require_str(d.get("slot"), "requires.policies[].slot"),
     )
 
 

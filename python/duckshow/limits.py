@@ -33,6 +33,17 @@ SOUND_TAGS = (
     "wheee",
 )
 
+# The only two drive-mode strings real robotd accepts over the wire
+# (docs/robotd-api.md "Custom .onnx policies & modes"). There is no
+# mechanism to register a custom-named mode -- a custom-trained gait is
+# installed by pointing a fixed policy *slot* at a different .onnx file
+# (requires.policies[].slot), never by inventing a new mode string. A
+# `mode` event's value must be one of these two.
+DRIVE_MODES = (
+    "walk",
+    "roller",
+)
+
 
 @dataclass(frozen=True)
 class Limits:

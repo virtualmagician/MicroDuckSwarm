@@ -143,10 +143,10 @@ class MockDuckTest(unittest.TestCase):
     def test_hello_handshake(self) -> None:
         client = RawClient(self.server.port)
         try:
-            client.send({"jsonrpc": "2.0", "id": 1, "method": "hello", "params": {"api_version": 16}})
+            client.send({"jsonrpc": "2.0", "id": 1, "method": "hello", "params": {"api_version": 17}})
             reply = client.recv()
             self.assertEqual(reply["id"], 1)
-            self.assertEqual(reply["result"]["api_version"], 16)
+            self.assertEqual(reply["result"]["api_version"], 17)
             self.assertEqual(reply["result"]["daemon_version"], "mock-0.1")
         finally:
             client.close()
@@ -154,7 +154,7 @@ class MockDuckTest(unittest.TestCase):
     def test_move_notification_and_do_request_logged(self) -> None:
         client = RawClient(self.server.port)
         try:
-            client.send({"jsonrpc": "2.0", "id": 1, "method": "hello", "params": {"api_version": 16}})
+            client.send({"jsonrpc": "2.0", "id": 1, "method": "hello", "params": {"api_version": 17}})
             self.assertEqual(client.recv()["id"], 1)
 
             # Continuous intent: notification, no id, no reply expected.
@@ -392,14 +392,14 @@ class MockDuckTest(unittest.TestCase):
 
     def test_sequential_connections_supported(self) -> None:
         client1 = RawClient(self.server.port)
-        client1.send({"jsonrpc": "2.0", "id": 1, "method": "hello", "params": {"api_version": 16}})
-        self.assertEqual(client1.recv()["result"]["api_version"], 16)
+        client1.send({"jsonrpc": "2.0", "id": 1, "method": "hello", "params": {"api_version": 17}})
+        self.assertEqual(client1.recv()["result"]["api_version"], 17)
         client1.close()
 
         client2 = RawClient(self.server.port)
         try:
-            client2.send({"jsonrpc": "2.0", "id": 2, "method": "hello", "params": {"api_version": 16}})
-            self.assertEqual(client2.recv()["result"]["api_version"], 16)
+            client2.send({"jsonrpc": "2.0", "id": 2, "method": "hello", "params": {"api_version": 17}})
+            self.assertEqual(client2.recv()["result"]["api_version"], 17)
         finally:
             client2.close()
 

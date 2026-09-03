@@ -10,7 +10,7 @@ StageWizard (Mac) ── robotShow cue ──▶ SwarmLink (Swift package)
                           ┌───────────────┼────────────────┐
                           ▼               ▼                ▼
                      duck-agent      duck-agent   ···  duck-agent      (Python, on each duck)
-                          │ robotd Unix socket (JSON-RPC NDJSON, api v16)
+                          │ robotd Unix socket (JSON-RPC NDJSON, api v17)
                           ▼
                        robotd ──▶ ONNX policies ──▶ 15 servos @ 50 Hz
 ```

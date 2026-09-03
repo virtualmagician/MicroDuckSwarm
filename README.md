@@ -40,17 +40,17 @@ Choreography here is **intent curves, not joint keyframes**. `robotd` accepts on
 
 ## What it looks like
 
-The stage viewer is a **kinematic preview**. It answers questions about staging, spacing, facing and silhouette. It does not simulate physics, and it never pretends to.
+The stage viewer is a **kinematic preview**. It shows staging, spacing and silhouette, not physics.
 
 ![Eight ducks in three-quarter view on the measured floor](docs/images/viewer-threequarter.png)
 
-The floor is an instrument, not decoration: 1 m major lines, 10 cm minor divisions, tinted axes through the origin. A MicroDuck is 25 cm tall, so it stands about two and a half minor squares high and blocking distances read at a glance.
+The floor is measured: 1 m major lines, 10 cm minor divisions, tinted axes through the origin. A MicroDuck is 25 cm tall, so it stands about two and a half minor squares high.
 
 ![Close view showing the head shell, camera lens, bill and articulated legs](docs/images/viewer-closeup.png)
 
 ![Top-down view showing the eight-duck formation and start marks](docs/images/viewer-top.png)
 
-Top view is for formations and marks. Drag a duck's start ring and it persists into the show file. `shows/octet`, *Eight to the Bar*, is 64 seconds at 120 bpm: a unison opening, eight solo turns while the rest hold still, and a finale back in unison.
+Top view is for formations and marks. Drag a duck's start ring and it persists into the show file. `shows/octet` is 64 seconds at 120 bpm for eight ducks: a unison opening, eight solo turns, and a unison finale.
 
 ## Prior art and influences
 
@@ -66,7 +66,7 @@ The design borrows deliberately, and it is worth being explicit about from where
 
 ## Status
 
-Pre-hardware. MicroDuck units ship late 2026. Everything here runs today against a protocol-faithful mock duck, with the wire protocol verified against the [microduck](https://github.com/pollen-robotics/microduck) source (`duck-ipc-proto`, API version 16).
+Pre-hardware. MicroDuck units ship late 2026. Everything here runs today against a protocol-faithful mock duck, with the wire protocol verified against the [microduck](https://github.com/pollen-robotics/microduck) source (`duck-ipc-proto`, API version 17).
 
 | | |
 |---|---|
@@ -80,22 +80,22 @@ That zero is deliberate and load-bearing. Python is standard-library only so the
 
 ## Roadmap
 
-What is not built yet, and the specific thing that unblocks each item. Nothing here is waiting on enthusiasm; each entry is waiting on a fact we do not have.
+Not built yet, and what unblocks each item.
 
-| Not built | Trigger that enables it |
+| Not built | Trigger |
 |---|---|
-| **Provisioning** (systemd unit, rsync deploy, `.onnx` policy push) | A first duck on the desk. Service ordering on Armbian, real paths, and how `robotd` reacts to a restart mid-session cannot be honestly guessed. |
-| **Hardware bring-up:** latency and jitter measurement, `robot.setMode` semantics, battery and boot timing, watchdog behaviour on the local socket | Hardware arrives. This is the M1 session that turns assumptions into numbers. |
-| **Rust port of the agent tick loop** | Only if the RK3566 cannot hold 40 Hz or better in Python. Measured on day one, not before. |
-| **DuckSwarm.app** (SwiftUI shell around SwarmLink, the editor in a WKWebView, the recorder, and a preflight dashboard) | Real telemetry to design the dashboard against. Battery curves, venue signal behaviour, and what `degraded` looks like in practice are the whole design, and inventing them guarantees a rebuild. |
-| **Servo cues:** laser homing, colour-beacon homing, marker following | Confirming our agent can access the camera alongside `mediad`, which owns it for WebRTC. One afternoon with a duck settles it. |
-| **Create Preview:** baked real-policy physics (MuJoCo-WASM plus onnxruntime-web) rendered through the viewer's pose interface | A populated `assets/microduck/` with Pollen's MJCF and meshes. The renderer already takes a pose stream and nothing else, so the substitution is additive. Best calibrated against a real duck, so it pairs naturally with M1. |
-| **Intended-versus-actual drift diff**, drawing planned and simulated paths together and marking where they part | Follows the bake. This is the real prize: it measures the dead-reckoning drift the whole project is designed around. |
-| **Overhead tag tracking** for genuinely tight walking formations | Only if in-place work and loose blocking prove insufficient in rehearsal. Deliberately not pre-empted. |
-| **Markerless person following** on the onboard NPU | After marker-based servo cues work. Walk before running. |
+| **Provisioning:** systemd unit, rsync deploy, `.onnx` policy push | Hardware. Depends on service ordering on Armbian, real filesystem paths, and `robotd` restart behaviour mid-session. |
+| **Hardware bring-up:** latency and jitter measurement, `robot.setMode` timing, battery and boot timing, deadman behaviour under load | Hardware. |
+| **Rust port of the agent tick loop** | Only if the RK3566 cannot hold 40 Hz in Python. The `robotd` deadman is 500 ms, so a stalled tick loop zeroes velocity. |
+| **DuckSwarm.app:** SwiftUI shell around SwarmLink, editor in a WKWebView, recorder, preflight dashboard | Real telemetry. The dashboard shows battery, RSSI, clock offset and heartbeat age; the thresholds are unknown until measured. |
+| **Servo cues:** laser homing, colour-beacon homing, marker following | Camera access for our agent alongside `mediad`, which owns it for WebRTC. Untested. |
+| **Create Preview:** baked real-policy physics (MuJoCo plus the shipped ONNX policies) replayed through the viewer's pose interface | A populated `assets/microduck/` with Pollen's MJCF and meshes. The renderer already takes a pose stream, so the substitution is additive. See [`docs/viewer.md`](docs/viewer.md). |
+| **Intended-versus-actual drift diff:** planned and simulated paths drawn together | Follows the bake. Quantifies dead-reckoning drift, which the ducks cannot measure themselves (no localization). |
+| **Overhead tag tracking** for tight walking formations | Only if in-place work and loose blocking prove insufficient in rehearsal. |
+| **Markerless person following** on the onboard NPU (~0.8 TOPS) | After marker-based servo cues work. |
 | **Blender import** for spatial authoring | Only if timeline authoring proves too slow for longer pieces. |
 
-The critical path for most of this is not code. It is **ordering the ducks**, which currently carries a four-to-six month lead time.
+Most of this is gated on hardware. MicroDuck currently quotes a four-to-six month lead time.
 
 ## Repository layout
 
@@ -104,7 +104,7 @@ The critical path for most of this is not code. It is **ordering the ducks**, wh
 | `docs/` | Specs, the contracts between components, written before the code |
 | `docs/duckshow-format.md` | The `.duckshow` choreography file format |
 | `docs/swarmlink-protocol.md` | Clock sync, triggers, telemetry and the puppet channel over UDP |
-| `docs/robotd-api.md` | Verified MicroDuck `robotd` JSON-RPC surface (API v16) |
+| `docs/robotd-api.md` | Verified MicroDuck `robotd` JSON-RPC surface (API v17) |
 | `docs/osc-facade.md` | OSC 1.0 control surface for external rigs |
 | `docs/authoring.md` | Puppeteering, `swarmctl record`, the timeline editor |
 | `docs/viewer.md` | The 3D stage viewer, and the planned baked-physics preview |
