@@ -1,12 +1,15 @@
 # MicroDuckSwarm
 
 [![CI](https://github.com/virtualmagician/MicroDuckSwarm/actions/workflows/ci.yml/badge.svg)](https://github.com/virtualmagician/MicroDuckSwarm/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](python/)
+[![Swift 6](https://img.shields.io/badge/swift-6-orange.svg)](SwarmLink/)
 
-Choreography authoring and playback for a flock of [Pollen Robotics MicroDucks](https://pollen-robotics.com/microduck/) — synchronized to music and video, built for live keynote stages.
+**A choreography system for a flock of [Pollen Robotics MicroDucks](https://pollen-robotics.com/microduck/)** — author a piece on a timeline, preview the whole cast in 3D, and play it back on stage in sync with music and video.
 
-![The stage viewer: eight MicroDucks in formation on the measured floor](docs/images/stage-viewer.png)
+![The duckshow editor: a 3D stage viewer above a beat-gridded timeline, with eight MicroDucks in formation](docs/images/editor.png)
 
-*The stage viewer — a kinematic preview of `shows/octet`, eight ducks on a 1 m grid with 10 cm divisions. Scrub the timeline and the flock performs.*
+Eight ducks dancing together is not a networking problem, it is a *timing* problem. This repository solves it the way drone shows and theme-park animatronics do — and has the whole thing working, tested and watchable **before the hardware ships**.
 
 ## Quick start
 
@@ -14,93 +17,127 @@ Choreography authoring and playback for a flock of [Pollen Robotics MicroDucks](
 ./scripts/edit.sh shows/octet
 ```
 
-Serves the repo, opens the editor in your browser with the eight-duck piece loaded, and stops again on Ctrl+C. Press space to play, `1` `2` `3` for the house, three-quarter and top cameras, and drag on the stage to orbit.
+Serves the checkout, opens the editor with the eight-duck piece loaded, and stops again on Ctrl+C. Space plays; `1` `2` `3` switch between the house, three-quarter and top cameras; drag to orbit. No build step, no dependencies, no CDN.
 
-Run it bare (`./scripts/edit.sh`) for the two-duck demo, or point it at any `.duckshow.json`. Nothing else to install — no build step, no dependencies.
-
-To watch the whole stack run without hardware — two mock ducks, a duck-agent on each, the show master driving them, and a verifier checking they stayed in sync:
+To watch the entire stack run without a single robot — two mock ducks, a duck-agent on each, the show master driving them, and a verifier checking they stayed in sync:
 
 ```bash
 ./scripts/e2e_demo.sh
 ```
 
-A duck show is authored once, compiled to a `.duckshow` file, and pre-loaded onto every duck. On show night the WiFi carries only a shared clock, start/stop triggers, and telemetry — each duck performs its part locally at 50 Hz against MicroDuck's `robotd` daemon, so a network dropout mid-number costs nothing. The pattern is borrowed from drone light shows and Disney's BDX droids: **pre-load the show, sync only clocks, never stream the performance.**
+## The idea
+
+A show is authored once, compiled to a `.duckshow` file, and **pre-loaded onto every duck**. On show night the network carries only a shared clock, start/stop triggers, and telemetry. Each duck performs its own part locally at 50 Hz against MicroDuck's `robotd` daemon, so a WiFi dropout mid-number costs nothing:
+
+```
+ .duckshow ──▶ SwarmLink master ──UDP──▶ duck-agent ──▶ robotd ──▶ ONNX policies ──▶ 15 servos
+                (clock + triggers)        (50 Hz local playback)
+```
+
+**Pre-load the show, synchronise only clocks, never stream the performance.** Almost everything else follows from that one decision.
+
+Choreography here is **intent curves, not joint keyframes**. `robotd` accepts only high-level intents — `robot.move`, `robot.head`, `robot.pose`, `robot.mouth`, plus one-shot skills and sounds — and the robot's reinforcement-learned policies handle balance underneath. A `.duckshow` is therefore a handful of low-dimensional timed tracks per cast role, snapped to a beat grid. That makes authoring look like a sequencer rather than a character-animation rig.
+
+## What it looks like
+
+The stage viewer is a **kinematic preview**: it answers questions about staging, spacing, facing and silhouette. It does not simulate physics, and it never pretends to.
+
+![Eight ducks in three-quarter view on the measured floor](docs/images/viewer-threequarter.png)
+
+The floor is an instrument, not decoration — 1 m major lines, 10 cm minor divisions, tinted axes through the origin. A MicroDuck is 25 cm tall, so it stands about two and a half minor squares high and blocking distances read at a glance.
+
+![Close view showing the head shell, camera lens, bill and articulated legs](docs/images/viewer-closeup.png)
+
+![Top-down view showing the eight-duck formation and start marks](docs/images/viewer-top.png)
+
+Top view is for formations and marks; drag a duck's start mark and it persists into the show file. `shows/octet` — *Eight to the Bar* — is 64 seconds at 120 bpm: a unison opening, eight solo turns while the rest hold still, and a finale back in unison.
+
+## Prior art and influences
+
+The design borrows deliberately, and it is worth being explicit about from where:
+
+- **Boston Dynamics' Spot Choreography SDK** — the [Choreographer](https://dev.bostondynamics.com/docs/concepts/choreography/choreographer.html) data model of beats, slices and per-actuator tracks, uploaded ahead of time and executed from a shared start timestamp, is the closest documented ancestor of the `.duckshow` format.
+- **Disney Research's BDX droids** — *[Design and Control of a Bipedal Robotic Character](https://arxiv.org/abs/2501.05204)* establishes the pattern this project's authoring loop imitates: artist-authored motion becomes an imitation-learning reference, a command-conditioned policy executes it, and a human operator drives the result live. MicroDuck descends from the same lineage via [Open Duck Mini](https://github.com/apirrone/Open_Duck_Mini).
+- **Drone light shows** — [Verge Aero on how a show actually runs](https://docs.verge.aero/drone-show-technology/how-drone-shows-work-an-overview) (upload the entire show to every aircraft, then trigger against a scheduled future timestamp), and [Verity Studios](https://www.veritystudios.com/technology) treating performing robots as ordinary timecode-cued show devices.
+- **[Falcon Player](https://github.com/FalconChristmas/fpp) / xLights** — the unglamorous but proven precedent for many small WiFi nodes performing in sync to music: a master emitting lightweight sync packets while each node free-runs its own local copy.
+- **[RFC 9119](https://www.rfc-editor.org/rfc/rfc9119.html)**, on multicast over IEEE 802.11 — why must-arrive messages here are unicast, repeated and idempotent. 802.11 neither acknowledges nor retransmits multicast frames, so a "start" packet can silently reach seven of eight ducks.
+- **Audiovisual synchrony thresholds** — misalignment below roughly 20 ms is imperceptible, and detection is asymmetric. That sets the sync budget the whole system is engineered against.
+- **[QLab](https://qlab.app/docs/v5/networking/)** and the OSC show-control conventions it popularised, which the `swarmctl serve` facade mirrors so the flock behaves like any other cued device in an existing rig.
 
 ## Status
 
-Pre-hardware development (M0). MicroDuck units ship late 2026; everything here runs today against a protocol-faithful mock duck and is verified against the [microduck](https://github.com/pollen-robotics/microduck) source (API version 16).
+Pre-hardware. MicroDuck units ship late 2026; everything here runs today against a protocol-faithful mock duck, with the wire protocol verified against the [microduck](https://github.com/pollen-robotics/microduck) source (`duck-ipc-proto`, API version 16).
 
-`shows/octet/octet.duckshow.json` — "Eight to the Bar" — is a 64-second piece for eight ducks at 120 bpm: a unison opening, eight solo turns while the rest hold still, and a finale back in unison. It validates clean and plays in the editor today.
+| | |
+|---|---|
+| Cross-duck event sync (localhost, mock ducks) | **1.3 ms** measured, against a ~20 ms perceptual budget |
+| Clock discipline | NTP-style over UDP, min-RTT filtered, slew-limited |
+| Tests | 326 Python · 175 Swift · 146 editor |
+| End-to-end gates | 3 — Python master, Swift master over OSC, recorder round-trip |
+| Third-party runtime dependencies | **0** |
 
-**A note on assets.** This repository contains no Pollen files. MicroDuck's meshes, MJCF model and hardware design files are licensed CC BY-SA-NC and are not redistributed here; the duck in the viewer is our own geometry, built from primitives. The planned physics preview will load Pollen's model from a gitignored `assets/microduck/` that you supply yourself.
+That zero is deliberate and load-bearing. Python is standard-library only so the agent runs on a stock Armbian image; SwarmLink uses only system frameworks; the editor has no build step and no CDN, so it opens at a venue with no internet.
 
-## Layout
+## Repository layout
 
 | Path | What it is |
 |---|---|
-| `docs/` | Specs — the source of truth for every component |
+| `docs/` | Specs — the contracts between components, written before the code |
 | `docs/duckshow-format.md` | The `.duckshow` choreography file format |
-| `docs/swarmlink-protocol.md` | Clock sync, triggers, telemetry over UDP |
-| `docs/robotd-api.md` | Verified MicroDuck `robotd` JSON-RPC surface |
-| `docs/osc-facade.md` | OSC 1.0 control surface of `swarmctl serve` for external rigs |
-| `docs/authoring.md` | Puppeteering, `swarmctl record`, and the timeline editor |
+| `docs/swarmlink-protocol.md` | Clock sync, triggers, telemetry and the puppet channel over UDP |
+| `docs/robotd-api.md` | Verified MicroDuck `robotd` JSON-RPC surface (API v16) |
+| `docs/osc-facade.md` | OSC 1.0 control surface for external rigs |
+| `docs/authoring.md` | Puppeteering, `swarmctl record`, the timeline editor |
+| `docs/viewer.md` | The 3D stage viewer, and the planned baked-physics preview |
 | `python/duckshow/` | Format library: parse, validate, sample at 50 Hz |
-| `python/duck_agent/` | On-duck show agent: clock discipline, local playback, telemetry, puppet channel |
-| `python/mock_duck/` | Protocol-faithful mock `robotd` for development without hardware |
-| `python/tools/` | Reference show master CLI, stdlib OSC send/listen tool |
-| `SwarmLink/` | Swift package: show-master engine, `swarmctl` CLI (incl. `record`), OSC facade (`swarmctl serve`) |
-| `editor/` | Single-file, zero-dependency `.duckshow` timeline editor (beat grid, validation, top-down preview) |
-| `shows/` | Example choreographies |
-| `scripts/` | End-to-end demos (`e2e_demo.sh` Python master, `e2e_osc.sh` Swift master over OSC, `e2e_record.sh` puppet-channel recorder) |
+| `python/duck_agent/` | On-duck agent: clock discipline, local playback, telemetry, puppet channel |
+| `python/mock_duck/` | Protocol-faithful mock `robotd`, with a timestamped intent log |
+| `python/tools/` | Reference show master, stdlib OSC send/listen, puppet streamer |
+| `SwarmLink/` | Swift 6 package: master engine, `swarmctl` CLI, OSC facade, recorder |
+| `editor/` | Zero-dependency timeline editor and WebGL2 stage viewer |
+| `shows/` | Example choreographies, including the eight-duck `octet` |
+| `scripts/` | Launcher and three end-to-end gates |
 
+## Components
 
-## Design in one paragraph
+### Python — the duck side
 
-Choreography on MicroDuck is **intent curves, not joint keyframes**: `robotd` accepts only high-level intents (`robot.move`, `robot.head`, `robot.pose`, `robot.mouth`, one-shot skills and sounds) and its RL policies handle balance underneath. A `.duckshow` is therefore a set of low-dimensional timed tracks per cast role — locomotion, head, pose, mouth, events — snapped to a beat grid. The duck-agent disciplines its clock to the show master (NTP-style over UDP, well under 10 ms on a dedicated AP), then plays its track into `robotd`'s local Unix socket. Triggers are unicast, repeated, and idempotent; WiFi multicast is never used.
-
-## Python
-
-Python 3.10+, standard library only — no third-party dependencies, on the duck or off it.
+Python 3.10+, standard library only, on the duck and off it.
 
 ```bash
-cd python && python -m pytest 2>/dev/null || python -m unittest discover -s tests -v
+cd python && python3 -m unittest discover -s tests
 ```
 
-## SwarmLink (Swift)
+### SwarmLink — the show side
+
+Swift 6, strict concurrency, zero third-party dependencies (Network.framework for UDP).
 
 ```bash
 cd SwarmLink && swift build && swift test
 ```
 
-Zero third-party dependencies (Network.framework for UDP). `swarmctl` is the standalone show-master CLI. For show night with any rig that speaks OSC (QLab, TouchDesigner, a lighting desk, StageWizard network cues):
+`swarmctl` is the show-master CLI. For show night with any rig that speaks OSC — QLab, TouchDesigner, a lighting desk:
 
 ```bash
-swarmctl serve --roster roster.json --shows-dir shows/        # OSC on UDP 53300, Bonjour _duckswarm._udp
-python3 python/tools/osc_send.py 127.0.0.1:53300 /duckswarm/load s:demo
+swarmctl serve --roster roster.json --shows-dir shows/    # OSC on UDP 53300, Bonjour _duckswarm._udp
+python3 python/tools/osc_send.py 127.0.0.1:53300 /duckswarm/load s:octet
 python3 python/tools/osc_send.py 127.0.0.1:53300 /duckswarm/go
 ```
 
-Commands: `/duckswarm/{load,play,go,seek,stop,panic,ping,status}`; status feedback is pushed to any address that pinged in the last 5 s — the same contract as StageWizard ↔ StageWand. Full table in `docs/osc-facade.md`. Embedding into [StageWizard](https://github.com/virtualmagician/StageWizard) as a `robotShow` cue type is planned once hardware is in hand.
+Commands: `/duckswarm/{load,play,go,seek,stop,panic,ping,status}`, with status pushed to any address that pinged in the last five seconds. Full table in [`docs/osc-facade.md`](docs/osc-facade.md).
 
-## Authoring
+### Authoring
 
-Full contract in `docs/authoring.md`. Three ways to get choreography into a `.duckshow` file:
+Three ways into a `.duckshow` file, detailed in [`docs/authoring.md`](docs/authoring.md):
 
-- **Puppet with a gamepad.** `swarmctl record` streams a connected controller's input to one duck over the live puppet channel (`docs/swarmlink-protocol.md` §6) and captures the intent stream as that role's tracks — the Disney BDX workflow, one role at a time:
+- **Puppet with a gamepad.** `swarmctl record` streams a controller to one duck over the live puppet channel and captures the intent stream as that role's tracks — one role at a time, layering onto a show that plays back around you.
+- **Scripted recordings.** `--input script:<file.json>` replays timed input frames instead of a live controller. Reproducible, which is how CI exercises the recorder.
+- **The timeline editor.** Keyframes and events on a beat grid, with the 3D stage above showing the whole cast.
 
-  ```bash
-  swarmctl record --roster roster.json --duck duck-01 --role lead \
-    --out shows/mine/mine.duckshow.json --input gamepad --bpm 120
-  ```
+The puppet channel doubles as a show-night nudge layer: puppeteering a duck mid-playback *adds* to its locomotion and *overrides* its head and pose while packets stay fresh (250 ms deadman), then hands control back to the timeline. Panic and stop mute it outright — the safety invariants always win.
 
-  Add `--show shows/mine/mine.duckshow.json` to layer a role onto an existing show — the rest of the cast plays back while you puppeteer the new one.
+## Assets and licensing
 
-- **Scripted recordings.** `--input script:<file.json>` replays a JSON list of timed input frames instead of reading a live controller — reproducible, so this is also how CI exercises the recorder (`scripts/e2e_record.sh`).
+This repository contains **no Pollen Robotics files**. MicroDuck's meshes, MJCF model and hardware design files are licensed CC BY-SA-NC and are not redistributed here; the duck in the viewer is our own geometry, built from primitives. The planned physics preview ([`docs/viewer.md`](docs/viewer.md)) loads Pollen's model from a gitignored `assets/microduck/` that you supply yourself — the way an emulator does not ship a BIOS.
 
-- **The timeline editor.** `./scripts/edit.sh [show]` is the easy way in; it serves the checkout because Chrome and Safari refuse ES-module imports from `file://` (Firefox opens `editor/duckshow-editor.html` directly). Edit keyframes and events on a beat-gridded timeline while the 3D stage viewer above it shows the whole cast on a measured floor — 1 m grid, 10 cm divisions, house/three-quarter/top cameras. The viewer is a kinematic preview: it shows staging, spacing and silhouette, never whether a gait survives a raked stage. No build step, no CDN. Tests: `node --test editor/tests`.
-
-The puppet channel doubles as the show-night nudge layer: puppeteering a duck that is mid-playback *adds* to its locomotion and *overrides* its head/pose/mouth while the packets stay fresh (250 ms deadman), then hands control straight back to the timeline.
-
-## License
-
-MIT — see [LICENSE](LICENSE). MicroDuck is a product of Pollen Robotics / Hugging Face; this project is an independent fan-built tool and is not affiliated with them.
+MIT — see [LICENSE](LICENSE). MicroDuck is a product of [Pollen Robotics](https://pollen-robotics.com/) / [Hugging Face](https://huggingface.co/pollen-robotics). This is an independent, unaffiliated project, built by an enthusiast with admiration for the original.
