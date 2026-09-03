@@ -17,3 +17,6 @@ DerivedData/
 # Local run artifacts
 *.intents.jsonl
 /tmp/
+
+# Pollen MicroDuck MJCF/meshes: CC BY-SA-NC, user-supplied, never committed
+assets/microduck/

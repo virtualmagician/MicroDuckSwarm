@@ -87,7 +87,17 @@ Authoring stays kinematic and instant. When a piece is ready, one button runs it
 
 **Dependencies.** MuJoCo-WASM, `onnxruntime-web` and a mesh renderer are heavy, and they break the no-CDN/no-build rule the editor holds so it opens at a venue with no internet. That rule stands for the *editor*. The preview is a **separate, optional module**, loaded only when the button is pressed and never needed on show night — so the core stays venue-proof while the preview gets to be expensive.
 
-**Blocked on licensing.** Physics needs Pollen's MJCF model and meshes, and those are **CC BY-SA-NC** while this repo is public MIT and the shows are paid work. This gates the whole feature, not just its looks. The move is to ask Pollen for written permission — an open-source authoring tool for their robot, used by a performer putting eight to ten of them on keynote stages, is close to their ideal showcase. Until then the kinematic viewer with our own primitive duck is what ships.
+**Assets are supplied, never vendored.** Physics needs Pollen's MJCF model and meshes, which are **CC BY-SA-NC**; this repo is public MIT, and MIT permits commercial reuse downstream, so we cannot relabel their assets — that would hand every cloner an NC restriction without telling them. That is a repo-licensing fact, independent of how any particular person uses the tool.
+
+So the assets are **user-supplied at runtime**, the way an emulator does not ship a BIOS:
+
+- The preview looks for a local `assets/microduck/` directory (gitignored, never committed) holding the MJCF and meshes fetched from Pollen's own repositories by whoever is running the tool, under whatever licence applies to them.
+- Present → the preview runs with the real model, and the editor may optionally render the real meshes too.
+- Absent → the button explains where to get them in one line, and the kinematic viewer with our own primitive duck carries on exactly as before.
+
+This keeps the repo cleanly MIT with no third-party assets in it, keeps the default experience dependency-free, and puts the licence question where it belongs: with the person who downloads the assets, for their own use. A note in the README should say plainly that MicroDuck's meshes and hardware design files are CC BY-SA-NC and are not redistributed here.
+
+Worth doing anyway: ask Pollen whether they will grant explicit permission for an open-source authoring tool for their robot. It costs an email and would let us simplify all of the above.
 
 ## Tests
 
