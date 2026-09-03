@@ -302,7 +302,10 @@ export function deriveEventLabels(show, t, window = DEFAULT_EVENT_LABEL_WINDOW) 
 // ---------------------------------------------------------------------------
 
 export const PALETTE_SATURATION = 0.68;
-export const PALETTE_LIGHTNESS = 0.58;
+// Lowered from 0.58 (tuned for the old dark-stage floor, where it read as
+// pastel/washed-out) to a mid-to-deep tone that keeps contrast against the
+// light neutral-grey floor (docs/viewer.md "Colour."). Saturation kept as-is.
+export const PALETTE_LIGHTNESS = 0.4;
 const HUE_SKIP_START = 55; // degrees — muddy yellow-green band, excluded
 const HUE_SKIP_END = 100;
 const HUE_USABLE_SPAN = 360 - (HUE_SKIP_END - HUE_SKIP_START);

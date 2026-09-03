@@ -1,0 +1,3056 @@
+{
+  "format": "duckshow/1",
+  "meta": {
+    "name": "Eight to the Bar",
+    "author": "Marco Tempest",
+    "created": "2026-09-03",
+    "duration": 64.0,
+    "music": {
+      "file": "octet.wav",
+      "bpm": 120.0,
+      "beat_offset": 0.0
+    }
+  },
+  "requires": {
+    "policies": []
+  },
+  "cast": [
+    {
+      "role": "lead",
+      "notes": "front rank, house-left of centre - opens the kick solo"
+    },
+    {
+      "role": "echo",
+      "notes": "front rank, left-centre - the roulade solo"
+    },
+    {
+      "role": "drift",
+      "notes": "front rank, right-centre - the big head-turn solo"
+    },
+    {
+      "role": "spark",
+      "notes": "front rank, house-right of centre - the beak-chatter solo"
+    },
+    {
+      "role": "reed",
+      "notes": "back rank, house-left of centre - the sit solo"
+    },
+    {
+      "role": "wren",
+      "notes": "back rank, left-centre - the ground-pick solo"
+    },
+    {
+      "role": "sable",
+      "notes": "back rank, right-centre - the crouch solo"
+    },
+    {
+      "role": "flare",
+      "notes": "back rank, house-right of centre - the walk-downstage solo"
+    }
+  ],
+  "tracks": {
+    "lead": {
+      "head": [
+        {
+          "t": 0.0,
+          "neck_pitch": 0.0,
+          "head_pitch": 0.0,
+          "head_yaw": 0.0,
+          "head_roll": 0.0,
+          "interp": "smooth"
+        },
+        {
+          "t": 0.5,
+          "neck_pitch": 0.0,
+          "head_pitch": -0.25,
+          "head_yaw": 0.0,
+          "head_roll": 0.0,
+          "interp": "smooth"
+        },
+        {
+          "t": 1.0,
+          "neck_pitch": 0.0,
+          "head_pitch": 0.15,
+          "head_yaw": 0.0,
+          "head_roll": 0.0,
+          "interp": "smooth"
+        },
+        {
+          "t": 1.5,
+          "neck_pitch": 0.0,
+          "head_pitch": -0.25,
+          "head_yaw": 0.0,
+          "head_roll": 0.0,
+          "interp": "smooth"
+        },
+        {
+          "t": 2.0,
+          "neck_pitch": 0.0,
+          "head_pitch": 0.15,
+          "head_yaw": 0.0,
+          "head_roll": 0.0,
+          "interp": "smooth"
+        },
+        {
+          "t": 2.5,
+          "neck_pitch": 0.0,
+          "head_pitch": -0.25,
+          "head_yaw": 0.0,
+          "head_roll": 0.0,
+          "interp": "smooth"
+        },
+        {
+          "t": 3.0,
+          "neck_pitch": 0.0,
+          "head_pitch": 0.15,
+          "head_yaw": 0.0,
+          "head_roll": 0.0,
+          "interp": "smooth"
+        },
+        {
+          "t": 3.5,
+          "neck_pitch": 0.0,
+          "head_pitch": -0.25,
+          "head_yaw": 0.0,
+          "head_roll": 0.0,
+          "interp": "smooth"
+        },
+        {
+          "t": 4.0,
+          "neck_pitch": 0.0,
+          "head_pitch": 0.0,
+          "head_yaw": 0.0,
+          "head_roll": 0.0,
+          "interp": "smooth"
+        },
+        {
+          "t": 8.0,
+          "neck_pitch": 0.0,
+          "head_pitch": 0.0,
+          "head_yaw": 0.0,
+          "head_roll": 0.0,
+          "interp": "smooth"
+        },
+        {
+          "t": 9.0,
+          "neck_pitch": 0.0,
+          "head_pitch": 0.0,
+          "head_yaw": 0.6,
+          "head_roll": 0.0,
+          "interp": "smooth"
+        },
+        {
+          "t": 10.0,
+          "neck_pitch": 0.0,
+          "head_pitch": 0.0,
+          "head_yaw": -0.6,
+          "head_roll": 0.0,
+          "interp": "smooth"
+        },
+        {
+          "t": 11.0,
+          "neck_pitch": 0.0,
+          "head_pitch": 0.0,
+          "head_yaw": 0.6,
+          "head_roll": 0.0,
+          "interp": "smooth"
+        },
+        {
+          "t": 12.0,
+          "neck_pitch": 0.0,
+          "head_pitch": 0.0,
+          "head_yaw": 0.0,
+          "head_roll": 0.0,
+          "interp": "smooth"
+        },
+        {
+          "t": 16.0,
+          "neck_pitch": 0.0,
+          "head_pitch": 0.0,
+          "head_yaw": 0.0,
+          "head_roll": 0.0,
+          "interp": "smooth"
+        },
+        {
+          "t": 16.5,
+          "neck_pitch": 0.0,
+          "head_pitch": -0.2,
+          "head_yaw": 0.0,
+          "head_roll": 0.0,
+          "interp": "smooth"
+        },
+        {
+          "t": 17.0,
+          "neck_pitch": 0.0,
+          "head_pitch": 0.1,
+          "head_yaw": 0.0,
+          "head_roll": 0.0,
+          "interp": "smooth"
+        },
+        {
+          "t": 17.5,
+          "neck_pitch": 0.0,
+          "head_pitch": 0.0,
+          "head_yaw": 0.0,
+          "head_roll": 0.0,
+          "interp": "smooth"
+        },
+        {
+          "t": 56.0,
+          "neck_pitch": 0.0,
+          "head_pitch": 0.0,
+          "head_yaw": 0.0,
+          "head_roll": 0.0,
+          "interp": "smooth"
+        },
+        {
+          "t": 56.75,
+          "neck_pitch": 0.0,
+          "head_pitch": 0.2,
+          "head_yaw": 0.0,
+          "head_roll": 0.1,
+          "interp": "smooth"
+        },
+        {
+          "t": 57.75,
+          "neck_pitch": 0.0,
+          "head_pitch": 0.2,
+          "head_yaw": 0.0,
+          "head_roll": -0.1,
+          "interp": "smooth"
+        },
+        {
+          "t": 59.0,
+          "neck_pitch": 0.0,
+          "head_pitch": -0.2,
+          "head_yaw": 0.0,
+          "head_roll": 0.0,
+          "interp": "smooth"
+        }
+      ],
+      "pose": [
+        {
+          "t": 4.0,
+          "z": 0.0,
+          "roll": 0.0,
+          "pitch": 0.0,
+          "active": true,
+          "interp": "smooth"
+        },
+        {
+          "t": 5.0,
+          "z": 0.0,
+          "roll": 0.12,
+          "pitch": 0.0,
+          "active": true,
+          "interp": "smooth"
+        },
+        {
+          "t": 6.0,
+          "z": 0.0,
+          "roll": -0.12,
+          "pitch": 0.0,
+          "active": true,
+          "interp": "smooth"
+        },
+        {
+          "t": 7.0,
+          "z": 0.0,
+          "roll": 0.12,
+          "pitch": 0.0,
+          "active": true,
+          "interp": "smooth"
+        },
+        {
+          "t": 8.0,
+          "z": 0.0,
+          "roll": 0.0,
+          "pitch": 0.0,
+          "active": false,
+          "interp": "linear"
+        },
+        {
+          "t": 16.0,
+          "z": 0.0,
+          "roll": 0.0,
+          "pitch": 0.0,
+          "active": false,
+          "interp": "smooth"
+        },
+        {
+          "t": 16.5,
+          "z": -0.02,
+          "roll": 0.0,
+          "pitch": 0.05,
+          "active": true,
+          "interp": "smooth"
+        },
+        {
+          "t": 17.0,
+          "z": 0.0,
+          "roll": 0.0,
+          "pitch": -0.05,
+          "active": true,
+          "interp": "smooth"
+        },
+        {
+          "t": 17.5,
+          "z": 0.0,
+          "roll": 0.0,
+          "pitch": 0.0,
+          "active": false,
+          "interp": "linear"
+        },
+        {
+          "t": 56.0,
+          "z": 0.0,
+          "roll": 0.0,
+          "pitch": 0.0,
+          "active": false,
+          "interp": "smooth"
+        },
+        {
+          "t": 56.75,
+          "z": -0.045,
+          "roll": 0.12,
+          "pitch": 0.25,
+          "active": true,
+          "interp": "smooth"
+        },
+        {
+          "t": 57.75,
+          "z": -0.045,
+          "roll": -0.12,
+          "pitch": 0.25,
+          "active": true,
+          "interp": "smooth"
+        },
+        {
+          "t": 59.0,
+          "z": 0.0,
+          "roll": 0.0,
+          "pitch": -0.08,
+          "active": true,
+          "interp": "smooth"
+        }
+      ],
+      "locomotion": [
+        {
+          "t": 12.0,
+          "vx": 0.0,
+          "vy": 0.0,
+          "vyaw": 0.0,
+          "interp": "linear"
+        },
+        {
+          "t": 12.5,
+          "vx": 0.15,
+          "vy": 0.0,
+          "vyaw": 0.0,
+          "interp": "linear"
+        },
+        {
+          "t": 13.5,
+          "vx": 0.15,
+          "vy": 0.0,
+          "vyaw": 0.0,
+          "interp": "linear"
+        },
+        {
+          "t": 14.0,
+          "vx": -0.15,
+          "vy": 0.0,
+          "vyaw": 0.0,
+          "interp": "linear"
+        },
+        {
+          "t": 15.0,
+          "vx": -0.15,
+          "vy": 0.0,
+          "vyaw": 0.0,
+          "interp": "linear"
+        },
+        {
+          "t": 15.5,
+          "vx": 0.0,
+          "vy": 0.0,
+          "vyaw": 0.0,
+          "interp": "linear"
+        },
+        {
+          "t": 52.0,
+          "vx": 0.0,
+          "vy": 0.0,
+          "vyaw": 0.0,
+          "interp": "linear"
+        },
+        {
+          "t": 52.5,
+          "vx": 0.2,
+          "vy": 0.0,
+          "vyaw": 0.0,
+          "interp": "linear"
+        },
+        {
+          "t": 53.5,
+          "vx": 0.2,
+          "vy": 0.0,
+          "vyaw": 0.0,
+          "interp": "linear"
+        },
+        {
+          "t": 54.0,
+          "vx": -0.2,
+          "vy": 0.0,
+          "vyaw": 0.0,
+          "interp": "linear"
+        },
+        {
+          "t": 55.0,
+          "vx": -0.2,
+          "vy": 0.0,
+          "vyaw": 0.0,
+          "interp": "linear"
+        },
+        {
+          "t": 55.5,
+          "vx": 0.0,
+          "vy": 0.0,
+          "vyaw": 0.0,
+          "interp": "linear"
+        }
+      ],
+      "events": [
+        {
+          "t": 17.0,
+          "do": "kick_left"
+        },
+        {
+          "t": 60.0,
+          "sound": "wheee",
+          "hold": 1.5
+        }
+      ]
+    },
+    "echo": {
+      "head": [
+        {
+          "t": 0.0,
+          "neck_pitch": 0.0,
+          "head_pitch": 0.0,
+          "head_yaw": 0.0,
+          "head_roll": 0.0,
+          "interp": "smooth"
+        },
+        {
+          "t": 0.5,
+          "neck_pitch": 0.0,
+          "head_pitch": -0.25,
+          "head_yaw": 0.0,
+          "head_roll": 0.0,
+          "interp": "smooth"
+        },
+        {
+          "t": 1.0,
+          "neck_pitch": 0.0,
+          "head_pitch": 0.15,
+          "head_yaw": 0.0,
+          "head_roll": 0.0,
+          "interp": "smooth"
+        },
+        {
+          "t": 1.5,
+          "neck_pitch": 0.0,
+          "head_pitch": -0.25,
+          "head_yaw": 0.0,
+          "head_roll": 0.0,
+          "interp": "smooth"
+        },
+        {
+          "t": 2.0,
+          "neck_pitch": 0.0,
+          "head_pitch": 0.15,
+          "head_yaw": 0.0,
+          "head_roll": 0.0,
+          "interp": "smooth"
+        },
+        {
+          "t": 2.5,
+          "neck_pitch": 0.0,
+          "head_pitch": -0.25,
+          "head_yaw": 0.0,
+          "head_roll": 0.0,
+          "interp": "smooth"
+        },
+        {
+          "t": 3.0,
+          "neck_pitch": 0.0,
+          "head_pitch": 0.15,
+          "head_yaw": 0.0,
+          "head_roll": 0.0,
+          "interp": "smooth"
+        },
+        {
+          "t": 3.5,
+          "neck_pitch": 0.0,
+          "head_pitch": -0.25,
+          "head_yaw": 0.0,
+          "head_roll": 0.0,
+          "interp": "smooth"
+        },
+        {
+          "t": 4.0,
+          "neck_pitch": 0.0,
+          "head_pitch": 0.0,
+          "head_yaw": 0.0,
+          "head_roll": 0.0,
+          "interp": "smooth"
+        },
+        {
+          "t": 8.0,
+          "neck_pitch": 0.0,
+          "head_pitch": 0.0,
+          "head_yaw": 0.0,
+          "head_roll": 0.0,
+          "interp": "smooth"
+        },
+        {
+          "t": 9.0,
+          "neck_pitch": 0.0,
+          "head_pitch": 0.0,
+          "head_yaw": 0.6,
+          "head_roll": 0.0,
+          "interp": "smooth"
+        },
+        {
+          "t": 10.0,
+          "neck_pitch": 0.0,
+          "head_pitch": 0.0,
+          "head_yaw": -0.6,
+          "head_roll": 0.0,
+          "interp": "smooth"
+        },
+        {
+          "t": 11.0,
+          "neck_pitch": 0.0,
+          "head_pitch": 0.0,
+          "head_yaw": 0.6,
+          "head_roll": 0.0,
+          "interp": "smooth"
+        },
+        {
+          "t": 12.0,
+          "neck_pitch": 0.0,
+          "head_pitch": 0.0,
+          "head_yaw": 0.0,
+          "head_roll": 0.0,
+          "interp": "smooth"
+        },
+        {
+          "t": 24.0,
+          "neck_pitch": 0.0,
+          "head_pitch": 0.0,
+          "head_yaw": 0.0,
+          "head_roll": 0.0,
+          "interp": "smooth"
+        },
+        {
+          "t": 24.5,
+          "neck_pitch": 0.0,
+          "head_pitch": -0.2,
+          "head_yaw": 0.0,
+          "head_roll": 0.0,
+          "interp": "smooth"
+        },
+        {
+          "t": 25.5,
+          "neck_pitch": 0.0,
+          "head_pitch": 0.1,
+          "head_yaw": 0.0,
+          "head_roll": 0.0,
+          "interp": "smooth"
+        },
+        {
+          "t": 26.0,
+          "neck_pitch": 0.0,
+          "head_pitch": 0.0,
+          "head_yaw": 0.0,
+          "head_roll": 0.0,
+          "interp": "smooth"
+        },
+        {
+          "t": 56.0,
+          "neck_pitch": 0.0,
+          "head_pitch": 0.0,
+          "head_yaw": 0.0,
+          "head_roll": 0.0,
+          "interp": "smooth"
+        },
+        {
+          "t": 56.75,
+          "neck_pitch": 0.0,
+          "head_pitch": 0.2,
+          "head_yaw": 0.0,
+          "head_roll": 0.1,
+          "interp": "smooth"
+        },
+        {
+          "t": 57.75,
+          "neck_pitch": 0.0,
+          "head_pitch": 0.2,
+          "head_yaw": 0.0,
+          "head_roll": -0.1,
+          "interp": "smooth"
+        },
+        {
+          "t": 59.0,
+          "neck_pitch": 0.0,
+          "head_pitch": -0.2,
+          "head_yaw": 0.0,
+          "head_roll": 0.0,
+          "interp": "smooth"
+        }
+      ],
+      "pose": [
+        {
+          "t": 4.0,
+          "z": 0.0,
+          "roll": 0.0,
+          "pitch": 0.0,
+          "active": true,
+          "interp": "smooth"
+        },
+        {
+          "t": 5.0,
+          "z": 0.0,
+          "roll": 0.12,
+          "pitch": 0.0,
+          "active": true,
+          "interp": "smooth"
+        },
+        {
+          "t": 6.0,
+          "z": 0.0,
+          "roll": -0.12,
+          "pitch": 0.0,
+          "active": true,
+          "interp": "smooth"
+        },
+        {
+          "t": 7.0,
+          "z": 0.0,
+          "roll": 0.12,
+          "pitch": 0.0,
+          "active": true,
+          "interp": "smooth"
+        },
+        {
+          "t": 8.0,
+          "z": 0.0,
+          "roll": 0.0,
+          "pitch": 0.0,
+          "active": false,
+          "interp": "linear"
+        },
+        {
+          "t": 24.0,
+          "z": 0.0,
+          "roll": 0.0,
+          "pitch": 0.0,
+          "active": false,
+          "interp": "smooth"
+        },
+        {
+          "t": 24.5,
+          "z": -0.03,
+          "roll": 0.0,
+          "pitch": 0.1,
+          "active": true,
+          "interp": "step"
+        },
+        {
+          "t": 25.5,
+          "z": 0.0,
+          "roll": 0.0,
+          "pitch": 0.0,
+          "active": false,
+          "interp": "linear"
+        },
+        {
+          "t": 56.0,
+          "z": 0.0,
+          "roll": 0.0,
+          "pitch": 0.0,
+          "active": false,
+          "interp": "smooth"
+        },
+        {
+          "t": 56.75,
+          "z": -0.045,
+          "roll": 0.12,
+          "pitch": 0.25,
+          "active": true,
+          "interp": "smooth"
+        },
+        {
+          "t": 57.75,
+          "z": -0.045,
+          "roll": -0.12,
+          "pitch": 0.25,
+          "active": true,
+          "interp": "smooth"
+        },
+        {
+          "t": 59.0,
+          "z": 0.0,
+          "roll": 0.0,
+          "pitch": -0.08,
+          "active": true,
+          "interp": "smooth"
+        }
+      ],
+      "locomotion": [
+        {
+          "t": 12.0,
+          "vx": 0.0,
+          "vy": 0.0,
+          "vyaw": 0.0,
+          "interp": "linear"
+        },
+        {
+          "t": 12.5,
+          "vx": 0.15,
+          "vy": 0.0,
+          "vyaw": 0.0,
+          "interp": "linear"
+        },
+        {
+          "t": 13.5,
+          "vx": 0.15,
+          "vy": 0.0,
+          "vyaw": 0.0,
+          "interp": "linear"
+        },
+        {
+          "t": 14.0,
+          "vx": -0.15,
+          "vy": 0.0,
+          "vyaw": 0.0,
+          "interp": "linear"
+        },
+        {
+          "t": 15.0,
+          "vx": -0.15,
+          "vy": 0.0,
+          "vyaw": 0.0,
+          "interp": "linear"
+        },
+        {
+          "t": 15.5,
+          "vx": 0.0,
+          "vy": 0.0,
+          "vyaw": 0.0,
+          "interp": "linear"
+        },
+        {
+          "t": 52.0,
+          "vx": 0.0,
+          "vy": 0.0,
+          "vyaw": 0.0,
+          "interp": "linear"
+        },
+        {
+          "t": 52.5,
+          "vx": 0.2,
+          "vy": 0.0,
+          "vyaw": 0.0,
+          "interp": "linear"
+        },
+        {
+          "t": 53.5,
+          "vx": 0.2,
+          "vy": 0.0,
+          "vyaw": 0.0,
+          "interp": "linear"
+        },
+        {
+          "t": 54.0,
+          "vx": -0.2,
+          "vy": 0.0,
+          "vyaw": 0.0,
+          "interp": "linear"
+        },
+        {
+          "t": 55.0,
+          "vx": -0.2,
+          "vy": 0.0,
+          "vyaw": 0.0,
+          "interp": "linear"
+        },
+        {
+          "t": 55.5,
+          "vx": 0.0,
+          "vy": 0.0,
+          "vyaw": 0.0,
+          "interp": "linear"
+        }
+      ],
+      "events": [
+        {
+          "t": 25.0,
+          "do": "roulade"
+        },
+        {
+          "t": 60.0,
+          "sound": "greet",
+          "hold": 1.5
+        }
+      ]
+    },
+    "drift": {
+      "head": [
+        {
+          "t": 0.0,
+          "neck_pitch": 0.0,
+          "head_pitch": 0.0,
+          "head_yaw": 0.0,
+          "head_roll": 0.0,
+          "interp": "smooth"
+        },
+        {
+          "t": 0.5,
+          "neck_pitch": 0.0,
+          "head_pitch": -0.25,
+          "head_yaw": 0.0,
+          "head_roll": 0.0,
+          "interp": "smooth"
+        },
+        {
+          "t": 1.0,
+          "neck_pitch": 0.0,
+          "head_pitch": 0.15,
+          "head_yaw": 0.0,
+          "head_roll": 0.0,
+          "interp": "smooth"
+        },
+        {
+          "t": 1.5,
+          "neck_pitch": 0.0,
+          "head_pitch": -0.25,
+          "head_yaw": 0.0,
+          "head_roll": 0.0,
+          "interp": "smooth"
+        },
+        {
+          "t": 2.0,
+          "neck_pitch": 0.0,
+          "head_pitch": 0.15,
+          "head_yaw": 0.0,
+          "head_roll": 0.0,
+          "interp": "smooth"
+        },
+        {
+          "t": 2.5,
+          "neck_pitch": 0.0,
+          "head_pitch": -0.25,
+          "head_yaw": 0.0,
+          "head_roll": 0.0,
+          "interp": "smooth"
+        },
+        {
+          "t": 3.0,
+          "neck_pitch": 0.0,
+          "head_pitch": 0.15,
+          "head_yaw": 0.0,
+          "head_roll": 0.0,
+          "interp": "smooth"
+        },
+        {
+          "t": 3.5,
+          "neck_pitch": 0.0,
+          "head_pitch": -0.25,
+          "head_yaw": 0.0,
+          "head_roll": 0.0,
+          "interp": "smooth"
+        },
+        {
+          "t": 4.0,
+          "neck_pitch": 0.0,
+          "head_pitch": 0.0,
+          "head_yaw": 0.0,
+          "head_roll": 0.0,
+          "interp": "smooth"
+        },
+        {
+          "t": 8.0,
+          "neck_pitch": 0.0,
+          "head_pitch": 0.0,
+          "head_yaw": 0.0,
+          "head_roll": 0.0,
+          "interp": "smooth"
+        },
+        {
+          "t": 9.0,
+          "neck_pitch": 0.0,
+          "head_pitch": 0.0,
+          "head_yaw": 0.6,
+          "head_roll": 0.0,
+          "interp": "smooth"
+        },
+        {
+          "t": 10.0,
+          "neck_pitch": 0.0,
+          "head_pitch": 0.0,
+          "head_yaw": -0.6,
+          "head_roll": 0.0,
+          "interp": "smooth"
+        },
+        {
+          "t": 11.0,
+          "neck_pitch": 0.0,
+          "head_pitch": 0.0,
+          "head_yaw": 0.6,
+          "head_roll": 0.0,
+          "interp": "smooth"
+        },
+        {
+          "t": 12.0,
+          "neck_pitch": 0.0,
+          "head_pitch": 0.0,
+          "head_yaw": 0.0,
+          "head_roll": 0.0,
+          "interp": "smooth"
+        },
+        {
+          "t": 32.0,
+          "neck_pitch": 0.0,
+          "head_pitch": 0.0,
+          "head_yaw": 0.0,
+          "head_roll": 0.0,
+          "interp": "smooth"
+        },
+        {
+          "t": 32.75,
+          "neck_pitch": 0.0,
+          "head_pitch": 0.0,
+          "head_yaw": 1.0,
+          "head_roll": 0.15,
+          "interp": "smooth"
+        },
+        {
+          "t": 33.75,
+          "neck_pitch": 0.0,
+          "head_pitch": 0.0,
+          "head_yaw": -1.0,
+          "head_roll": -0.15,
+          "interp": "smooth"
+        },
+        {
+          "t": 34.5,
+          "neck_pitch": 0.0,
+          "head_pitch": 0.0,
+          "head_yaw": 0.3,
+          "head_roll": 0.05,
+          "interp": "smooth"
+        },
+        {
+          "t": 35.0,
+          "neck_pitch": 0.0,
+          "head_pitch": 0.0,
+          "head_yaw": 0.0,
+          "head_roll": 0.0,
+          "interp": "smooth"
+        },
+        {
+          "t": 56.0,
+          "neck_pitch": 0.0,
+          "head_pitch": 0.0,
+          "head_yaw": 0.0,
+          "head_roll": 0.0,
+          "interp": "smooth"
+        },
+        {
+          "t": 56.75,
+          "neck_pitch": 0.0,
+          "head_pitch": 0.2,
+          "head_yaw": 0.0,
+          "head_roll": 0.1,
+          "interp": "smooth"
+        },
+        {
+          "t": 57.75,
+          "neck_pitch": 0.0,
+          "head_pitch": 0.2,
+          "head_yaw": 0.0,
+          "head_roll": -0.1,
+          "interp": "smooth"
+        },
+        {
+          "t": 59.0,
+          "neck_pitch": 0.0,
+          "head_pitch": -0.2,
+          "head_yaw": 0.0,
+          "head_roll": 0.0,
+          "interp": "smooth"
+        }
+      ],
+      "pose": [
+        {
+          "t": 4.0,
+          "z": 0.0,
+          "roll": 0.0,
+          "pitch": 0.0,
+          "active": true,
+          "interp": "smooth"
+        },
+        {
+          "t": 5.0,
+          "z": 0.0,
+          "roll": 0.12,
+          "pitch": 0.0,
+          "active": true,
+          "interp": "smooth"
+        },
+        {
+          "t": 6.0,
+          "z": 0.0,
+          "roll": -0.12,
+          "pitch": 0.0,
+          "active": true,
+          "interp": "smooth"
+        },
+        {
+          "t": 7.0,
+          "z": 0.0,
+          "roll": 0.12,
+          "pitch": 0.0,
+          "active": true,
+          "interp": "smooth"
+        },
+        {
+          "t": 8.0,
+          "z": 0.0,
+          "roll": 0.0,
+          "pitch": 0.0,
+          "active": false,
+          "interp": "linear"
+        },
+        {
+          "t": 56.0,
+          "z": 0.0,
+          "roll": 0.0,
+          "pitch": 0.0,
+          "active": false,
+          "interp": "smooth"
+        },
+        {
+          "t": 56.75,
+          "z": -0.045,
+          "roll": 0.12,
+          "pitch": 0.25,
+          "active": true,
+          "interp": "smooth"
+        },
+        {
+          "t": 57.75,
+          "z": -0.045,
+          "roll": -0.12,
+          "pitch": 0.25,
+          "active": true,
+          "interp": "smooth"
+        },
+        {
+          "t": 59.0,
+          "z": 0.0,
+          "roll": 0.0,
+          "pitch": -0.08,
+          "active": true,
+          "interp": "smooth"
+        }
+      ],
+      "locomotion": [
+        {
+          "t": 12.0,
+          "vx": 0.0,
+          "vy": 0.0,
+          "vyaw": 0.0,
+          "interp": "linear"
+        },
+        {
+          "t": 12.5,
+          "vx": 0.15,
+          "vy": 0.0,
+          "vyaw": 0.0,
+          "interp": "linear"
+        },
+        {
+          "t": 13.5,
+          "vx": 0.15,
+          "vy": 0.0,
+          "vyaw": 0.0,
+          "interp": "linear"
+        },
+        {
+          "t": 14.0,
+          "vx": -0.15,
+          "vy": 0.0,
+          "vyaw": 0.0,
+          "interp": "linear"
+        },
+        {
+          "t": 15.0,
+          "vx": -0.15,
+          "vy": 0.0,
+          "vyaw": 0.0,
+          "interp": "linear"
+        },
+        {
+          "t": 15.5,
+          "vx": 0.0,
+          "vy": 0.0,
+          "vyaw": 0.0,
+          "interp": "linear"
+        },
+        {
+          "t": 52.0,
+          "vx": 0.0,
+          "vy": 0.0,
+          "vyaw": 0.0,
+          "interp": "linear"
+        },
+        {
+          "t": 52.5,
+          "vx": 0.2,
+          "vy": 0.0,
+          "vyaw": 0.0,
+          "interp": "linear"
+        },
+        {
+          "t": 53.5,
+          "vx": 0.2,
+          "vy": 0.0,
+          "vyaw": 0.0,
+          "interp": "linear"
+        },
+        {
+          "t": 54.0,
+          "vx": -0.2,
+          "vy": 0.0,
+          "vyaw": 0.0,
+          "interp": "linear"
+        },
+        {
+          "t": 55.0,
+          "vx": -0.2,
+          "vy": 0.0,
+          "vyaw": 0.0,
+          "interp": "linear"
+        },
+        {
+          "t": 55.5,
+          "vx": 0.0,
+          "vy": 0.0,
+          "vyaw": 0.0,
+          "interp": "linear"
+        }
+      ],
+      "events": [
+        {
+          "t": 60.0,
+          "sound": "coo",
+          "hold": 1.5
+        }
+      ]
+    },
+    "spark": {
+      "head": [
+        {
+          "t": 0.0,
+          "neck_pitch": 0.0,
+          "head_pitch": 0.0,
+          "head_yaw": 0.0,
+          "head_roll": 0.0,
+          "interp": "smooth"
+        },
+        {
+          "t": 0.5,
+          "neck_pitch": 0.0,
+          "head_pitch": -0.25,
+          "head_yaw": 0.0,
+          "head_roll": 0.0,
+          "interp": "smooth"
+        },
+        {
+          "t": 1.0,
+          "neck_pitch": 0.0,
+          "head_pitch": 0.15,
+          "head_yaw": 0.0,
+          "head_roll": 0.0,
+          "interp": "smooth"
+        },
+        {
+          "t": 1.5,
+          "neck_pitch": 0.0,
+          "head_pitch": -0.25,
+          "head_yaw": 0.0,
+          "head_roll": 0.0,
+          "interp": "smooth"
+        },
+        {
+          "t": 2.0,
+          "neck_pitch": 0.0,
+          "head_pitch": 0.15,
+          "head_yaw": 0.0,
+          "head_roll": 0.0,
+          "interp": "smooth"
+        },
+        {
+          "t": 2.5,
+          "neck_pitch": 0.0,
+          "head_pitch": -0.25,
+          "head_yaw": 0.0,
+          "head_roll": 0.0,
+          "interp": "smooth"
+        },
+        {
+          "t": 3.0,
+          "neck_pitch": 0.0,
+          "head_pitch": 0.15,
+          "head_yaw": 0.0,
+          "head_roll": 0.0,
+          "interp": "smooth"
+        },
+        {
+          "t": 3.5,
+          "neck_pitch": 0.0,
+          "head_pitch": -0.25,
+          "head_yaw": 0.0,
+          "head_roll": 0.0,
+          "interp": "smooth"
+        },
+        {
+          "t": 4.0,
+          "neck_pitch": 0.0,
+          "head_pitch": 0.0,
+          "head_yaw": 0.0,
+          "head_roll": 0.0,
+          "interp": "smooth"
+        },
+        {
+          "t": 8.0,
+          "neck_pitch": 0.0,
+          "head_pitch": 0.0,
+          "head_yaw": 0.0,
+          "head_roll": 0.0,
+          "interp": "smooth"
+        },
+        {
+          "t": 9.0,
+          "neck_pitch": 0.0,
+          "head_pitch": 0.0,
+          "head_yaw": 0.6,
+          "head_roll": 0.0,
+          "interp": "smooth"
+        },
+        {
+          "t": 10.0,
+          "neck_pitch": 0.0,
+          "head_pitch": 0.0,
+          "head_yaw": -0.6,
+          "head_roll": 0.0,
+          "interp": "smooth"
+        },
+        {
+          "t": 11.0,
+          "neck_pitch": 0.0,
+          "head_pitch": 0.0,
+          "head_yaw": 0.6,
+          "head_roll": 0.0,
+          "interp": "smooth"
+        },
+        {
+          "t": 12.0,
+          "neck_pitch": 0.0,
+          "head_pitch": 0.0,
+          "head_yaw": 0.0,
+          "head_roll": 0.0,
+          "interp": "smooth"
+        },
+        {
+          "t": 40.0,
+          "neck_pitch": 0.0,
+          "head_pitch": 0.0,
+          "head_yaw": 0.0,
+          "head_roll": 0.0,
+          "interp": "smooth"
+        },
+        {
+          "t": 40.25,
+          "neck_pitch": 0.0,
+          "head_pitch": -0.1,
+          "head_yaw": 0.0,
+          "head_roll": 0.0,
+          "interp": "smooth"
+        },
+        {
+          "t": 41.5,
+          "neck_pitch": 0.0,
+          "head_pitch": 0.0,
+          "head_yaw": 0.0,
+          "head_roll": 0.0,
+          "interp": "smooth"
+        },
+        {
+          "t": 56.0,
+          "neck_pitch": 0.0,
+          "head_pitch": 0.0,
+          "head_yaw": 0.0,
+          "head_roll": 0.0,
+          "interp": "smooth"
+        },
+        {
+          "t": 56.75,
+          "neck_pitch": 0.0,
+          "head_pitch": 0.2,
+          "head_yaw": 0.0,
+          "head_roll": 0.1,
+          "interp": "smooth"
+        },
+        {
+          "t": 57.75,
+          "neck_pitch": 0.0,
+          "head_pitch": 0.2,
+          "head_yaw": 0.0,
+          "head_roll": -0.1,
+          "interp": "smooth"
+        },
+        {
+          "t": 59.0,
+          "neck_pitch": 0.0,
+          "head_pitch": -0.2,
+          "head_yaw": 0.0,
+          "head_roll": 0.0,
+          "interp": "smooth"
+        }
+      ],
+      "pose": [
+        {
+          "t": 4.0,
+          "z": 0.0,
+          "roll": 0.0,
+          "pitch": 0.0,
+          "active": true,
+          "interp": "smooth"
+        },
+        {
+          "t": 5.0,
+          "z": 0.0,
+          "roll": 0.12,
+          "pitch": 0.0,
+          "active": true,
+          "interp": "smooth"
+        },
+        {
+          "t": 6.0,
+          "z": 0.0,
+          "roll": -0.12,
+          "pitch": 0.0,
+          "active": true,
+          "interp": "smooth"
+        },
+        {
+          "t": 7.0,
+          "z": 0.0,
+          "roll": 0.12,
+          "pitch": 0.0,
+          "active": true,
+          "interp": "smooth"
+        },
+        {
+          "t": 8.0,
+          "z": 0.0,
+          "roll": 0.0,
+          "pitch": 0.0,
+          "active": false,
+          "interp": "linear"
+        },
+        {
+          "t": 56.0,
+          "z": 0.0,
+          "roll": 0.0,
+          "pitch": 0.0,
+          "active": false,
+          "interp": "smooth"
+        },
+        {
+          "t": 56.75,
+          "z": -0.045,
+          "roll": 0.12,
+          "pitch": 0.25,
+          "active": true,
+          "interp": "smooth"
+        },
+        {
+          "t": 57.75,
+          "z": -0.045,
+          "roll": -0.12,
+          "pitch": 0.25,
+          "active": true,
+          "interp": "smooth"
+        },
+        {
+          "t": 59.0,
+          "z": 0.0,
+          "roll": 0.0,
+          "pitch": -0.08,
+          "active": true,
+          "interp": "smooth"
+        }
+      ],
+      "locomotion": [
+        {
+          "t": 12.0,
+          "vx": 0.0,
+          "vy": 0.0,
+          "vyaw": 0.0,
+          "interp": "linear"
+        },
+        {
+          "t": 12.5,
+          "vx": 0.15,
+          "vy": 0.0,
+          "vyaw": 0.0,
+          "interp": "linear"
+        },
+        {
+          "t": 13.5,
+          "vx": 0.15,
+          "vy": 0.0,
+          "vyaw": 0.0,
+          "interp": "linear"
+        },
+        {
+          "t": 14.0,
+          "vx": -0.15,
+          "vy": 0.0,
+          "vyaw": 0.0,
+          "interp": "linear"
+        },
+        {
+          "t": 15.0,
+          "vx": -0.15,
+          "vy": 0.0,
+          "vyaw": 0.0,
+          "interp": "linear"
+        },
+        {
+          "t": 15.5,
+          "vx": 0.0,
+          "vy": 0.0,
+          "vyaw": 0.0,
+          "interp": "linear"
+        },
+        {
+          "t": 52.0,
+          "vx": 0.0,
+          "vy": 0.0,
+          "vyaw": 0.0,
+          "interp": "linear"
+        },
+        {
+          "t": 52.5,
+          "vx": 0.2,
+          "vy": 0.0,
+          "vyaw": 0.0,
+          "interp": "linear"
+        },
+        {
+          "t": 53.5,
+          "vx": 0.2,
+          "vy": 0.0,
+          "vyaw": 0.0,
+          "interp": "linear"
+        },
+        {
+          "t": 54.0,
+          "vx": -0.2,
+          "vy": 0.0,
+          "vyaw": 0.0,
+          "interp": "linear"
+        },
+        {
+          "t": 55.0,
+          "vx": -0.2,
+          "vy": 0.0,
+          "vyaw": 0.0,
+          "interp": "linear"
+        },
+        {
+          "t": 55.5,
+          "vx": 0.0,
+          "vy": 0.0,
+          "vyaw": 0.0,
+          "interp": "linear"
+        }
+      ],
+      "mouth": [
+        {
+          "t": 40.0,
+          "open": 0.0,
+          "interp": "step"
+        },
+        {
+          "t": 40.25,
+          "open": 0.7,
+          "interp": "step"
+        },
+        {
+          "t": 40.5,
+          "open": 0.0,
+          "interp": "step"
+        },
+        {
+          "t": 40.75,
+          "open": 0.7,
+          "interp": "step"
+        },
+        {
+          "t": 41.0,
+          "open": 0.0,
+          "interp": "step"
+        },
+        {
+          "t": 41.25,
+          "open": 0.7,
+          "interp": "step"
+        },
+        {
+          "t": 41.5,
+          "open": 0.0,
+          "interp": "step"
+        }
+      ],
+      "events": [
+        {
+          "t": 40.25,
+          "sound": "peck"
+        },
+        {
+          "t": 40.75,
+          "sound": "peck"
+        },
+        {
+          "t": 41.25,
+          "sound": "peck"
+        },
+        {
+          "t": 60.0,
+          "sound": "wheee",
+          "hold": 1.5
+        }
+      ]
+    },
+    "reed": {
+      "head": [
+        {
+          "t": 0.0,
+          "neck_pitch": 0.0,
+          "head_pitch": 0.0,
+          "head_yaw": 0.0,
+          "head_roll": 0.0,
+          "interp": "smooth"
+        },
+        {
+          "t": 0.5,
+          "neck_pitch": 0.0,
+          "head_pitch": -0.25,
+          "head_yaw": 0.0,
+          "head_roll": 0.0,
+          "interp": "smooth"
+        },
+        {
+          "t": 1.0,
+          "neck_pitch": 0.0,
+          "head_pitch": 0.15,
+          "head_yaw": 0.0,
+          "head_roll": 0.0,
+          "interp": "smooth"
+        },
+        {
+          "t": 1.5,
+          "neck_pitch": 0.0,
+          "head_pitch": -0.25,
+          "head_yaw": 0.0,
+          "head_roll": 0.0,
+          "interp": "smooth"
+        },
+        {
+          "t": 2.0,
+          "neck_pitch": 0.0,
+          "head_pitch": 0.15,
+          "head_yaw": 0.0,
+          "head_roll": 0.0,
+          "interp": "smooth"
+        },
+        {
+          "t": 2.5,
+          "neck_pitch": 0.0,
+          "head_pitch": -0.25,
+          "head_yaw": 0.0,
+          "head_roll": 0.0,
+          "interp": "smooth"
+        },
+        {
+          "t": 3.0,
+          "neck_pitch": 0.0,
+          "head_pitch": 0.15,
+          "head_yaw": 0.0,
+          "head_roll": 0.0,
+          "interp": "smooth"
+        },
+        {
+          "t": 3.5,
+          "neck_pitch": 0.0,
+          "head_pitch": -0.25,
+          "head_yaw": 0.0,
+          "head_roll": 0.0,
+          "interp": "smooth"
+        },
+        {
+          "t": 4.0,
+          "neck_pitch": 0.0,
+          "head_pitch": 0.0,
+          "head_yaw": 0.0,
+          "head_roll": 0.0,
+          "interp": "smooth"
+        },
+        {
+          "t": 8.0,
+          "neck_pitch": 0.0,
+          "head_pitch": 0.0,
+          "head_yaw": 0.0,
+          "head_roll": 0.0,
+          "interp": "smooth"
+        },
+        {
+          "t": 9.0,
+          "neck_pitch": 0.0,
+          "head_pitch": 0.0,
+          "head_yaw": 0.6,
+          "head_roll": 0.0,
+          "interp": "smooth"
+        },
+        {
+          "t": 10.0,
+          "neck_pitch": 0.0,
+          "head_pitch": 0.0,
+          "head_yaw": -0.6,
+          "head_roll": 0.0,
+          "interp": "smooth"
+        },
+        {
+          "t": 11.0,
+          "neck_pitch": 0.0,
+          "head_pitch": 0.0,
+          "head_yaw": 0.6,
+          "head_roll": 0.0,
+          "interp": "smooth"
+        },
+        {
+          "t": 12.0,
+          "neck_pitch": 0.0,
+          "head_pitch": 0.0,
+          "head_yaw": 0.0,
+          "head_roll": 0.0,
+          "interp": "smooth"
+        },
+        {
+          "t": 56.0,
+          "neck_pitch": 0.0,
+          "head_pitch": 0.0,
+          "head_yaw": 0.0,
+          "head_roll": 0.0,
+          "interp": "smooth"
+        },
+        {
+          "t": 56.75,
+          "neck_pitch": 0.0,
+          "head_pitch": 0.2,
+          "head_yaw": 0.0,
+          "head_roll": 0.1,
+          "interp": "smooth"
+        },
+        {
+          "t": 57.75,
+          "neck_pitch": 0.0,
+          "head_pitch": 0.2,
+          "head_yaw": 0.0,
+          "head_roll": -0.1,
+          "interp": "smooth"
+        },
+        {
+          "t": 59.0,
+          "neck_pitch": 0.0,
+          "head_pitch": -0.2,
+          "head_yaw": 0.0,
+          "head_roll": 0.0,
+          "interp": "smooth"
+        }
+      ],
+      "pose": [
+        {
+          "t": 4.0,
+          "z": 0.0,
+          "roll": 0.0,
+          "pitch": 0.0,
+          "active": true,
+          "interp": "smooth"
+        },
+        {
+          "t": 5.0,
+          "z": 0.0,
+          "roll": 0.12,
+          "pitch": 0.0,
+          "active": true,
+          "interp": "smooth"
+        },
+        {
+          "t": 6.0,
+          "z": 0.0,
+          "roll": -0.12,
+          "pitch": 0.0,
+          "active": true,
+          "interp": "smooth"
+        },
+        {
+          "t": 7.0,
+          "z": 0.0,
+          "roll": 0.12,
+          "pitch": 0.0,
+          "active": true,
+          "interp": "smooth"
+        },
+        {
+          "t": 8.0,
+          "z": 0.0,
+          "roll": 0.0,
+          "pitch": 0.0,
+          "active": false,
+          "interp": "linear"
+        },
+        {
+          "t": 20.0,
+          "z": 0.0,
+          "roll": 0.0,
+          "pitch": 0.0,
+          "active": false,
+          "interp": "smooth"
+        },
+        {
+          "t": 20.5,
+          "z": -0.04,
+          "roll": 0.0,
+          "pitch": 0.15,
+          "active": true,
+          "interp": "step"
+        },
+        {
+          "t": 23.0,
+          "z": -0.04,
+          "roll": 0.0,
+          "pitch": 0.15,
+          "active": true,
+          "interp": "smooth"
+        },
+        {
+          "t": 23.5,
+          "z": 0.0,
+          "roll": 0.0,
+          "pitch": 0.0,
+          "active": false,
+          "interp": "linear"
+        },
+        {
+          "t": 56.0,
+          "z": 0.0,
+          "roll": 0.0,
+          "pitch": 0.0,
+          "active": false,
+          "interp": "smooth"
+        },
+        {
+          "t": 56.75,
+          "z": -0.045,
+          "roll": 0.12,
+          "pitch": 0.25,
+          "active": true,
+          "interp": "smooth"
+        },
+        {
+          "t": 57.75,
+          "z": -0.045,
+          "roll": -0.12,
+          "pitch": 0.25,
+          "active": true,
+          "interp": "smooth"
+        },
+        {
+          "t": 59.0,
+          "z": 0.0,
+          "roll": 0.0,
+          "pitch": -0.08,
+          "active": true,
+          "interp": "smooth"
+        }
+      ],
+      "locomotion": [
+        {
+          "t": 12.0,
+          "vx": 0.0,
+          "vy": 0.0,
+          "vyaw": 0.0,
+          "interp": "linear"
+        },
+        {
+          "t": 12.5,
+          "vx": 0.15,
+          "vy": 0.0,
+          "vyaw": 0.0,
+          "interp": "linear"
+        },
+        {
+          "t": 13.5,
+          "vx": 0.15,
+          "vy": 0.0,
+          "vyaw": 0.0,
+          "interp": "linear"
+        },
+        {
+          "t": 14.0,
+          "vx": -0.15,
+          "vy": 0.0,
+          "vyaw": 0.0,
+          "interp": "linear"
+        },
+        {
+          "t": 15.0,
+          "vx": -0.15,
+          "vy": 0.0,
+          "vyaw": 0.0,
+          "interp": "linear"
+        },
+        {
+          "t": 15.5,
+          "vx": 0.0,
+          "vy": 0.0,
+          "vyaw": 0.0,
+          "interp": "linear"
+        },
+        {
+          "t": 52.0,
+          "vx": 0.0,
+          "vy": 0.0,
+          "vyaw": 0.0,
+          "interp": "linear"
+        },
+        {
+          "t": 52.5,
+          "vx": 0.2,
+          "vy": 0.0,
+          "vyaw": 0.0,
+          "interp": "linear"
+        },
+        {
+          "t": 53.5,
+          "vx": 0.2,
+          "vy": 0.0,
+          "vyaw": 0.0,
+          "interp": "linear"
+        },
+        {
+          "t": 54.0,
+          "vx": -0.2,
+          "vy": 0.0,
+          "vyaw": 0.0,
+          "interp": "linear"
+        },
+        {
+          "t": 55.0,
+          "vx": -0.2,
+          "vy": 0.0,
+          "vyaw": 0.0,
+          "interp": "linear"
+        },
+        {
+          "t": 55.5,
+          "vx": 0.0,
+          "vy": 0.0,
+          "vyaw": 0.0,
+          "interp": "linear"
+        }
+      ],
+      "events": [
+        {
+          "t": 21.0,
+          "do": "sit_toggle"
+        },
+        {
+          "t": 23.0,
+          "do": "sit_toggle"
+        },
+        {
+          "t": 60.0,
+          "sound": "chirp",
+          "hold": 1.5
+        }
+      ]
+    },
+    "wren": {
+      "head": [
+        {
+          "t": 0.0,
+          "neck_pitch": 0.0,
+          "head_pitch": 0.0,
+          "head_yaw": 0.0,
+          "head_roll": 0.0,
+          "interp": "smooth"
+        },
+        {
+          "t": 0.5,
+          "neck_pitch": 0.0,
+          "head_pitch": -0.25,
+          "head_yaw": 0.0,
+          "head_roll": 0.0,
+          "interp": "smooth"
+        },
+        {
+          "t": 1.0,
+          "neck_pitch": 0.0,
+          "head_pitch": 0.15,
+          "head_yaw": 0.0,
+          "head_roll": 0.0,
+          "interp": "smooth"
+        },
+        {
+          "t": 1.5,
+          "neck_pitch": 0.0,
+          "head_pitch": -0.25,
+          "head_yaw": 0.0,
+          "head_roll": 0.0,
+          "interp": "smooth"
+        },
+        {
+          "t": 2.0,
+          "neck_pitch": 0.0,
+          "head_pitch": 0.15,
+          "head_yaw": 0.0,
+          "head_roll": 0.0,
+          "interp": "smooth"
+        },
+        {
+          "t": 2.5,
+          "neck_pitch": 0.0,
+          "head_pitch": -0.25,
+          "head_yaw": 0.0,
+          "head_roll": 0.0,
+          "interp": "smooth"
+        },
+        {
+          "t": 3.0,
+          "neck_pitch": 0.0,
+          "head_pitch": 0.15,
+          "head_yaw": 0.0,
+          "head_roll": 0.0,
+          "interp": "smooth"
+        },
+        {
+          "t": 3.5,
+          "neck_pitch": 0.0,
+          "head_pitch": -0.25,
+          "head_yaw": 0.0,
+          "head_roll": 0.0,
+          "interp": "smooth"
+        },
+        {
+          "t": 4.0,
+          "neck_pitch": 0.0,
+          "head_pitch": 0.0,
+          "head_yaw": 0.0,
+          "head_roll": 0.0,
+          "interp": "smooth"
+        },
+        {
+          "t": 8.0,
+          "neck_pitch": 0.0,
+          "head_pitch": 0.0,
+          "head_yaw": 0.0,
+          "head_roll": 0.0,
+          "interp": "smooth"
+        },
+        {
+          "t": 9.0,
+          "neck_pitch": 0.0,
+          "head_pitch": 0.0,
+          "head_yaw": 0.6,
+          "head_roll": 0.0,
+          "interp": "smooth"
+        },
+        {
+          "t": 10.0,
+          "neck_pitch": 0.0,
+          "head_pitch": 0.0,
+          "head_yaw": -0.6,
+          "head_roll": 0.0,
+          "interp": "smooth"
+        },
+        {
+          "t": 11.0,
+          "neck_pitch": 0.0,
+          "head_pitch": 0.0,
+          "head_yaw": 0.6,
+          "head_roll": 0.0,
+          "interp": "smooth"
+        },
+        {
+          "t": 12.0,
+          "neck_pitch": 0.0,
+          "head_pitch": 0.0,
+          "head_yaw": 0.0,
+          "head_roll": 0.0,
+          "interp": "smooth"
+        },
+        {
+          "t": 28.0,
+          "neck_pitch": 0.0,
+          "head_pitch": 0.0,
+          "head_yaw": 0.0,
+          "head_roll": 0.0,
+          "interp": "smooth"
+        },
+        {
+          "t": 28.5,
+          "neck_pitch": 0.3,
+          "head_pitch": -0.35,
+          "head_yaw": 0.0,
+          "head_roll": 0.0,
+          "interp": "smooth"
+        },
+        {
+          "t": 29.5,
+          "neck_pitch": 0.0,
+          "head_pitch": 0.1,
+          "head_yaw": 0.0,
+          "head_roll": 0.0,
+          "interp": "smooth"
+        },
+        {
+          "t": 30.0,
+          "neck_pitch": 0.0,
+          "head_pitch": 0.0,
+          "head_yaw": 0.0,
+          "head_roll": 0.0,
+          "interp": "smooth"
+        },
+        {
+          "t": 56.0,
+          "neck_pitch": 0.0,
+          "head_pitch": 0.0,
+          "head_yaw": 0.0,
+          "head_roll": 0.0,
+          "interp": "smooth"
+        },
+        {
+          "t": 56.75,
+          "neck_pitch": 0.0,
+          "head_pitch": 0.2,
+          "head_yaw": 0.0,
+          "head_roll": 0.1,
+          "interp": "smooth"
+        },
+        {
+          "t": 57.75,
+          "neck_pitch": 0.0,
+          "head_pitch": 0.2,
+          "head_yaw": 0.0,
+          "head_roll": -0.1,
+          "interp": "smooth"
+        },
+        {
+          "t": 59.0,
+          "neck_pitch": 0.0,
+          "head_pitch": -0.2,
+          "head_yaw": 0.0,
+          "head_roll": 0.0,
+          "interp": "smooth"
+        }
+      ],
+      "pose": [
+        {
+          "t": 4.0,
+          "z": 0.0,
+          "roll": 0.0,
+          "pitch": 0.0,
+          "active": true,
+          "interp": "smooth"
+        },
+        {
+          "t": 5.0,
+          "z": 0.0,
+          "roll": 0.12,
+          "pitch": 0.0,
+          "active": true,
+          "interp": "smooth"
+        },
+        {
+          "t": 6.0,
+          "z": 0.0,
+          "roll": -0.12,
+          "pitch": 0.0,
+          "active": true,
+          "interp": "smooth"
+        },
+        {
+          "t": 7.0,
+          "z": 0.0,
+          "roll": 0.12,
+          "pitch": 0.0,
+          "active": true,
+          "interp": "smooth"
+        },
+        {
+          "t": 8.0,
+          "z": 0.0,
+          "roll": 0.0,
+          "pitch": 0.0,
+          "active": false,
+          "interp": "linear"
+        },
+        {
+          "t": 28.0,
+          "z": 0.0,
+          "roll": 0.0,
+          "pitch": 0.0,
+          "active": false,
+          "interp": "smooth"
+        },
+        {
+          "t": 28.5,
+          "z": -0.03,
+          "roll": 0.0,
+          "pitch": 0.12,
+          "active": true,
+          "interp": "smooth"
+        },
+        {
+          "t": 29.5,
+          "z": 0.0,
+          "roll": 0.0,
+          "pitch": 0.0,
+          "active": false,
+          "interp": "linear"
+        },
+        {
+          "t": 56.0,
+          "z": 0.0,
+          "roll": 0.0,
+          "pitch": 0.0,
+          "active": false,
+          "interp": "smooth"
+        },
+        {
+          "t": 56.75,
+          "z": -0.045,
+          "roll": 0.12,
+          "pitch": 0.25,
+          "active": true,
+          "interp": "smooth"
+        },
+        {
+          "t": 57.75,
+          "z": -0.045,
+          "roll": -0.12,
+          "pitch": 0.25,
+          "active": true,
+          "interp": "smooth"
+        },
+        {
+          "t": 59.0,
+          "z": 0.0,
+          "roll": 0.0,
+          "pitch": -0.08,
+          "active": true,
+          "interp": "smooth"
+        }
+      ],
+      "locomotion": [
+        {
+          "t": 12.0,
+          "vx": 0.0,
+          "vy": 0.0,
+          "vyaw": 0.0,
+          "interp": "linear"
+        },
+        {
+          "t": 12.5,
+          "vx": 0.15,
+          "vy": 0.0,
+          "vyaw": 0.0,
+          "interp": "linear"
+        },
+        {
+          "t": 13.5,
+          "vx": 0.15,
+          "vy": 0.0,
+          "vyaw": 0.0,
+          "interp": "linear"
+        },
+        {
+          "t": 14.0,
+          "vx": -0.15,
+          "vy": 0.0,
+          "vyaw": 0.0,
+          "interp": "linear"
+        },
+        {
+          "t": 15.0,
+          "vx": -0.15,
+          "vy": 0.0,
+          "vyaw": 0.0,
+          "interp": "linear"
+        },
+        {
+          "t": 15.5,
+          "vx": 0.0,
+          "vy": 0.0,
+          "vyaw": 0.0,
+          "interp": "linear"
+        },
+        {
+          "t": 52.0,
+          "vx": 0.0,
+          "vy": 0.0,
+          "vyaw": 0.0,
+          "interp": "linear"
+        },
+        {
+          "t": 52.5,
+          "vx": 0.2,
+          "vy": 0.0,
+          "vyaw": 0.0,
+          "interp": "linear"
+        },
+        {
+          "t": 53.5,
+          "vx": 0.2,
+          "vy": 0.0,
+          "vyaw": 0.0,
+          "interp": "linear"
+        },
+        {
+          "t": 54.0,
+          "vx": -0.2,
+          "vy": 0.0,
+          "vyaw": 0.0,
+          "interp": "linear"
+        },
+        {
+          "t": 55.0,
+          "vx": -0.2,
+          "vy": 0.0,
+          "vyaw": 0.0,
+          "interp": "linear"
+        },
+        {
+          "t": 55.5,
+          "vx": 0.0,
+          "vy": 0.0,
+          "vyaw": 0.0,
+          "interp": "linear"
+        }
+      ],
+      "events": [
+        {
+          "t": 29.0,
+          "do": "ground_pick"
+        },
+        {
+          "t": 60.0,
+          "sound": "greet",
+          "hold": 1.5
+        }
+      ]
+    },
+    "sable": {
+      "head": [
+        {
+          "t": 0.0,
+          "neck_pitch": 0.0,
+          "head_pitch": 0.0,
+          "head_yaw": 0.0,
+          "head_roll": 0.0,
+          "interp": "smooth"
+        },
+        {
+          "t": 0.5,
+          "neck_pitch": 0.0,
+          "head_pitch": -0.25,
+          "head_yaw": 0.0,
+          "head_roll": 0.0,
+          "interp": "smooth"
+        },
+        {
+          "t": 1.0,
+          "neck_pitch": 0.0,
+          "head_pitch": 0.15,
+          "head_yaw": 0.0,
+          "head_roll": 0.0,
+          "interp": "smooth"
+        },
+        {
+          "t": 1.5,
+          "neck_pitch": 0.0,
+          "head_pitch": -0.25,
+          "head_yaw": 0.0,
+          "head_roll": 0.0,
+          "interp": "smooth"
+        },
+        {
+          "t": 2.0,
+          "neck_pitch": 0.0,
+          "head_pitch": 0.15,
+          "head_yaw": 0.0,
+          "head_roll": 0.0,
+          "interp": "smooth"
+        },
+        {
+          "t": 2.5,
+          "neck_pitch": 0.0,
+          "head_pitch": -0.25,
+          "head_yaw": 0.0,
+          "head_roll": 0.0,
+          "interp": "smooth"
+        },
+        {
+          "t": 3.0,
+          "neck_pitch": 0.0,
+          "head_pitch": 0.15,
+          "head_yaw": 0.0,
+          "head_roll": 0.0,
+          "interp": "smooth"
+        },
+        {
+          "t": 3.5,
+          "neck_pitch": 0.0,
+          "head_pitch": -0.25,
+          "head_yaw": 0.0,
+          "head_roll": 0.0,
+          "interp": "smooth"
+        },
+        {
+          "t": 4.0,
+          "neck_pitch": 0.0,
+          "head_pitch": 0.0,
+          "head_yaw": 0.0,
+          "head_roll": 0.0,
+          "interp": "smooth"
+        },
+        {
+          "t": 8.0,
+          "neck_pitch": 0.0,
+          "head_pitch": 0.0,
+          "head_yaw": 0.0,
+          "head_roll": 0.0,
+          "interp": "smooth"
+        },
+        {
+          "t": 9.0,
+          "neck_pitch": 0.0,
+          "head_pitch": 0.0,
+          "head_yaw": 0.6,
+          "head_roll": 0.0,
+          "interp": "smooth"
+        },
+        {
+          "t": 10.0,
+          "neck_pitch": 0.0,
+          "head_pitch": 0.0,
+          "head_yaw": -0.6,
+          "head_roll": 0.0,
+          "interp": "smooth"
+        },
+        {
+          "t": 11.0,
+          "neck_pitch": 0.0,
+          "head_pitch": 0.0,
+          "head_yaw": 0.6,
+          "head_roll": 0.0,
+          "interp": "smooth"
+        },
+        {
+          "t": 12.0,
+          "neck_pitch": 0.0,
+          "head_pitch": 0.0,
+          "head_yaw": 0.0,
+          "head_roll": 0.0,
+          "interp": "smooth"
+        },
+        {
+          "t": 36.0,
+          "neck_pitch": 0.0,
+          "head_pitch": 0.0,
+          "head_yaw": 0.0,
+          "head_roll": 0.0,
+          "interp": "smooth"
+        },
+        {
+          "t": 36.5,
+          "neck_pitch": 0.0,
+          "head_pitch": -0.15,
+          "head_yaw": 0.0,
+          "head_roll": 0.0,
+          "interp": "smooth"
+        },
+        {
+          "t": 39.0,
+          "neck_pitch": 0.0,
+          "head_pitch": 0.0,
+          "head_yaw": 0.0,
+          "head_roll": 0.0,
+          "interp": "smooth"
+        },
+        {
+          "t": 56.0,
+          "neck_pitch": 0.0,
+          "head_pitch": 0.0,
+          "head_yaw": 0.0,
+          "head_roll": 0.0,
+          "interp": "smooth"
+        },
+        {
+          "t": 56.75,
+          "neck_pitch": 0.0,
+          "head_pitch": 0.2,
+          "head_yaw": 0.0,
+          "head_roll": 0.1,
+          "interp": "smooth"
+        },
+        {
+          "t": 57.75,
+          "neck_pitch": 0.0,
+          "head_pitch": 0.2,
+          "head_yaw": 0.0,
+          "head_roll": -0.1,
+          "interp": "smooth"
+        },
+        {
+          "t": 59.0,
+          "neck_pitch": 0.0,
+          "head_pitch": -0.2,
+          "head_yaw": 0.0,
+          "head_roll": 0.0,
+          "interp": "smooth"
+        }
+      ],
+      "pose": [
+        {
+          "t": 4.0,
+          "z": 0.0,
+          "roll": 0.0,
+          "pitch": 0.0,
+          "active": true,
+          "interp": "smooth"
+        },
+        {
+          "t": 5.0,
+          "z": 0.0,
+          "roll": 0.12,
+          "pitch": 0.0,
+          "active": true,
+          "interp": "smooth"
+        },
+        {
+          "t": 6.0,
+          "z": 0.0,
+          "roll": -0.12,
+          "pitch": 0.0,
+          "active": true,
+          "interp": "smooth"
+        },
+        {
+          "t": 7.0,
+          "z": 0.0,
+          "roll": 0.12,
+          "pitch": 0.0,
+          "active": true,
+          "interp": "smooth"
+        },
+        {
+          "t": 8.0,
+          "z": 0.0,
+          "roll": 0.0,
+          "pitch": 0.0,
+          "active": false,
+          "interp": "linear"
+        },
+        {
+          "t": 36.0,
+          "z": 0.0,
+          "roll": 0.0,
+          "pitch": 0.0,
+          "active": false,
+          "interp": "smooth"
+        },
+        {
+          "t": 36.5,
+          "z": -0.048,
+          "roll": 0.0,
+          "pitch": 0.2,
+          "active": true,
+          "interp": "step"
+        },
+        {
+          "t": 38.5,
+          "z": -0.048,
+          "roll": 0.0,
+          "pitch": 0.2,
+          "active": true,
+          "interp": "smooth"
+        },
+        {
+          "t": 39.0,
+          "z": 0.0,
+          "roll": 0.0,
+          "pitch": 0.0,
+          "active": false,
+          "interp": "linear"
+        },
+        {
+          "t": 56.0,
+          "z": 0.0,
+          "roll": 0.0,
+          "pitch": 0.0,
+          "active": false,
+          "interp": "smooth"
+        },
+        {
+          "t": 56.75,
+          "z": -0.045,
+          "roll": 0.12,
+          "pitch": 0.25,
+          "active": true,
+          "interp": "smooth"
+        },
+        {
+          "t": 57.75,
+          "z": -0.045,
+          "roll": -0.12,
+          "pitch": 0.25,
+          "active": true,
+          "interp": "smooth"
+        },
+        {
+          "t": 59.0,
+          "z": 0.0,
+          "roll": 0.0,
+          "pitch": -0.08,
+          "active": true,
+          "interp": "smooth"
+        }
+      ],
+      "locomotion": [
+        {
+          "t": 12.0,
+          "vx": 0.0,
+          "vy": 0.0,
+          "vyaw": 0.0,
+          "interp": "linear"
+        },
+        {
+          "t": 12.5,
+          "vx": 0.15,
+          "vy": 0.0,
+          "vyaw": 0.0,
+          "interp": "linear"
+        },
+        {
+          "t": 13.5,
+          "vx": 0.15,
+          "vy": 0.0,
+          "vyaw": 0.0,
+          "interp": "linear"
+        },
+        {
+          "t": 14.0,
+          "vx": -0.15,
+          "vy": 0.0,
+          "vyaw": 0.0,
+          "interp": "linear"
+        },
+        {
+          "t": 15.0,
+          "vx": -0.15,
+          "vy": 0.0,
+          "vyaw": 0.0,
+          "interp": "linear"
+        },
+        {
+          "t": 15.5,
+          "vx": 0.0,
+          "vy": 0.0,
+          "vyaw": 0.0,
+          "interp": "linear"
+        },
+        {
+          "t": 52.0,
+          "vx": 0.0,
+          "vy": 0.0,
+          "vyaw": 0.0,
+          "interp": "linear"
+        },
+        {
+          "t": 52.5,
+          "vx": 0.2,
+          "vy": 0.0,
+          "vyaw": 0.0,
+          "interp": "linear"
+        },
+        {
+          "t": 53.5,
+          "vx": 0.2,
+          "vy": 0.0,
+          "vyaw": 0.0,
+          "interp": "linear"
+        },
+        {
+          "t": 54.0,
+          "vx": -0.2,
+          "vy": 0.0,
+          "vyaw": 0.0,
+          "interp": "linear"
+        },
+        {
+          "t": 55.0,
+          "vx": -0.2,
+          "vy": 0.0,
+          "vyaw": 0.0,
+          "interp": "linear"
+        },
+        {
+          "t": 55.5,
+          "vx": 0.0,
+          "vy": 0.0,
+          "vyaw": 0.0,
+          "interp": "linear"
+        }
+      ],
+      "events": [
+        {
+          "t": 60.0,
+          "sound": "coo",
+          "hold": 1.5
+        }
+      ]
+    },
+    "flare": {
+      "head": [
+        {
+          "t": 0.0,
+          "neck_pitch": 0.0,
+          "head_pitch": 0.0,
+          "head_yaw": 0.0,
+          "head_roll": 0.0,
+          "interp": "smooth"
+        },
+        {
+          "t": 0.5,
+          "neck_pitch": 0.0,
+          "head_pitch": -0.25,
+          "head_yaw": 0.0,
+          "head_roll": 0.0,
+          "interp": "smooth"
+        },
+        {
+          "t": 1.0,
+          "neck_pitch": 0.0,
+          "head_pitch": 0.15,
+          "head_yaw": 0.0,
+          "head_roll": 0.0,
+          "interp": "smooth"
+        },
+        {
+          "t": 1.5,
+          "neck_pitch": 0.0,
+          "head_pitch": -0.25,
+          "head_yaw": 0.0,
+          "head_roll": 0.0,
+          "interp": "smooth"
+        },
+        {
+          "t": 2.0,
+          "neck_pitch": 0.0,
+          "head_pitch": 0.15,
+          "head_yaw": 0.0,
+          "head_roll": 0.0,
+          "interp": "smooth"
+        },
+        {
+          "t": 2.5,
+          "neck_pitch": 0.0,
+          "head_pitch": -0.25,
+          "head_yaw": 0.0,
+          "head_roll": 0.0,
+          "interp": "smooth"
+        },
+        {
+          "t": 3.0,
+          "neck_pitch": 0.0,
+          "head_pitch": 0.15,
+          "head_yaw": 0.0,
+          "head_roll": 0.0,
+          "interp": "smooth"
+        },
+        {
+          "t": 3.5,
+          "neck_pitch": 0.0,
+          "head_pitch": -0.25,
+          "head_yaw": 0.0,
+          "head_roll": 0.0,
+          "interp": "smooth"
+        },
+        {
+          "t": 4.0,
+          "neck_pitch": 0.0,
+          "head_pitch": 0.0,
+          "head_yaw": 0.0,
+          "head_roll": 0.0,
+          "interp": "smooth"
+        },
+        {
+          "t": 8.0,
+          "neck_pitch": 0.0,
+          "head_pitch": 0.0,
+          "head_yaw": 0.0,
+          "head_roll": 0.0,
+          "interp": "smooth"
+        },
+        {
+          "t": 9.0,
+          "neck_pitch": 0.0,
+          "head_pitch": 0.0,
+          "head_yaw": 0.6,
+          "head_roll": 0.0,
+          "interp": "smooth"
+        },
+        {
+          "t": 10.0,
+          "neck_pitch": 0.0,
+          "head_pitch": 0.0,
+          "head_yaw": -0.6,
+          "head_roll": 0.0,
+          "interp": "smooth"
+        },
+        {
+          "t": 11.0,
+          "neck_pitch": 0.0,
+          "head_pitch": 0.0,
+          "head_yaw": 0.6,
+          "head_roll": 0.0,
+          "interp": "smooth"
+        },
+        {
+          "t": 12.0,
+          "neck_pitch": 0.0,
+          "head_pitch": 0.0,
+          "head_yaw": 0.0,
+          "head_roll": 0.0,
+          "interp": "smooth"
+        },
+        {
+          "t": 56.0,
+          "neck_pitch": 0.0,
+          "head_pitch": 0.0,
+          "head_yaw": 0.0,
+          "head_roll": 0.0,
+          "interp": "smooth"
+        },
+        {
+          "t": 56.75,
+          "neck_pitch": 0.0,
+          "head_pitch": 0.2,
+          "head_yaw": 0.0,
+          "head_roll": 0.1,
+          "interp": "smooth"
+        },
+        {
+          "t": 57.75,
+          "neck_pitch": 0.0,
+          "head_pitch": 0.2,
+          "head_yaw": 0.0,
+          "head_roll": -0.1,
+          "interp": "smooth"
+        },
+        {
+          "t": 59.0,
+          "neck_pitch": 0.0,
+          "head_pitch": -0.2,
+          "head_yaw": 0.0,
+          "head_roll": 0.0,
+          "interp": "smooth"
+        }
+      ],
+      "pose": [
+        {
+          "t": 4.0,
+          "z": 0.0,
+          "roll": 0.0,
+          "pitch": 0.0,
+          "active": true,
+          "interp": "smooth"
+        },
+        {
+          "t": 5.0,
+          "z": 0.0,
+          "roll": 0.12,
+          "pitch": 0.0,
+          "active": true,
+          "interp": "smooth"
+        },
+        {
+          "t": 6.0,
+          "z": 0.0,
+          "roll": -0.12,
+          "pitch": 0.0,
+          "active": true,
+          "interp": "smooth"
+        },
+        {
+          "t": 7.0,
+          "z": 0.0,
+          "roll": 0.12,
+          "pitch": 0.0,
+          "active": true,
+          "interp": "smooth"
+        },
+        {
+          "t": 8.0,
+          "z": 0.0,
+          "roll": 0.0,
+          "pitch": 0.0,
+          "active": false,
+          "interp": "linear"
+        },
+        {
+          "t": 56.0,
+          "z": 0.0,
+          "roll": 0.0,
+          "pitch": 0.0,
+          "active": false,
+          "interp": "smooth"
+        },
+        {
+          "t": 56.75,
+          "z": -0.045,
+          "roll": 0.12,
+          "pitch": 0.25,
+          "active": true,
+          "interp": "smooth"
+        },
+        {
+          "t": 57.75,
+          "z": -0.045,
+          "roll": -0.12,
+          "pitch": 0.25,
+          "active": true,
+          "interp": "smooth"
+        },
+        {
+          "t": 59.0,
+          "z": 0.0,
+          "roll": 0.0,
+          "pitch": -0.08,
+          "active": true,
+          "interp": "smooth"
+        }
+      ],
+      "locomotion": [
+        {
+          "t": 12.0,
+          "vx": 0.0,
+          "vy": 0.0,
+          "vyaw": 0.0,
+          "interp": "linear"
+        },
+        {
+          "t": 12.5,
+          "vx": 0.15,
+          "vy": 0.0,
+          "vyaw": 0.0,
+          "interp": "linear"
+        },
+        {
+          "t": 13.5,
+          "vx": 0.15,
+          "vy": 0.0,
+          "vyaw": 0.0,
+          "interp": "linear"
+        },
+        {
+          "t": 14.0,
+          "vx": -0.15,
+          "vy": 0.0,
+          "vyaw": 0.0,
+          "interp": "linear"
+        },
+        {
+          "t": 15.0,
+          "vx": -0.15,
+          "vy": 0.0,
+          "vyaw": 0.0,
+          "interp": "linear"
+        },
+        {
+          "t": 15.5,
+          "vx": 0.0,
+          "vy": 0.0,
+          "vyaw": 0.0,
+          "interp": "linear"
+        },
+        {
+          "t": 44.0,
+          "vx": 0.0,
+          "vy": 0.0,
+          "vyaw": 0.0,
+          "interp": "linear"
+        },
+        {
+          "t": 44.5,
+          "vx": 0.2,
+          "vy": 0.0,
+          "vyaw": 0.0,
+          "interp": "linear"
+        },
+        {
+          "t": 45.5,
+          "vx": 0.2,
+          "vy": 0.0,
+          "vyaw": 0.0,
+          "interp": "linear"
+        },
+        {
+          "t": 46.0,
+          "vx": -0.2,
+          "vy": 0.0,
+          "vyaw": 0.0,
+          "interp": "linear"
+        },
+        {
+          "t": 47.0,
+          "vx": -0.2,
+          "vy": 0.0,
+          "vyaw": 0.0,
+          "interp": "linear"
+        },
+        {
+          "t": 47.5,
+          "vx": 0.0,
+          "vy": 0.0,
+          "vyaw": 0.0,
+          "interp": "linear"
+        },
+        {
+          "t": 52.0,
+          "vx": 0.0,
+          "vy": 0.0,
+          "vyaw": 0.0,
+          "interp": "linear"
+        },
+        {
+          "t": 52.5,
+          "vx": 0.2,
+          "vy": 0.0,
+          "vyaw": 0.0,
+          "interp": "linear"
+        },
+        {
+          "t": 53.5,
+          "vx": 0.2,
+          "vy": 0.0,
+          "vyaw": 0.0,
+          "interp": "linear"
+        },
+        {
+          "t": 54.0,
+          "vx": -0.2,
+          "vy": 0.0,
+          "vyaw": 0.0,
+          "interp": "linear"
+        },
+        {
+          "t": 55.0,
+          "vx": -0.2,
+          "vy": 0.0,
+          "vyaw": 0.0,
+          "interp": "linear"
+        },
+        {
+          "t": 55.5,
+          "vx": 0.0,
+          "vy": 0.0,
+          "vyaw": 0.0,
+          "interp": "linear"
+        }
+      ],
+      "events": [
+        {
+          "t": 60.0,
+          "sound": "chirp",
+          "hold": 1.5
+        }
+      ]
+    }
+  },
+  "editor": {
+    "marks": {
+      "lead": {
+        "x": 0.3,
+        "y": -0.675,
+        "heading": 0.0
+      },
+      "echo": {
+        "x": 0.3,
+        "y": -0.225,
+        "heading": 0.0
+      },
+      "drift": {
+        "x": 0.3,
+        "y": 0.225,
+        "heading": 0.0
+      },
+      "spark": {
+        "x": 0.3,
+        "y": 0.675,
+        "heading": 0.0
+      },
+      "reed": {
+        "x": -0.3,
+        "y": -0.675,
+        "heading": 0.0
+      },
+      "wren": {
+        "x": -0.3,
+        "y": -0.225,
+        "heading": 0.0
+      },
+      "sable": {
+        "x": -0.3,
+        "y": 0.225,
+        "heading": 0.0
+      },
+      "flare": {
+        "x": -0.3,
+        "y": 0.675,
+        "heading": 0.0
+      }
+    }
+  }
+}

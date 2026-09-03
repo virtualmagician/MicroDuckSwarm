@@ -36,6 +36,10 @@ cd editor && node --test                  # or: default discovery from inside ed
 
 Node 20 treats the directory argument as a place to search for `*.test.mjs`; Node 21+ treats it as a glob and runs whatever it matches as a single test file, which is why `tests/index.js` (with `tests/package.json` marking the directory as ES modules) exists: it imports every suite, so the same command works on every Node version. Add new suites to that import list. Tests read the fixtures and demo from `../shows/` by relative path — run them from a checkout.
 
+## Layout
+
+Laid out like a video editor or game engine, not a document (spec: `docs/viewer.md` "Layout"): the **stage viewer sits centre-top and takes the majority of the window** — it's the primary surface, what you look at while working. The **timeline is a full-width panel below it**, and **inspector/validation sit in a rail beside the viewer** so they never eat into its vertical space. A **draggable splitter** (the thin bar between the viewer row and the timeline) resizes the two against each other, each with a sensible floor (viewer ≥ 220px, timeline ≥ 160px tall); drop it wherever suits your screen and it stays there — the position is remembered **per browser in `localStorage`**, never written into the show file. The viewer canvas tracks the window and the splitter exactly (it calls the renderer's own resize path, which reads the canvas's CSS size and `devicePixelRatio`, so it's never stretched).
+
 ## The UI
 
 - **Header fields** — name, author, duration, bpm, beat_offset, music file (`meta.*`). Duration is required and drives the end-of-show shading and the beat grid.
@@ -60,6 +64,7 @@ Node 20 treats the directory argument as a place to search for `*.test.mjs`; Nod
 | drag on the stage | orbit the camera |
 | scroll on the stage | dolly the camera |
 | drag a start mark (top view only) | move it; ⌥/⇧-drag to turn it |
+| drag the splitter (between stage and timeline) | resize the viewer against the timeline; remembered per browser |
 
 ### Keyboard
 

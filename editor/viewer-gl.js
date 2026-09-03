@@ -967,9 +967,11 @@ void main() {
 }
 `;
 
-// Warm key high front-left, cooler dimmer fill from the right, subtle rim
-// from behind (docs/viewer.md "Light"). Lambert + a low-exponent specular;
-// no PBR.
+// Neutral studio lighting for a light ground (docs/viewer.md "Light"): a
+// soft key from high front-left, a cooler fill from the right, and enough
+// ambient that shadowed sides stay readable rather than going dark — a
+// light floor makes a black shadow side read as a defect, not mood.
+// Lambert + a low-exponent specular; no PBR.
 const LIT_FS = `#version 300 es
 precision highp float;
 in vec3 vNormal;
@@ -981,42 +983,60 @@ uniform float uSpecularStrength;
 uniform float uRimBoost;
 out vec4 fragColor;
 
-const vec3 KEY_DIR = vec3(0.5044, 0.3778, 0.7768);
-const vec3 KEY_COLOR = vec3(1.05, 0.95, 0.78);
-const vec3 FILL_DIR = vec3(0.4767, -0.1907, 0.8582);
-const vec3 FILL_COLOR = vec3(0.5, 0.62, 0.85);
+const vec3 KEY_DIR = vec3(0.4266, 0.7584, 0.4929);
+const vec3 KEY_COLOR = vec3(1.04, 1.00, 0.92);
+const vec3 FILL_DIR = vec3(-0.6449, 0.4104, 0.6449);
+const vec3 FILL_COLOR = vec3(0.55, 0.66, 0.86);
 const vec3 RIM_DIR = vec3(-0.6172, 0.1543, -0.7715);
-const vec3 RIM_COLOR = vec3(0.78, 0.82, 1.0);
+const vec3 RIM_COLOR = vec3(0.85, 0.88, 1.0);
 
 void main() {
   vec3 N = normalize(vNormal);
   vec3 V = normalize(uEyePos - vWorldPos);
   float keyD = max(dot(N, KEY_DIR), 0.0);
   float fillD = max(dot(N, FILL_DIR), 0.0);
-  // A wider (lower-exponent) fresnel lobe than before so the rim actually
-  // separates a rounded silhouette like the body/head, not just knife
-  // edges (docs/viewer.md defect #5: "no visible lighting model").
+  // A wider (lower-exponent) fresnel lobe so the rim separates a rounded
+  // silhouette like the body/head, not just knife edges.
   float fresnel = pow(1.0 - max(dot(N, V), 0.0), 2.0);
   float rimD = fresnel * max(dot(N, RIM_DIR), 0.0);
 
-  // Low ambient and a full-strength key so the terminator between the lit
-  // and shadow sides is actually visible instead of every angle reading as
-  // "pale cream" — the fill lifts the shadow side (per the art direction)
-  // but at a low enough weight that it doesn't erase the gradient the key
-  // just created.
-  vec3 ambient = uBaseColor * 0.028;
-  vec3 diffuse = uBaseColor * (KEY_COLOR * keyD * 1.0 + FILL_COLOR * fillD * 0.22);
+  // Ambient raised well above the old dark-stage value, and the fill
+  // carries more weight than the key alone would want, so a shadowed
+  // panel or hip on the far side of a duck is still legible against a
+  // light floor rather than reading as a black cutout.
+  vec3 ambient = uBaseColor * 0.20;
+  vec3 diffuse = uBaseColor * (KEY_COLOR * keyD * 0.92 + FILL_COLOR * fillD * 0.40);
 
   vec3 H = normalize(KEY_DIR + V);
   float spec = pow(max(dot(N, H), 0.0), uShininess) * uSpecularStrength * keyD;
 
-  vec3 color = ambient + diffuse + KEY_COLOR * spec + RIM_COLOR * rimD * (0.8 + uRimBoost);
+  // Rim/edge light dialled back from the dark-stage version: a strong rim
+  // exists to pull a shape off a black background, which a light floor no
+  // longer needs — kept subtle, and still boosted on selection.
+  vec3 color = ambient + diffuse + KEY_COLOR * spec + RIM_COLOR * rimD * (0.35 + uRimBoost);
   fragColor = vec4(color, 1.0);
 }
 `;
 
-// Ground: near-black warm-biased base, a half-metre grid dim enough to
-// read as texture, soft radial falloff to black at the edges.
+// Studio floor palette (docs/viewer.md "Ground"): a light neutral grey,
+// not the old dark stage. GROUND_EDGE_COLOR is the exact colour the floor
+// fades to at its far edge *and* the GL clear colour (see gl.clearColor()
+// in _render) — one JS-side source of truth so the disc's boundary is
+// never a visible seam, just the room fading into itself. Grid/axis
+// colours are plain JS arrays interpolated into the GLSL source below so
+// there is one place to retune the palette, not two.
+const GROUND_FLOOR_COLOR = [0.800, 0.800, 0.793];
+const GROUND_EDGE_COLOR = [0.636, 0.636, 0.629];
+const GRID_LINE_COLOR = [0.500, 0.500, 0.490];
+const GRID_AXIS_WARM_COLOR = [0.740, 0.470, 0.330]; // +X axis
+const GRID_AXIS_COOL_COLOR = [0.330, 0.480, 0.720]; // +Z axis
+const GRID_MINOR_FADE_NEAR_M = 4.2; // camera-to-point distance where the
+const GRID_MINOR_FADE_FAR_M = 9.0;  // 10 cm grid starts, finishes fading out
+
+function glsl3(rgb) {
+  return rgb.map((v) => v.toFixed(4)).join(', ');
+}
+
 const GROUND_VS = `#version 300 es
 layout(location = 0) in vec3 aPosition;
 uniform mat4 uViewProj;
@@ -1027,40 +1047,72 @@ void main() {
 }
 `;
 
+// A real measuring surface, not texture (docs/viewer.md "Ground"): 1 m
+// major lines that always persist, 10 cm minor lines that fade out as the
+// camera dollies away (so a distant view never solidifies into a grey
+// wash of sub-pixel cells), and the two stage axes tinted warm (+X) /
+// cool (+Z) so orientation reads from any camera. Every line — grid and
+// axis alike — is sized in screen-space via fwidth() rather than a fixed
+// world-space threshold, so it stays crisp (not aliased) at any zoom.
 const GROUND_FS = `#version 300 es
 precision highp float;
 in vec2 vXZ;
 uniform float uFalloffRadius;
 uniform vec3 uEyePos;
 out vec4 fragColor;
+
+const vec3 FLOOR_COLOR = vec3(${glsl3(GROUND_FLOOR_COLOR)});
+const vec3 EDGE_COLOR  = vec3(${glsl3(GROUND_EDGE_COLOR)});
+const vec3 LINE_COLOR  = vec3(${glsl3(GRID_LINE_COLOR)});
+const vec3 AXIS_WARM   = vec3(${glsl3(GRID_AXIS_WARM_COLOR)});
+const vec3 AXIS_COOL   = vec3(${glsl3(GRID_AXIS_COOL_COLOR)});
+const float MINOR_PITCH = 0.1; // 10 cm — duck-scale spacing reference
+const float MAJOR_PITCH = 1.0; // 1 m — the reference you count in
+const float MINOR_FADE_NEAR = ${GRID_MINOR_FADE_NEAR_M.toFixed(2)};
+const float MINOR_FADE_FAR  = ${GRID_MINOR_FADE_FAR_M.toFixed(2)};
+
+// Anti-aliased coverage [0,1] of the grid at the given pitch, using the
+// on-screen derivative of the grid coordinate as the line's half-width —
+// this is what keeps both grid scales crisp instead of moire-ing as the
+// camera moves, unlike thresholding the raw world-space distance to a line.
+float gridLine(vec2 worldXZ, float pitch) {
+  vec2 coord = worldXZ / pitch;
+  vec2 d = abs(fract(coord - 0.5) - 0.5) / max(fwidth(coord), vec2(1e-4));
+  return 1.0 - clamp(min(d.x, d.y), 0.0, 1.0);
+}
+
 void main() {
-  // A touch brighter than the old (0.048, 0.039, 0.031) — still reads as
-  // near-black, but a floor that's *already* at the display's black floor
-  // leaves the contact shadow (SHADOW_FS) nothing to darken toward: on an
-  // 8-bit display, alpha-blending black over a base this dark was an
-  // absolute-value change too small to see (docs/viewer.md defect #6).
-  vec3 base = vec3(0.075, 0.062, 0.050);
-  vec3 gridColor = vec3(0.091, 0.077, 0.061);
-  vec2 g = abs(fract(vXZ / 0.5 - 0.5) - 0.5) / max(fwidth(vXZ / 0.5), vec2(1e-4));
-  float line = 1.0 - clamp(min(g.x, g.y), 0.0, 1.0);
+  vec3 color = FLOOR_COLOR;
 
-  // Grid fades with camera distance too (not just radially from the stage
-  // centre) so it never solidifies into a bright band near the horizon at
-  // grazing angles, and its base contrast is cut hard: it should be felt
-  // as texture, not read as a chart (docs/viewer.md defect #4).
-  vec3 worldPos = vec3(vXZ.x, 0.0, vXZ.y);
-  float camDist = length(worldPos - uEyePos);
-  float gridDistFade = 1.0 - smoothstep(2.4, 6.0, camDist);
-  vec3 color = base + gridColor * line * 0.16 * gridDistFade;
+  float minorLine = gridLine(vXZ, MINOR_PITCH);
+  float majorLine = gridLine(vXZ, MAJOR_PITCH);
 
-  // Falloff completes (reaches exact black) well inside the disc's own
-  // edge, leaving a solid black margin that matches the clear colour
-  // regardless of any antialiasing right at the mesh boundary — a real
-  // soft-edged lit pool, not a floor that terminates in a visible
-  // horizon line (docs/viewer.md defect #3).
+  float camDist = length(vec3(vXZ.x, 0.0, vXZ.y) - uEyePos);
+  float minorFade = 1.0 - smoothstep(MINOR_FADE_NEAR, MINOR_FADE_FAR, camDist);
+  minorLine *= minorFade;
+
+  // Major clearly visible, minor lighter (docs/viewer.md): same ink, two
+  // strengths, so a major line under a minor one always reads as major.
+  color = mix(color, LINE_COLOR, minorLine * 0.34);
+  color = mix(color, LINE_COLOR, majorLine * 0.85);
+
+  // Stage axes: fixed ~3px screen-space width, drawn on top of the grid
+  // and never distance-faded — orientation must stay legible from any
+  // camera, including a dollied-out one where the minor grid has gone.
+  float distToXAxis = abs(vXZ.y) / max(fwidth(vXZ.y), 1e-4); // Z=0 line, i.e. the +X axis
+  float distToZAxis = abs(vXZ.x) / max(fwidth(vXZ.x), 1e-4); // X=0 line, i.e. the +Z axis
+  float xAxisMask = 1.0 - clamp(distToXAxis / 1.6, 0.0, 1.0);
+  float zAxisMask = 1.0 - clamp(distToZAxis / 1.6, 0.0, 1.0);
+  color = mix(color, AXIS_WARM, xAxisMask * 0.60);
+  color = mix(color, AXIS_COOL, zAxisMask * 0.60);
+
+  // Soft radial fade to exactly the clear colour, completed well inside
+  // the disc's own edge, so the mesh boundary is never a visible seam —
+  // the room just fades into itself (docs/viewer.md: "fading gently at
+  // the far edge so it does not end in a hard line").
   float r = length(vXZ) / uFalloffRadius;
-  float falloff = 1.0 - smoothstep(0.10, 0.78, r);
-  fragColor = vec4(color * falloff, 1.0);
+  float falloff = 1.0 - smoothstep(0.45, 0.92, r);
+  fragColor = vec4(mix(EDGE_COLOR, color, falloff), 1.0);
 }
 `;
 
@@ -1078,6 +1130,11 @@ void main() {
 }
 `;
 
+// Neutral grey, never black (docs/viewer.md "Contact shadows matter MORE
+// on a light floor... soft, neutral grey, never black"): on a light floor
+// a black contact shadow reads as a hole punched in it, not grounding.
+const SHADOW_COLOR = [0.320, 0.310, 0.300];
+
 const SHADOW_FS = `#version 300 es
 precision highp float;
 in vec2 vLocalXZ;
@@ -1086,16 +1143,15 @@ out vec4 fragColor;
 void main() {
   float r = length(vLocalXZ);
   float a = 1.0 - smoothstep(0.0, 1.0, r);
-  // Steeper falloff than before: dark right at the contact point, gone
-  // quickly outward, rather than a wide soft wash that reads as barely
-  // darker than the ambient floor (docs/viewer.md defect #6).
+  // Dark right at the contact point, gone quickly outward, so it reads as
+  // a real contact shadow hugging the feet rather than a wide soft wash.
   a = pow(a, 1.8) * uStrength;
-  fragColor = vec4(0.0, 0.0, 0.0, a);
+  fragColor = vec4(${glsl3(SHADOW_COLOR)}, a);
 }
 `;
 
 // A hairline annulus near the outer edge of the unit disc, not a fat donut
-// — docs/viewer.md "thin rings" (defect #2). uColor already arrives dimmed
+// — docs/viewer.md "restrained" start marks. uColor already arrives dimmed
 // (see _drawMarks): this only shapes it.
 const MARK_FS = `#version 300 es
 precision highp float;
@@ -1117,7 +1173,10 @@ uniform mat4 uViewProj;
 uniform vec3 uColor;
 out vec4 vColor;
 void main() {
-  vColor = vec4(uColor, 0.12 + 0.8 * aBrightness);
+  // Raised floor from the dark-stage 0.12 — a thin role-coloured line at
+  // low alpha all but disappears against a light grey floor, unlike a
+  // near-black one where it stayed visible by contrast alone.
+  vColor = vec4(uColor, 0.22 + 0.72 * aBrightness);
   gl_Position = uViewProj * vec4(aPosition, 1.0);
 }
 `;
@@ -1427,15 +1486,12 @@ export class StageRenderer {
     gl.enable(gl.DEPTH_TEST);
     gl.depthFunc(gl.LEQUAL);
     gl.disable(gl.CULL_FACE);
-    // Deliberately darker than the ground's own base colour, and matched to
-    // what its radial falloff actually fades to at the disc's edge (see
-    // GROUND_FS): the clear colour is what shows *beyond* the ground mesh,
-    // so if it were as bright as the floor itself (it used to be — the
-    // exact same three numbers) the disc's outer edge reads as a hard ring
-    // where the fade-to-black floor meets a background that never faded at
-    // all, exactly the "rectangle with a hard edge" the art direction rules
-    // out. Background must be darker than the floor's darkest point.
-    gl.clearColor(0.006, 0.005, 0.004, 1);
+    // Exactly GROUND_EDGE_COLOR (see the constant above GROUND_FS): the
+    // clear colour is what shows *beyond* the ground mesh, and the ground
+    // shader's own radial falloff fades the floor to this same colour
+    // before it reaches the disc's edge — so the boundary is never a
+    // visible seam, light-grey room fading into light-grey background.
+    gl.clearColor(GROUND_EDGE_COLOR[0], GROUND_EDGE_COLOR[1], GROUND_EDGE_COLOR[2], 1);
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
 
     this._drawGround(viewProj, eye);
@@ -1469,16 +1525,18 @@ export class StageRenderer {
     for (const mark of this._marks) {
       const cast = this._castByRole.get(mark.role);
       const color = colorToRgb(mark.color || (cast && cast.color) || '#cccccc');
-      // Dimmed well below the raw role hue — a whisper that a mark is
-      // there, not a glowing donut (docs/viewer.md defect #2).
-      const dim = 0.62;
+      // Dimmed below the raw role hue — a whisper that a mark is there,
+      // not a glowing donut — but less aggressively than on the old dark
+      // floor, since role hues are now deep/saturated rather than pastel
+      // and a light grey floor already reduces their apparent brightness.
+      const dim = 0.78;
       const model = mat4Chain(
         mat4FromTranslation([mark.y || 0, 0.002, mark.x || 0]),
         mat4FromScale(0.22),
       );
       gl.uniformMatrix4fv(uniforms.uModel, false, model);
       gl.uniform3f(uniforms.uColor, color[0] * dim, color[1] * dim, color[2] * dim);
-      gl.uniform1f(uniforms.uOpacity, mark.role === this._selected ? 0.5 : 0.3);
+      gl.uniform1f(uniforms.uOpacity, mark.role === this._selected ? 0.55 : 0.35);
       drawMesh(gl, this._unitDisc);
     }
     gl.depthMask(true);
@@ -1526,16 +1584,17 @@ export class StageRenderer {
     bindMeshAttribs(gl, this._unitDisc, 0, -1);
     for (const pose of poses) {
       const world = mapPoseToWorld(pose);
-      // Tighter than the body's own footprint and pushed darker (see
-      // uStrength + SHADOW_FS's steeper falloff) so it reads as a real
-      // contact shadow hugging the feet, not a wide wash barely darker
-      // than the ambient floor (docs/viewer.md defect #6).
+      // Tighter than the body's own footprint so it reads as a real
+      // contact shadow hugging the feet, not a wide wash. uStrength is
+      // lower than the old dark-stage value because SHADOW_COLOR is now a
+      // neutral grey rather than black — a soft grey shadow can afford a
+      // touch more coverage without ever reading as a hole in the floor.
       const model = mat4Chain(
         mat4FromTranslation([world.position[0], 0.0015, world.position[2]]),
         mat4FromScale([0.10, 1, 0.075]),
       );
       gl.uniformMatrix4fv(uniforms.uModel, false, model);
-      gl.uniform1f(uniforms.uStrength, 0.92);
+      gl.uniform1f(uniforms.uStrength, 0.55);
       drawMesh(gl, this._unitDisc);
     }
     gl.depthMask(true);

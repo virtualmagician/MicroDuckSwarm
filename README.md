@@ -4,11 +4,19 @@
 
 Choreography authoring and playback for a flock of [Pollen Robotics MicroDucks](https://pollen-robotics.com/microduck/) — synchronized to music and video, built for live keynote stages.
 
+![The stage viewer: eight MicroDucks in formation on the measured floor](docs/images/stage-viewer.png)
+
+*The stage viewer — a kinematic preview of `shows/octet`, eight ducks on a 1 m grid with 10 cm divisions. Scrub the timeline and the flock performs.*
+
 A duck show is authored once, compiled to a `.duckshow` file, and pre-loaded onto every duck. On show night the WiFi carries only a shared clock, start/stop triggers, and telemetry — each duck performs its part locally at 50 Hz against MicroDuck's `robotd` daemon, so a network dropout mid-number costs nothing. The pattern is borrowed from drone light shows and Disney's BDX droids: **pre-load the show, sync only clocks, never stream the performance.**
 
 ## Status
 
 Pre-hardware development (M0). MicroDuck units ship late 2026; everything here runs today against a protocol-faithful mock duck and is verified against the [microduck](https://github.com/pollen-robotics/microduck) source (API version 16).
+
+`shows/octet/octet.duckshow.json` — "Eight to the Bar" — is a 64-second piece for eight ducks at 120 bpm: a unison opening, eight solo turns while the rest hold still, and a finale back in unison. It validates clean and plays in the editor today.
+
+**A note on assets.** This repository contains no Pollen files. MicroDuck's meshes, MJCF model and hardware design files are licensed CC BY-SA-NC and are not redistributed here; the duck in the viewer is our own geometry, built from primitives. The planned physics preview will load Pollen's model from a gitignored `assets/microduck/` that you supply yourself.
 
 ## Layout
 

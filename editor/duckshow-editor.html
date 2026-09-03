@@ -30,7 +30,14 @@
   html, body { height: 100%; margin: 0; }
   body {
     font: 12px/1.35 var(--sans); color: var(--fg); background: var(--bg);
-    display: grid; grid-template-rows: auto auto 1fr auto; overflow: hidden;
+    /* grid-template-columns is explicit (not the implicit auto-sized single
+       column a bare grid-template-rows leaves you with) so the column track
+       is always pinned to the viewport width, never grown to fit a wide
+       descendant — the stage canvas, a replaced element with its own pixel
+       width/height attributes, would otherwise bubble its intrinsic size
+       all the way up through the flex chain below and push #main wider
+       than the window. */
+    display: grid; grid-template-rows: auto auto 1fr auto; grid-template-columns: minmax(0, 1fr); overflow: hidden;
   }
   button, input, select {
     font: inherit; color: var(--fg); background: var(--bg3); border: 1px solid var(--line);
@@ -64,8 +71,26 @@
   #time { font-family: var(--mono); font-size: 14px; min-width: 9.5em; }
   #time small { color: var(--fg3); font-size: 11px; }
 
-  #main { display: grid; grid-template-columns: 1fr 340px; min-height: 0; }
-  #timeline { display: flex; flex-direction: column; min-width: 0; min-height: 0; border-right: 1px solid var(--line); }
+  /* #main is a video-editor / game-engine workspace, stacked top-to-bottom:
+     #workspace (the 3D stage, centre-top and dominant, plus the inspector
+     rail beside it) sits above #timeline (full width, below), the two
+     separated by a draggable #splitter. #workspace's height is set inline
+     by JS (persisted per browser in localStorage — see "Splitter" below);
+     #timeline just takes whatever remains via flex. */
+  #main { display: flex; flex-direction: column; min-height: 0; min-width: 0; }
+  #workspace { display: flex; flex-direction: row; flex: none; min-height: 0; min-width: 0; overflow: hidden; }
+  #splitter {
+    flex: none; height: 8px; min-height: 8px; cursor: row-resize; position: relative;
+    background: var(--bg2); border-top: 1px solid var(--line); border-bottom: 1px solid var(--line);
+    touch-action: none;
+  }
+  #splitter:hover, #splitter.dragging { background: var(--accent); }
+  #splitter::after {
+    content: ''; position: absolute; left: 50%; top: 50%; width: 32px; height: 2px;
+    background: var(--fg3); border-radius: 1px; transform: translate(-50%, -50%);
+  }
+  #splitter.dragging::after { background: #fff; }
+  #timeline { display: flex; flex-direction: column; min-width: 0; min-height: 140px; flex: 1 1 auto; }
   #ruler-row { display: flex; height: 26px; flex: none; background: var(--bg2); border-bottom: 1px solid var(--line); }
   #ruler-spacer { width: 220px; flex: none; display: flex; align-items: center; justify-content: space-between; padding: 0 6px; border-right: 1px solid var(--line); }
   #ruler { flex: 1; min-width: 0; height: 26px; cursor: col-resize; display: block; }
@@ -85,16 +110,18 @@
   .lane-head .readout span { white-space: nowrap; }
   .lane-head .readout b { font-weight: 500; }
 
-  #side { display: flex; flex-direction: column; min-height: 0; background: var(--bg2); overflow: hidden; }
+  /* Inspector + validation rail, beside the stage viewer (not below it —
+     that's what keeps them from stealing the viewer's vertical space). */
+  #side { display: flex; flex-direction: column; min-height: 0; width: 320px; flex: 0 1 320px; min-width: 240px; background: var(--bg2); border-left: 1px solid var(--line); overflow: hidden; }
   #side > section { border-bottom: 1px solid var(--line); display: flex; flex-direction: column; min-height: 0; }
-  #side h2 { font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--fg2); margin: 0; padding: 6px 8px 4px; display: flex; align-items: center; gap: 6px; }
-  #side h2 .count { margin-left: auto; font-weight: 500; }
-  #inspector { flex: none; }
+  #side h2, #stage-section h2 { font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--fg2); margin: 0; padding: 6px 8px 4px; display: flex; align-items: center; gap: 6px; flex: none; }
+  #side h2 .count, #stage-section h2 .count { margin-left: auto; font-weight: 500; }
+  #inspector { flex: none; max-height: 46%; overflow-y: auto; }
   #inspector-body { padding: 2px 8px 8px; display: grid; grid-template-columns: max-content 1fr; gap: 4px 8px; align-items: center; }
   #inspector-body .full { grid-column: 1 / -1; }
   #inspector-body .hint { color: var(--fg3); }
   #inspector-body input[type="number"], #inspector-body input[type="text"], #inspector-body select { width: 100%; }
-  #validation { flex: 1 1 35%; }
+  #validation { flex: 1 1 auto; border-bottom: none; }
   #issues { list-style: none; margin: 0; padding: 0 0 6px; overflow-y: auto; flex: 1; min-height: 60px; }
   #issues li { padding: 3px 8px; cursor: pointer; display: grid; grid-template-columns: 14px 1fr; gap: 6px; border-top: 1px solid transparent; }
   #issues li:hover { background: var(--bg3); }
@@ -103,8 +130,11 @@
   #issues li.error .sev { background: var(--err); }
   #issues li.warning .sev { background: var(--warn); }
   #issues li.ok { color: var(--ok); cursor: default; grid-template-columns: 1fr; }
-  #stage-section { flex: 1 1 45%; }
-  #viewer-wrap { position: relative; flex: 1; min-height: 160px; overflow: hidden; }
+  /* The stage viewer: primary surface, centre-top, majority of the window.
+     Sized entirely by #workspace's height (draggable) and flex-grow within
+     it (the width #side doesn't claim). */
+  #stage-section { flex: 1 1 auto; min-width: 320px; display: flex; flex-direction: column; min-height: 0; background: var(--bg2); }
+  #viewer-wrap { position: relative; flex: 1; min-height: 120px; overflow: hidden; }
   #stage { width: 100%; height: 100%; display: block; cursor: grab; }
   #stage:active { cursor: grabbing; }
   #viewer-badge {
@@ -198,6 +228,28 @@
 </div>
 
 <main id="main">
+  <div id="workspace">
+    <section id="stage-section">
+      <h2>stage <span class="count" style="font-weight:400">1 house · 2 ¾ · 3 top · drag orbit · scroll dolly · drag mark in top view</span></h2>
+      <div id="viewer-wrap">
+        <canvas id="stage"></canvas>
+        <div id="viewer-labels"></div>
+        <div id="viewer-badge">kinematic preview</div>
+      </div>
+      <div id="stage-legend"></div>
+    </section>
+    <aside id="side">
+      <section id="inspector">
+        <h2>selection <span id="inspector-title" class="count"></span></h2>
+        <div id="inspector-body"><div class="full hint">Click a keyframe or event. Double-click (or ⌘-click) a lane to add one.</div></div>
+      </section>
+      <section id="validation">
+        <h2>validation <span id="issue-count" class="count"></span></h2>
+        <ul id="issues"></ul>
+      </section>
+    </aside>
+  </div>
+  <div id="splitter" title="Drag to resize the stage viewer" role="separator" aria-orientation="horizontal" aria-label="Resize stage viewer"></div>
   <section id="timeline">
     <div id="ruler-row">
       <div id="ruler-spacer"><span>roles</span><button id="btn-add-role" title="Add a role to the cast">+ role</button></div>
@@ -211,25 +263,6 @@
     </div>
     <div id="hscroll"><div></div></div>
   </section>
-  <aside id="side">
-    <section id="inspector">
-      <h2>selection <span id="inspector-title" class="count"></span></h2>
-      <div id="inspector-body"><div class="full hint">Click a keyframe or event. Double-click (or ⌘-click) a lane to add one.</div></div>
-    </section>
-    <section id="validation">
-      <h2>validation <span id="issue-count" class="count"></span></h2>
-      <ul id="issues"></ul>
-    </section>
-    <section id="stage-section">
-      <h2>stage <span class="count" style="font-weight:400">1 house · 2 ¾ · 3 top · drag orbit · scroll dolly · drag mark in top view</span></h2>
-      <div id="viewer-wrap">
-        <canvas id="stage"></canvas>
-        <div id="viewer-labels"></div>
-        <div id="viewer-badge">kinematic preview</div>
-      </div>
-      <div id="stage-legend"></div>
-    </section>
-  </aside>
 </main>
 
 <footer id="status">
@@ -369,6 +402,64 @@ function status(msg, kind = '') {
 // ---------------------------------------------------------------------------
 const rulerC = $('ruler'), lanesC = $('lanes'), stageC = $('stage');
 const scrollEl = $('lanes-scroll'), headersEl = $('lane-headers'), innerEl = $('lanes-inner'), hscroll = $('hscroll');
+const mainEl = $('main'), workspaceEl = $('workspace'), splitterEl = $('splitter');
+
+// ---------------------------------------------------------------------------
+// Splitter — the draggable divide between the stage viewer (top, primary)
+// and the timeline (below, full width). #workspace's height is set here as
+// an inline px style; #timeline just flexes to fill whatever remains, so
+// this is the only place that needs to know about the split at all. The
+// position is remembered per browser in localStorage — never in the show
+// file (docs/viewer.md "Layout").
+// ---------------------------------------------------------------------------
+const SPLIT_STORAGE_KEY = 'duckshow-editor:workspace-h';
+const SPLIT_DEFAULT_FRAC = 0.58; // viewer's share of #main's height on first run
+const VIEWER_MIN_H = 220;
+const TIMELINE_MIN_H = 160;
+const SPLITTER_H = 8;
+
+function clampWorkspaceH(h) {
+  const avail = mainEl.clientHeight || Math.max(400, (window.innerHeight || 800) - 140);
+  const maxH = Math.max(VIEWER_MIN_H, avail - SPLITTER_H - TIMELINE_MIN_H);
+  return clamp(Math.round(h), VIEWER_MIN_H, maxH);
+}
+function applyWorkspaceH(h) { workspaceEl.style.height = `${h}px`; }
+function loadWorkspaceH() {
+  let h = null;
+  try { const v = localStorage.getItem(SPLIT_STORAGE_KEY); if (v) h = Number(v); } catch (_) { /* private mode / storage disabled */ }
+  if (!Number.isFinite(h) || h <= 0) h = Math.round((mainEl.clientHeight || window.innerHeight || 800) * SPLIT_DEFAULT_FRAC);
+  return h;
+}
+function saveWorkspaceH(h) {
+  try { localStorage.setItem(SPLIT_STORAGE_KEY, String(Math.round(h))); } catch (_) { /* private mode / storage disabled */ }
+}
+/** Re-clamp the current split against #main's present size (e.g. after a window resize). */
+function reflowSplit() {
+  const cur = workspaceEl.getBoundingClientRect().height || loadWorkspaceH();
+  applyWorkspaceH(clampWorkspaceH(cur));
+}
+
+let splitDrag = null;
+splitterEl.addEventListener('pointerdown', (ev) => {
+  if (ev.button !== 0) return;
+  capture(splitterEl, ev);
+  splitterEl.classList.add('dragging');
+  splitDrag = { startY: ev.clientY, startH: workspaceEl.getBoundingClientRect().height };
+});
+splitterEl.addEventListener('pointermove', (ev) => {
+  if (!splitDrag) return;
+  applyWorkspaceH(clampWorkspaceH(splitDrag.startH + (ev.clientY - splitDrag.startY)));
+  layoutTimeline(); drawRuler(); drawLanes();
+  resizeViewer();
+});
+function endSplitDrag() {
+  if (!splitDrag) return;
+  splitDrag = null;
+  splitterEl.classList.remove('dragging');
+  saveWorkspaceH(workspaceEl.getBoundingClientRect().height);
+}
+splitterEl.addEventListener('pointerup', endSplitDrag);
+splitterEl.addEventListener('pointercancel', endSplitDrag);
 
 function computeLanes() {
   const lanes = [];
@@ -1684,6 +1775,7 @@ window.addEventListener('keydown', (e) => {
 // ---------------------------------------------------------------------------
 new ResizeObserver(() => { layoutTimeline(); drawRuler(); drawLanes(); }).observe(scrollEl);
 new ResizeObserver(() => resizeViewer()).observe($('stage-section'));
+new ResizeObserver(() => reflowSplit()).observe(mainEl); // window resize: keep the split within its (re-derived) bounds
 if (window.matchMedia) window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', renderAll);
 
 function starterShow() {
@@ -1709,6 +1801,7 @@ window.duckshowEditor = { state, core, dv, xOf, tOf, yOfValue, commit, select, s
 
 async function boot() {
   window.__duckshowEditorBooted = true;
+  applyWorkspaceH(clampWorkspaceH(loadWorkspaceH()));
   initViewer();
   state.show = null;
   setShow(starterShow(), { dirty: false, resetHistory: true });
