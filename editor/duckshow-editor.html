@@ -111,6 +111,20 @@
   .lane-head .readout span { white-space: nowrap; }
   .lane-head .readout b { font-weight: 500; }
 
+  /* Rehearsal controls — solo/mute (docs/authoring.md rehearsal tools).
+     Session-only state, never show content; see saveRehearsalState(). Solo
+     lights amber, mute lights red — the mixing-desk convention — so the
+     pressed state reads at a glance across a whole cast of lanes. */
+  .lane-head.group button.solo,
+  .lane-head.group button.mute { font-weight: 700; padding: 0 6px; }
+  .lane-head.group button.solo[aria-pressed="true"] { background: var(--warn); border-color: var(--warn); color: #171a20; }
+  .lane-head.group button.mute[aria-pressed="true"] { background: var(--err); border-color: var(--err); color: #fff; }
+  /* A role held neutral right now (muted, or every non-soloed role while
+     something else is soloed) needs a visible "not performing" mark in the
+     lane list too, or it silently disagrees with the dimmed duck on stage. */
+  .lane-head.group.rehearsal-neutral { opacity: 0.62; }
+  .lane-head.group.solo-active { box-shadow: inset 3px 0 0 var(--warn); opacity: 1; }
+
   /* Inspector + validation rail, beside the stage viewer (not below it —
      that's what keeps them from stealing the viewer's vertical space). */
   #side { display: flex; flex-direction: column; min-height: 0; width: 320px; flex: 0 1 320px; min-width: 240px; background: var(--bg2); border-left: 1px solid var(--line); overflow: hidden; }
@@ -167,6 +181,9 @@
   }
   .role-label i { display: inline-block; width: 6px; height: 6px; border-radius: 50%; flex: none; }
   .role-label.selected { border-color: var(--sel); box-shadow: 0 0 0 1px var(--sel); font-weight: 700; }
+  /* Rehearsal solo/mute (docs/authoring.md rehearsal tools): a held-neutral
+     duck's own name pill fades to match its dimmed body on stage. */
+  .role-label.dimmed { opacity: 0.4; }
   #stage-section h2 button { min-height: 18px; padding: 0 7px; font-size: 10px; margin-left: 6px; }
   #stage-legend { padding: 0 8px 6px; color: var(--fg2); font-size: 11px; display: flex; flex-wrap: wrap; gap: 4px 10px; }
   #stage-legend i { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 4px; vertical-align: middle; }
@@ -329,6 +346,7 @@ const VIEWER_DOLLY_SPEED = 0.0015;  // exponential distance change per wheel-del
 const VIEWER_MARK_HIT_M = 0.28;     // metres — pick radius for grabbing a start mark in Top view
 const ROLE_LABEL_HEIGHT_M = DUCK_HEIGHT_M + 0.05; // world Y for a name pill — just above the head
 const VIEWER_NAMES_KEY = 'duckshow-editor:viewer-names';
+const REHEARSAL_STATE_KEY = 'duckshow-editor:rehearsal'; // solo/mute — session state, never the show file; see saveRehearsalState()
 
 const $ = (id) => document.getElementById(id);
 // Pointer capture keeps a drag alive outside the canvas; synthetic/stale pointers may throw, which is harmless.
@@ -349,6 +367,11 @@ const state = {
   selection: null, collapsed: new Set(), drag: null, viewerSelectedRole: null,
   audio: { ctx: null, buffer: null, source: null, gain: null, name: '' },
   layout: { lanes: [], totalH: 0, W: 0, H: 0 },
+  // Solo/mute (docs/authoring.md rehearsal tools) — editor session state,
+  // never show content; loaded from localStorage in boot(), replaced with
+  // dv.createRehearsalState() here only as a same-shape placeholder before
+  // that runs.
+  rehearsal: dv.createRehearsalState(),
 };
 
 function duration() { return state.norm?.meta.duration ?? 0; }
@@ -385,6 +408,7 @@ function setShow(show, { dirty, resetHistory = false } = {}) {
   const roleSet = new Set(roles());
   for (const r of [...state.collapsed]) if (!roleSet.has(r)) state.collapsed.delete(r);
   if (state.selection && !selectionValid()) state.selection = null;
+  state.rehearsal = dv.pruneRehearsalState(state.rehearsal, roles());
   state.playhead = clamp(state.playhead, 0, Math.max(0, duration()));
   renderAll();
 }
@@ -561,6 +585,11 @@ function layoutTimeline() {
 function rebuildHeaders() {
   const { lanes } = computeLanes();
   headersEl.replaceChildren();
+  // Computed fresh here, not read off viewer.neutralRoles: rebuildHeaders()
+  // runs before syncViewerShow() in renderAll(), so the cached value would
+  // still reflect the PREVIOUS render's rehearsal state on the very call
+  // that just changed it (a solo/mute click) — a one-frame-stale header.
+  const neutralRoles = dv.resolveNeutralRoles(state.rehearsal, roles());
   for (const lane of lanes) {
     const el = document.createElement('div');
     el.className = `lane-head ${lane.kind}`;
@@ -570,6 +599,8 @@ function rebuildHeaders() {
       const collapsed = state.collapsed.has(lane.role);
       el.innerHTML = `<button class="collapse" title="${collapsed ? 'expand' : 'collapse'}">${collapsed ? '▸' : '▾'}</button>`
         + `<span class="name" style="color:${roleColor(lane.role)}" title="click to highlight this duck in the stage viewer"></span>`
+        + `<button class="solo toggle" aria-pressed="false" title="Solo: only this role performs; every other role holds its mark (⌥S on the selected role)">S</button>`
+        + `<button class="mute toggle" aria-pressed="false" title="Mute: this role holds its mark while the rest of the cast plays">M</button>`
         + `<button class="rename" title="Rename role">✎</button><button class="remove danger" title="remove role">✕</button>`;
       el.querySelector('.name').textContent = lane.role + (cast?.notes ? ` · ${cast.notes}` : '');
       el.querySelector('.collapse').onclick = () => { state.collapsed.has(lane.role) ? state.collapsed.delete(lane.role) : state.collapsed.add(lane.role); renderAll(); };
@@ -580,8 +611,14 @@ function rebuildHeaders() {
         ev.stopPropagation();
         setViewerSelectedRole(state.viewerSelectedRole === lane.role ? null : lane.role);
       };
+      el.querySelector('.solo').onclick = (ev) => { ev.stopPropagation(); toggleRoleSolo(lane.role); };
+      el.querySelector('.mute').onclick = (ev) => { ev.stopPropagation(); toggleRoleMute(lane.role); };
+      el.querySelector('.solo').setAttribute('aria-pressed', String(state.rehearsal.solo === lane.role));
+      el.querySelector('.mute').setAttribute('aria-pressed', String(state.rehearsal.muted.has(lane.role)));
       el.querySelector('.rename').onclick = (ev) => { ev.stopPropagation(); startRoleRename(lane.role, el); };
       if (state.viewerSelectedRole === lane.role) el.classList.add('viewer-selected');
+      if (state.rehearsal.solo === lane.role) el.classList.add('solo-active');
+      else if (neutralRoles.has(lane.role)) el.classList.add('rehearsal-neutral');
     } else if (lane.kind === 'curve') {
       el.innerHTML = `<div class="title">${lane.track}</div><div class="readout"></div>`;
       el.dataset.role = lane.role; el.dataset.track = lane.track;
@@ -601,9 +638,10 @@ function rebuildHeaders() {
  * tracks key and editor.marks key atomically); on rejection the show is
  * left untouched, the reason is shown in the status bar, and the field
  * stays open to fix and retry. Escape or clicking away cancels outright.
- * A commit also carries the current selection, the viewer's selected role
- * and the lane's collapsed/expanded state across the rename by name, so
- * none of them go silently stale or point at a role that no longer exists.
+ * A commit also carries the current selection, the viewer's selected role,
+ * the lane's collapsed/expanded state, and any solo/mute across the rename
+ * by name, so none of them go silently stale or point at a role that no
+ * longer exists.
  */
 function startRoleRename(role, headerEl) {
   const nameEl = headerEl.querySelector('.name');
@@ -633,6 +671,8 @@ function startRoleRename(role, headerEl) {
     if (state.selection && state.selection.role === role) state.selection = { ...state.selection, role: trimmed };
     if (state.viewerSelectedRole === role) state.viewerSelectedRole = trimmed;
     if (state.collapsed.has(role)) { state.collapsed.delete(role); state.collapsed.add(trimmed); }
+    state.rehearsal = dv.renameInRehearsalState(state.rehearsal, role, trimmed);
+    saveRehearsalState();
     commit(next);
     status(trimmed === role ? `role "${role}" unchanged` : `renamed role "${role}" → "${trimmed}"`);
   };
@@ -1325,6 +1365,44 @@ function saveViewerNamesPref(on) {
   try { localStorage.setItem(VIEWER_NAMES_KEY, on ? '1' : '0'); } catch (_) { /* private mode / storage disabled */ }
 }
 
+// Rehearsal tools — solo/mute (docs/authoring.md rehearsal tools, M3). Pure
+// state lives in duckshow-viewer.js (dv.createRehearsalState/toggleSolo/
+// toggleMute/resolveNeutralRoles) and is exercised there in
+// editor/tests/rehearsal.test.mjs; everything below is just the editor's
+// own glue: persist it like the name-label preference above (session state,
+// never written into the show file), and repaint on every change.
+function loadRehearsalState() {
+  try {
+    const raw = localStorage.getItem(REHEARSAL_STATE_KEY);
+    if (!raw) return dv.createRehearsalState();
+    const parsed = JSON.parse(raw);
+    return { solo: typeof parsed.solo === 'string' ? parsed.solo : null, muted: new Set(Array.isArray(parsed.muted) ? parsed.muted : []) };
+  } catch (_) { return dv.createRehearsalState(); } // private mode / storage disabled / corrupt value
+}
+function saveRehearsalState() {
+  try {
+    localStorage.setItem(REHEARSAL_STATE_KEY, JSON.stringify({ solo: state.rehearsal.solo, muted: [...state.rehearsal.muted] }));
+  } catch (_) { /* private mode / storage disabled */ }
+}
+function toggleRoleSolo(role) {
+  state.rehearsal = dv.toggleSolo(state.rehearsal, role);
+  saveRehearsalState();
+  status(state.rehearsal.solo === role ? `soloing ${role} — every other role holds its mark` : `un-soloed ${role}`);
+  renderAll();
+}
+function toggleRoleMute(role) {
+  state.rehearsal = dv.toggleMute(state.rehearsal, role);
+  saveRehearsalState();
+  status(`${role} ${state.rehearsal.muted.has(role) ? 'muted' : 'unmuted'}`);
+  renderAll();
+}
+/** Alt+S: solo/un-solo the role currently highlighted in the stage viewer (docs/authoring.md keyboard shortcut). */
+function toggleSoloSelectedRole() {
+  const role = state.viewerSelectedRole;
+  if (!role) { status('click a role\'s name to select it, then Alt+S to solo it', 'error'); return; }
+  toggleRoleSolo(role);
+}
+
 const viewer = {
   renderer: null,
   camera: { ...CAMERA_PRESETS.house },
@@ -1338,6 +1416,7 @@ const viewer = {
   roleNames: [], // previous sync's cast order — lets roleColorPaletteContinuous detect an in-place rename
   namesOn: loadViewerNamesPref(),
   roleLabelEls: new Map(), // role -> persistent DOM node, reused across frames (never recreated per paint)
+  neutralRoles: new Set(), // dv.resolveNeutralRoles(state.rehearsal, roles()) — recomputed in syncViewerShow(), read every paintViewer()
 };
 
 /** Shows (or updates) the "viewer unavailable" overlay banner over the stage canvas. */
@@ -1411,6 +1490,10 @@ function syncViewerShow() {
     const m = viewer.marks.get(role) || { x: 0, y: 0, heading: 0 };
     return { role, x: m.x, y: m.y, heading: m.heading };
   }));
+  // Rehearsal solo/mute (docs/authoring.md rehearsal tools) — recomputed
+  // here (not just on a solo/mute click) because the cast itself can
+  // change: adding/removing a role changes who "every other role" is.
+  viewer.neutralRoles = dv.resolveNeutralRoles(state.rehearsal, roleNames);
   renderViewerLegend();
   rebuildRoleLabelEls(roleNames);
 }
@@ -1427,6 +1510,7 @@ function paintViewer() {
     selectedRole: viewer.selectedRole,
     trailMaxPoints: dv.TRAIL_MAX_POINTS,
     eventLabelWindow: dv.DEFAULT_EVENT_LABEL_WINDOW,
+    neutralRoles: viewer.neutralRoles,
   });
   const trails = {};
   for (const [role, pts] of frame.trails) trails[role] = pts;
@@ -1537,6 +1621,7 @@ function updateRoleLabelPositions() {
     el.style.left = `${screen.x}px`;
     el.style.top = `${screen.y}px`;
     el.classList.toggle('selected', role === viewer.selectedRole);
+    el.classList.toggle('dimmed', viewer.neutralRoles.has(role));
   }
 }
 
@@ -1548,6 +1633,7 @@ function renderViewerLegend() {
     const span = document.createElement('span');
     span.innerHTML = `<i style="background:${info ? info.hex : roleColor(role)}"></i>${role}`;
     span.style.fontWeight = state.viewerSelectedRole === role ? '700' : '400';
+    span.style.opacity = viewer.neutralRoles.has(role) ? '0.45' : '1';
     span.title = 'click to highlight this duck in the stage viewer';
     span.onclick = () => setViewerSelectedRole(state.viewerSelectedRole === role ? null : role);
     return span;
@@ -1931,6 +2017,15 @@ window.addEventListener('keydown', (e) => {
   if (mod && e.key.toLowerCase() === 'z') { e.preventDefault(); if (typing) document.activeElement.blur(); e.shiftKey ? redo() : undo(); return; }
   if (mod && e.key.toLowerCase() === 'y') { e.preventDefault(); redo(); return; }
   if (typing) { if (e.key === 'Escape') document.activeElement.blur(); return; }
+  // Solo the role currently highlighted in the stage viewer (docs/authoring.md
+  // rehearsal tools). Checks e.code first: Option/Alt remaps e.key on macOS
+  // layouts (Alt+S -> 'ß' on a US layout, for one), but e.code still names
+  // the physical S key everywhere a real browser populates it — the
+  // e.key.toLowerCase() fallback covers input paths (e.g. synthetic/
+  // automated key dispatch) that carry a plain 's' but leave e.code empty.
+  // Alt+S was free — plain 's'/'S' (below) is already "toggle snap", and
+  // this must never collide with it.
+  if (e.altKey && (e.code === 'KeyS' || e.key.toLowerCase() === 's')) { e.preventDefault(); toggleSoloSelectedRole(); return; }
   const g = grid();
   const stepT = state.snap && g.length ? (core.beatPeriod(Number(musicMeta().bpm)) / state.subdivision) : FRAME;
   switch (e.key) {
@@ -2011,6 +2106,14 @@ async function boot() {
   } else {
     status('opened from file:// — loaded a built-in starter show. Use Open… for a .duckshow.json, or serve the repo (python3 -m http.server) for "Load demo".');
   }
+  // Rehearsal solo/mute (docs/authoring.md rehearsal tools) is loaded here,
+  // AFTER the real show above has settled, not before the earlier
+  // setShow(starterShow()) — pruneRehearsalState() runs on every setShow(),
+  // and loading it earlier meant that first call would silently drop a
+  // persisted mute referring to a role that exists only in the show still
+  // loading (e.g. from ?show=), pruned against the throwaway starter's
+  // two-role cast instead of the show actually being opened.
+  state.rehearsal = dv.pruneRehearsalState(loadRehearsalState(), roles());
   renderAll();
 }
 boot();

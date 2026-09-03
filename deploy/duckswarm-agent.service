@@ -1,0 +1,72 @@
+[Unit]
+Description=MicroDuckSwarm on-duck agent (duck-agent)
+Documentation=https://github.com/virtualmagician/MicroDuckSwarm/blob/main/docs/provisioning.md
+# robotd owns the servo control loop; there's no point starting before it.
+# We do not hard-require robotd.service (Requires=) or gate on it being
+# *healthy* -- duck_agent's own RobotdClient reconnects with backoff on its
+# own if the socket isn't there yet at startup (python/duck_agent/
+# robotd_client.py), which is exactly the discipline this file's restart
+# policy mirrors at the process level (see the Restart= comment below).
+After=network-online.target robotd.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=duckswarm
+Group=duckswarm
+# The entire access gate for /run/robotd.sock is membership of the `robot`
+# group (docs/robotd-api.md, docs/provisioning.md "Filesystem layout" --
+# CONFIRMED upstream: robotd has no per-uid/gid allowlist the way configd
+# and updaterd do). `robot` itself is vendor-created (updater/systemd/
+# sysusers.d/robot.conf) and must already exist; deploy/provision_duck.sh
+# fails loudly rather than creating it if it doesn't.
+SupplementaryGroups=robot
+
+EnvironmentFile=/etc/duckswarm/agent.env
+WorkingDirectory=/opt/duckswarm/current/python
+# A wrapper script builds duck_agent's argv from the environment file
+# rather than relying on systemd's own $VAR expansion inside ExecStart=:
+# MASTER_HOST is optional (learned from the master's first packet when
+# unset, per --master-host's own help text in python/duck_agent/
+# __main__.py), and getting "unset means omit this argument entirely"
+# right via systemd's own splitting rules is exactly the kind of thing
+# worth being able to `bash -n` and read plainly instead of trusting from
+# memory. See deploy/duck-agent-launch.sh.
+ExecStart=/opt/duckswarm/current/bin/duck-agent-launch.sh
+
+# Mirrors padd's own reconnect discipline (docs/provisioning.md, CONFIRMED
+# upstream 2026-09-03): "a client like ours, exits and retries every 5 s
+# when the socket is absent." duck-agent's *own* robotd link already
+# reconnects without the process dying (robotd_client.py's connector
+# loop); this Restart= is the belt-and-suspenders case padd's pattern
+# doesn't cover for us: the agent process itself crashing outright (a bug,
+# an unhandled exception escaping somewhere it shouldn't). A show-critical
+# daemon must not go quiet for the rest of the night because it hit a bug
+# and crash-looped five times in the first ten seconds -- so, unlike
+# systemd's own default, we never stop retrying (StartLimitIntervalSec=0),
+# same as padd never gives up either.
+Restart=always
+RestartSec=5
+StartLimitIntervalSec=0
+
+# duck_agent.__main__ routes SIGTERM through DuckAgent.stop(), which sends
+# a final zero-velocity robot.move + robot.stop before exiting -- robotd
+# is last-value-wins with no local watchdog beyond its own 500 ms deadman
+# (docs/robotd-api.md), so that stop sequence matters and must not be
+# SIGKILLed mid-flight. Budget more than one robotd restart's worst-case
+# health gate (30 s, docs/robotd-api.md) so a `systemctl stop` that lands
+# while robotd itself is mid-restart still has room to finish.
+TimeoutStopSec=35
+KillSignal=SIGTERM
+
+# Defensive sandboxing: duck-agent needs its own release tree (read-only
+# after deploy), /var/lib/duckswarm (shows + policies, read-write), the
+# network, and the robotd socket. Nothing else.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/duckswarm
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

@@ -33,6 +33,7 @@
 
 import {
   buildDuckAssets, disposeDuckAssets, drawDuck, updateWalkState,
+  DIMMED_FACTOR as DUCK_DIMMED_FACTOR,
 } from './viewer-duck.js';
 
 // ---------------------------------------------------------------------------
@@ -1621,9 +1622,14 @@ export class StageRenderer {
         mat4FromTranslation(world.position),
         mat4FromYRotation(world.headingRotationY),
       );
-      const rimBoost = pose.role === this._selected ? 0.9 : 0.0;
+      // A rehearsal-neutral duck (docs/authoring.md rehearsal tools:
+      // pose.dimmed, set by duckshow-viewer.js's derivePose for a
+      // soloed-out or muted role) never gets the selection rim either —
+      // it isn't performing, so a bright highlight on it would read as a
+      // contradiction, not an accent.
+      const rimBoost = pose.role === this._selected && !pose.dimmed ? 0.9 : 0.0;
 
-      drawDuck(gl, this._lit, this._duckAssets, rootModel, pose, walkState, color, rimBoost);
+      drawDuck(gl, this._lit, this._duckAssets, rootModel, pose, walkState, color, rimBoost, pose.dimmed ? DUCK_DIMMED_FACTOR : 1);
     }
   }
 

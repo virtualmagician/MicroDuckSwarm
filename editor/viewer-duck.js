@@ -471,15 +471,22 @@ export function disposeDuckAssets(gl, assets) {
   }
 }
 
+// How dark a rehearsal-neutral duck (docs/authoring.md rehearsal tools:
+// soloed-out or muted) renders relative to a normal one — dark enough that
+// the soloed duck is unmistakably the one to watch, but never fully black,
+// so its role colour and silhouette are still legible at a glance.
+export const DIMMED_FACTOR = 0.34;
+
 /**
  * Draw one duck. `litProgram` is viewer-gl.js's StageRenderer's compiled
  * lit program ({program, uniforms}), already `gl.useProgram`'d with
  * uViewProj/uEyePos set by the caller. `roleColorRgb` ([r,g,b] 0..1) tints
  * the head shell and the hip panels only — bill and feet stay yellow on
  * every duck, per the Art direction's colour split. `rimBoost` (0..1)
- * lifts the rim light for a selected duck.
+ * lifts the rim light for a selected duck. `dim` (0..1, default 1) darkens
+ * every part uniformly — the rehearsal solo/mute "subdued" treatment.
  */
-export function drawDuck(gl, litProgram, assets, rootModel, pose, walkState, roleColorRgb, rimBoost) {
+export function drawDuck(gl, litProgram, assets, rootModel, pose, walkState, roleColorRgb, rimBoost, dim = 1) {
   const parts = computeDuckPose(rootModel, pose, walkState);
   const { uniforms } = litProgram;
   gl.uniform1f(uniforms.uRimBoost, rimBoost || 0);
@@ -512,7 +519,7 @@ export function drawDuck(gl, litProgram, assets, rootModel, pose, walkState, rol
     // approximation; see its doc comment in viewer-gl.js for when that
     // stops being true.
     gl.uniformMatrix3fv(uniforms.uNormalMatrix, false, mat3FromMat4Rigid(model));
-    gl.uniform3f(uniforms.uBaseColor, color[0], color[1], color[2]);
+    gl.uniform3f(uniforms.uBaseColor, color[0] * dim, color[1] * dim, color[2] * dim);
     gl.uniform1f(uniforms.uShininess, render.material.shininess);
     gl.uniform1f(uniforms.uSpecularStrength, render.material.specular);
 

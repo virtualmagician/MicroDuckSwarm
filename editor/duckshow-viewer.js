@@ -26,13 +26,17 @@
 //     frame.t              show time (s)
 //     frame.poses          [{role,x,y,heading,headYaw,headPitch,headRoll,
 //                             neckPitch,bodyZ,bodyRoll,bodyPitch,
-//                             mouthOpen,walkPhase,resting}, ...]  --
+//                             mouthOpen,walkPhase,resting,dimmed}, ...]  --
 //                           docs/viewer.md "Pose in, pixels out". `resting`
 //                           (bool, optional) is the ground-truth "at rest
 //                           right now" signal a walk cycle needs and
 //                           walkPhase alone can't safely provide across an
 //                           arbitrary time jump; a pose source that omits
 //                           it (e.g. a future MuJoCo stream) is still valid.
+//                           `dimmed` (bool, optional) marks a role rehearsal
+//                           solo/mute is holding neutral right now
+//                           (docs/authoring.md rehearsal tools) — a renderer
+//                           that doesn't distinguish it can safely ignore it.
 //     frame.trails         Map<role, [{x,y,brightness}, ...]>  brightness
 //                           0..1, brightest = current position
 //     frame.labels         [{role,text,t,kind:'skill'|'sound'}, ...]
@@ -190,12 +194,106 @@ export function sampleRolePath(path, tQuery) {
 }
 
 // ---------------------------------------------------------------------------
+// Rehearsal state — solo/mute (docs/authoring.md rehearsal tools, M3). This
+// is editor *session* state, never show content: it never reads or writes
+// the .duckshow document, and unlike the start marks above it is never
+// eligible for the top-level "editor" field either — the editor persists it,
+// if at all, in localStorage only, exactly like the name-label preference.
+//
+// Mixing-desk semantics: solo is exclusive (at most one role) and overrides
+// mute outright rather than combining with it. Soloing/un-soloing never
+// touches the muted set itself — toggleMute is the only thing that does —
+// so un-soloing simply resumes reading whatever mutes were already set.
+// ---------------------------------------------------------------------------
+
+/** A fresh rehearsal state: nothing soloed, nothing muted. */
+export function createRehearsalState() {
+  return { solo: null, muted: new Set() };
+}
+
+/** Solo `role`, or un-solo if it is already the soloed role. Exclusive: soloing a new role replaces any previous one. */
+export function toggleSolo(state, role) {
+  return { solo: state.solo === role ? null : role, muted: state.muted };
+}
+
+/** Force solo off (e.g. its role left the cast). No-op if nothing is soloed. */
+export function clearSolo(state) {
+  return state.solo == null ? state : { solo: null, muted: state.muted };
+}
+
+/** Toggle whether `role` is muted. Independent of solo — see resolveNeutralRoles() for how the two combine. */
+export function toggleMute(state, role) {
+  const muted = new Set(state.muted);
+  if (muted.has(role)) muted.delete(role); else muted.add(role);
+  return { solo: state.solo, muted };
+}
+
+/**
+ * The roles that should be held at their neutral standing pose right now
+ * (docs/authoring.md: "every other duck holds its neutral standing pose at
+ * its mark"), given the current solo/mute state and cast. Soloing shrinks
+ * the active set to just the soloed role, full stop — the muted set is not
+ * consulted at all while a solo is active, which is what makes un-soloing a
+ * pure restore rather than a merge.
+ */
+export function resolveNeutralRoles(state, roleNames) {
+  const neutral = new Set();
+  if (state.solo != null && roleNames.includes(state.solo)) {
+    for (const r of roleNames) if (r !== state.solo) neutral.add(r);
+    return neutral;
+  }
+  for (const r of roleNames) if (state.muted.has(r)) neutral.add(r);
+  return neutral;
+}
+
+/** Drop any solo/mute referring to a role no longer in the cast (e.g. role removed). Identity-preserving when nothing is stale. */
+export function pruneRehearsalState(state, roleNames) {
+  const cast = new Set(roleNames);
+  const solo = state.solo != null && cast.has(state.solo) ? state.solo : null;
+  const staleMute = [...state.muted].some((r) => !cast.has(r));
+  const muted = staleMute ? new Set([...state.muted].filter((r) => cast.has(r))) : state.muted;
+  if (solo === state.solo && muted === state.muted) return state;
+  return { solo, muted };
+}
+
+/** Carry a solo/mute reference across a role rename (from -> to). Identity-preserving when `from` was neither soloed nor muted. */
+export function renameInRehearsalState(state, from, to) {
+  if (from === to) return state;
+  const solo = state.solo === from ? to : state.solo;
+  let muted = state.muted;
+  if (muted.has(from)) { muted = new Set(muted); muted.delete(from); muted.add(to); }
+  if (solo === state.solo && muted === state.muted) return state;
+  return { solo, muted };
+}
+
+// ---------------------------------------------------------------------------
 // Pose derivation — position/heading/walkPhase from the precomputed path;
 // head/pose/mouth pass straight through the sampler (docs/viewer.md §1/§3).
 // ---------------------------------------------------------------------------
 
-/** One role's full viewer pose at time t. `path` is a precomputeRolePath() result. */
-export function derivePose(show, role, t, path) {
+/** The pose a role at rest on its mark shows: mixing-desk "neutral" for a soloed-out or muted role (docs/authoring.md rehearsal tools). */
+function neutralPoseAt(role, mark) {
+  return {
+    role, x: mark.x, y: mark.y, heading: mark.heading,
+    headYaw: 0, headPitch: 0, headRoll: 0, neckPitch: 0,
+    bodyZ: 0, bodyRoll: 0, bodyPitch: 0, mouthOpen: 0,
+    walkPhase: 0, resting: true,
+    // Optional per docs/viewer.md's renderer contract, same as `resting` —
+    // a rehearsal-neutral duck should render visibly subdued (dim body, no
+    // trail/label) rather than simply standing still and fully lit, so a
+    // renderer can tell "this duck isn't performing" from the pose alone.
+    dimmed: true,
+  };
+}
+
+/**
+ * One role's full viewer pose at time t. `path` is a precomputeRolePath()
+ * result. `opts.neutral` forces the rehearsal-neutral standing pose above
+ * instead of sampling the role's own tracks — set it for a role
+ * resolveNeutralRoles() says should be held right now.
+ */
+export function derivePose(show, role, t, path, opts = {}) {
+  if (opts.neutral) return neutralPoseAt(role, (path && path.mark) || { x: 0, y: 0, heading: 0 });
   const sampler = createSampler(show, role);
   const s = sampler.at(t);
   const { x, y, heading, walkPhase, speed } = sampleRolePath(path, t);
@@ -221,12 +319,18 @@ export function derivePose(show, role, t, path) {
   };
 }
 
-/** derivePose() for the whole cast. `paths` is a precomputeShowPaths() result (or Map role->path). */
-export function deriveShowPoses(show, t, paths) {
+/**
+ * derivePose() for the whole cast. `paths` is a precomputeShowPaths()
+ * result (or Map role->path). `opts.neutralRoles` (Set<string>, optional) —
+ * see resolveNeutralRoles() — forces those roles to their rehearsal-neutral
+ * pose instead of sampling.
+ */
+export function deriveShowPoses(show, t, paths, opts = {}) {
   const norm = normalizeShow(show);
+  const neutralRoles = opts.neutralRoles || null;
   return norm.cast.map((member, i) => {
     const path = (paths && paths.get(member.role)) || singlePointPath(member.role, resolveMark(show, member.role, i, norm.cast.length));
-    return derivePose(show, member.role, t, path);
+    return derivePose(show, member.role, t, path, { neutral: Boolean(neutralRoles && neutralRoles.has(member.role)) });
   });
 }
 
@@ -505,10 +609,19 @@ export function cameraStateToUp(camera) {
 // ---------------------------------------------------------------------------
 
 export function deriveFrame(show, t, paths, opts = {}) {
-  const poses = deriveShowPoses(show, t, paths);
+  const neutralRoles = opts.neutralRoles || null;
+  const poses = deriveShowPoses(show, t, paths, { neutralRoles });
+  // A rehearsal-neutral role (docs/authoring.md rehearsal tools) is dimmed
+  // in `poses` above and gets no trail or event label at all here — it
+  // isn't performing right now, so there is nothing in motion to trace or
+  // announce; an empty trail array reads as "no trail" to every renderer
+  // the same way a role with no locomotion track already does.
   const trails = new Map();
-  for (const [role, path] of paths) trails.set(role, deriveTrail(path, t, opts.trailMaxPoints, role === opts.selectedRole));
-  const labels = deriveEventLabels(show, t, opts.eventLabelWindow);
+  for (const [role, path] of paths) {
+    trails.set(role, neutralRoles && neutralRoles.has(role) ? [] : deriveTrail(path, t, opts.trailMaxPoints, role === opts.selectedRole));
+  }
+  const labels = deriveEventLabels(show, t, opts.eventLabelWindow)
+    .filter((label) => !(neutralRoles && neutralRoles.has(label.role)));
   return { t, poses, trails, labels, selectedRole: opts.selectedRole || null };
 }
 
