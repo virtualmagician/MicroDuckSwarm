@@ -69,7 +69,25 @@ Smoothly interpolate between presets rather than cutting; a half-second ease rea
 
 It does not simulate physics or run the RL policies, and it must never imply it does. A duck that walks cleanly here can still stumble on a raked stage. It is a staging and timing tool: spacing, facing, silhouette, whether a gesture is large enough to read from row fifteen. The label in the corner says **kinematic preview** so nobody mistakes it for a guarantee.
 
-Real-policy preview stays a later option: MuJoCo compiled to WASM plus `onnxruntime-web` driving one hero duck, feeding this same pose interface. Nothing here should make that harder.
+That is what **Create Preview** is for — see below.
+
+## Create Preview (baked physics)
+
+Authoring stays kinematic and instant. When a piece is ready, one button runs it through the real thing and **bakes the result to a pose cache** the normal viewer plays back. Physics is a render step, not a live mode.
+
+```
+.duckshow ──kinematic sampler──▶ intents ──▶ [MuJoCo WASM + onnxruntime-web, per duck] ──▶ baked pose cache ──▶ the same renderer
+```
+
+- **Why baking, not streaming.** A physics sim cannot seek: to see 0:42 you must integrate from zero. Baking runs the simulation once, offline, and writes per-duck poses per frame; after that the timeline scrubs recorded data exactly as it scrubs kinematic poses. It also removes the 1× speed limit — a 15-DOF robot steps far faster than real time, and the eight ducks are independent (they share a floor, never each other), so the bake is embarrassingly parallel across Web Workers.
+- **What it consumes.** The same intent stream the ducks get — `robot.move`, `robot.head`, `robot.pose`, `robot.mouth`, skills — so the preview is driven by exactly what will be sent to hardware, not a parallel description of it.
+- **What it produces.** A cache keyed by show hash and policy versions, invalidated when either changes, plus a bake log of anything the physics refused to do.
+- **The payoff: the diff.** The most valuable output is not the pretty render, it is the divergence between *intended* (kinematic) and *actual* (physics). Draw both paths on the floor and mark where they part: "lead is 38 cm left of its mark by 0:41", "wing fell during the roulade at 0:52". That directly measures the dead-reckoning drift this whole project is designed around, which nothing else we have can quantify before hardware exists.
+- **Honesty.** A bake is evidence, not proof — sim-to-real gaps are real, and a raked or carpeted stage is not the sim's flat plane. It raises confidence; it does not replace a rehearsal.
+
+**Dependencies.** MuJoCo-WASM, `onnxruntime-web` and a mesh renderer are heavy, and they break the no-CDN/no-build rule the editor holds so it opens at a venue with no internet. That rule stands for the *editor*. The preview is a **separate, optional module**, loaded only when the button is pressed and never needed on show night — so the core stays venue-proof while the preview gets to be expensive.
+
+**Blocked on licensing.** Physics needs Pollen's MJCF model and meshes, and those are **CC BY-SA-NC** while this repo is public MIT and the shows are paid work. This gates the whole feature, not just its looks. The move is to ask Pollen for written permission — an open-source authoring tool for their robot, used by a performer putting eight to ten of them on keynote stages, is close to their ideal showcase. Until then the kinematic viewer with our own primitive duck is what ships.
 
 ## Tests
 
