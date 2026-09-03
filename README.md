@@ -8,6 +8,22 @@ Choreography authoring and playback for a flock of [Pollen Robotics MicroDucks](
 
 *The stage viewer — a kinematic preview of `shows/octet`, eight ducks on a 1 m grid with 10 cm divisions. Scrub the timeline and the flock performs.*
 
+## Quick start
+
+```bash
+./scripts/edit.sh shows/octet
+```
+
+Serves the repo, opens the editor in your browser with the eight-duck piece loaded, and stops again on Ctrl+C. Press space to play, `1` `2` `3` for the house, three-quarter and top cameras, and drag on the stage to orbit.
+
+Run it bare (`./scripts/edit.sh`) for the two-duck demo, or point it at any `.duckshow.json`. Nothing else to install — no build step, no dependencies.
+
+To watch the whole stack run without hardware — two mock ducks, a duck-agent on each, the show master driving them, and a verifier checking they stayed in sync:
+
+```bash
+./scripts/e2e_demo.sh
+```
+
 A duck show is authored once, compiled to a `.duckshow` file, and pre-loaded onto every duck. On show night the WiFi carries only a shared clock, start/stop triggers, and telemetry — each duck performs its part locally at 50 Hz against MicroDuck's `robotd` daemon, so a network dropout mid-number costs nothing. The pattern is borrowed from drone light shows and Disney's BDX droids: **pre-load the show, sync only clocks, never stream the performance.**
 
 ## Status
@@ -37,13 +53,6 @@ Pre-hardware development (M0). MicroDuck units ship late 2026; everything here r
 | `shows/` | Example choreographies |
 | `scripts/` | End-to-end demos (`e2e_demo.sh` Python master, `e2e_osc.sh` Swift master over OSC, `e2e_record.sh` puppet-channel recorder) |
 
-## Quick start (no hardware needed)
-
-```bash
-./scripts/e2e_demo.sh
-```
-
-Boots two mock ducks, attaches a duck-agent to each, and plays the demo show — then verifies both ducks received their intents in sync.
 
 ## Design in one paragraph
 
@@ -88,7 +97,7 @@ Full contract in `docs/authoring.md`. Three ways to get choreography into a `.du
 
 - **Scripted recordings.** `--input script:<file.json>` replays a JSON list of timed input frames instead of reading a live controller — reproducible, so this is also how CI exercises the recorder (`scripts/e2e_record.sh`).
 
-- **The timeline editor.** Open `editor/duckshow-editor.html` in a browser (no build step, no CDN; serve the checkout with `python3 -m http.server` for Chrome/Safari, which refuse ES-module imports from `file://` — Firefox opens it directly) to load a `.duckshow` file, edit keyframes and events on a beat-gridded timeline, and preview every role's dead-reckoned path top-down. Tests: `node --test editor/tests`.
+- **The timeline editor.** `./scripts/edit.sh [show]` is the easy way in; it serves the checkout because Chrome and Safari refuse ES-module imports from `file://` (Firefox opens `editor/duckshow-editor.html` directly). Edit keyframes and events on a beat-gridded timeline while the 3D stage viewer above it shows the whole cast on a measured floor — 1 m grid, 10 cm divisions, house/three-quarter/top cameras. The viewer is a kinematic preview: it shows staging, spacing and silhouette, never whether a gait survives a raked stage. No build step, no CDN. Tests: `node --test editor/tests`.
 
 The puppet channel doubles as the show-night nudge layer: puppeteering a duck that is mid-playback *adds* to its locomotion and *overrides* its head/pose/mouth while the packets stay fresh (250 ms deadman), then hands control straight back to the timeline.
 

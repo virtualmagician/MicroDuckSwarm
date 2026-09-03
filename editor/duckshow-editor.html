@@ -1713,6 +1713,21 @@ async function loadDemo({ quiet = false } = {}) {
     return false;
   }
 }
+async function loadShowFromUrl(url, { quiet = false } = {}) {
+  // ?show=<path relative to the served root> — what scripts/edit.sh uses so
+  // one command opens the editor with a piece already up.
+  try {
+    const res = await fetch(url, { cache: 'no-cache' });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const text = await res.text();
+    const name = url.split('/').pop() || 'show.duckshow.json';
+    return loadShowText(text, name);
+  } catch (err) {
+    if (!quiet) status(`could not load ${url}: ${err.message}`, 'error');
+    return false;
+  }
+}
+
 $('btn-demo').onclick = () => { if (!state.dirty || confirm('Discard unsaved changes?')) loadDemo(); };
 
 // drag & drop a file anywhere
@@ -1808,8 +1823,15 @@ async function boot() {
   state.fileName = 'starter.duckshow.json';
   zoomFit();
   setViewerCameraPreset('house');
+  const wanted = new URLSearchParams(location.search).get('show');
   if (location.protocol.startsWith('http')) {
-    if (!(await loadDemo({ quiet: true }))) status('could not fetch the demo show (serve from the repo root); loaded a built-in starter show instead');
+    if (wanted) {
+      if (!(await loadShowFromUrl(wanted, { quiet: true }))) {
+        status(`could not load ${wanted} — is the path relative to the served root?`, 'error');
+      }
+    } else if (!(await loadDemo({ quiet: true }))) {
+      status('could not fetch the demo show (serve from the repo root); loaded a built-in starter show instead');
+    }
   } else {
     status('opened from file:// — loaded a built-in starter show. Use Open… for a .duckshow.json, or serve the repo (python3 -m http.server) for "Load demo".');
   }
