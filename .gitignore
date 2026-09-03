@@ -20,3 +20,8 @@ DerivedData/
 
 # Pollen MicroDuck MJCF/meshes: CC BY-SA-NC, user-supplied, never committed
 assets/microduck/
+
+# Baked pose caches written by scripts/editor_server.py's Create Preview
+# button / tools/bake (docs/viewer.md, docs/bake-format.md) -- build
+# output, not authored content, so never under shows/ and never committed.
+/bakes/

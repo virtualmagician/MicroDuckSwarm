@@ -40,13 +40,13 @@ Choreography here is **intent curves, not joint keyframes**. `robotd` accepts on
 
 ## What it looks like
 
-The stage viewer is a **kinematic preview**. It shows staging, spacing and silhouette, not physics.
+The stage viewer is a **kinematic preview**. It shows staging, spacing and silhouette, not physics. These shots use Pollen's real meshes, which the viewer renders when you supply them; without them it draws our own primitive duck.
 
 ![Eight ducks in three-quarter view on the measured floor](docs/images/viewer-threequarter.png)
 
 The floor is measured: 1 m major lines, 10 cm minor divisions, tinted axes through the origin. A MicroDuck is 25 cm tall, so it stands about two and a half minor squares high.
 
-![Close view showing the head shell, camera lens, bill and articulated legs](docs/images/viewer-closeup.png)
+![Close view of the MicroDuck meshes: head shell, camera lens, bill and articulated legs](docs/images/viewer-closeup.png)
 
 ![Top-down view showing the eight-duck formation and start marks](docs/images/viewer-top.png)
 
@@ -167,13 +167,19 @@ The puppet channel doubles as a show-night nudge layer. Puppeteering a duck mid-
 
 The kinematic viewer answers questions about staging. It cannot tell you whether the real policies will survive the choreography. `tools/bake/` does: it drives a MuJoCo simulation of each role against the shipped ONNX policies and writes a `duckbake/1` pose cache, which the editor replays through the same renderer. Physics is a render step, not a live mode, so scrubbing keeps working because you are scrubbing recorded data.
 
+Press **Create Preview** in the editor. It bakes the show you have loaded, shows per-role progress, and drops you into BAKED PHYSICS playing the fresh cache. The eight-duck, 64 second octet takes 3.6 seconds.
+
+That works because `./scripts/edit.sh` serves the editor through `scripts/editor_server.py`, a stdlib-only local server bound to `127.0.0.1` that can run the baker on request. It validates that the requested show resolves inside the repo, passes a fixed argv rather than a shell, and lets a caller choose nothing except which show gets baked. Open the editor any other way and it stays a plain static page: the button disables itself and says why.
+
+The terminal route still works, and is what scripting uses:
+
 ```bash
 cd tools/bake
 python3.12 -m venv .venv && .venv/bin/pip install -r requirements.txt   # once
 .venv/bin/python3 bake_show.py ../../shows/octet/octet.duckshow.json /tmp/octet.duckbake.json
 ```
 
-The eight-duck, 64 second octet bakes in 3.6 seconds. Load the cache in the editor and the badge changes from KINEMATIC PREVIEW to BAKED PHYSICS; a cache whose show hash does not match is refused rather than replayed misleadingly.
+A cache whose show hash does not match is refused rather than replayed misleadingly, and a show with unsaved edits refuses to bake at all.
 
 Read the bake log inside the cache, because it is the honest part. Skills are not physically simulated yet and are recorded as such, roller mode is held rather than run through the wrong model, and the actuator model is stock MuJoCo rather than the BAM model the policies were trained against. A bake raises confidence. It does not replace a rehearsal.
 

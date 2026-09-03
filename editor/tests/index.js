@@ -24,3 +24,4 @@ import './rehearsal.test.mjs';
 import './stl-parser.test.mjs';
 import './bake-cache.test.mjs';
 import './asset-probe.test.mjs';
+import './create-preview.test.mjs';

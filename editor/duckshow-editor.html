@@ -159,6 +159,28 @@
   }
   #viewer-error { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
     padding: 12px; text-align: center; color: var(--err); font-size: 11px; background: var(--lane); }
+  /* Bake-log panel (docs/viewer.md "Create Preview": "the most useful
+     output ... must not be buried") — a small overlay card, populated by
+     renderBakeLogPanel() whenever a baked cache carries any skill_unsimulated
+     / mode_unsimulated / fell log entries, whether the cache came from
+     Create Preview or Play Baked…. Dark-on-translucent regardless of the
+     editor's own theme, matching #viewer-badge/.viewer-label: this sits
+     over the 3D canvas, not the app chrome. */
+  #bake-log {
+    position: absolute; right: 8px; top: 8px; max-width: min(320px, 60%); max-height: 60%;
+    overflow-y: auto; background: rgba(0,0,0,0.72); color: #e7e9ee;
+    border: 1px solid rgba(255,255,255,0.18); border-radius: 4px; font-size: 11px; padding: 6px 8px;
+  }
+  #bake-log .head { display: flex; align-items: center; gap: 8px; font-weight: 600;
+    text-transform: uppercase; letter-spacing: 0.04em; font-size: 10px; margin-bottom: 4px; }
+  #bake-log .head .count { flex: 1; text-transform: none; letter-spacing: 0; font-weight: 400; color: rgba(255,255,255,0.75); }
+  #bake-log .head button { min-height: 16px; padding: 0 5px; font-size: 12px; line-height: 1;
+    background: transparent; border: none; color: inherit; cursor: pointer; }
+  #bake-log .head button:hover { color: var(--err); background: transparent; }
+  #bake-log ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 3px; }
+  #bake-log li { line-height: 1.35; }
+  #bake-log li b { color: var(--sel); font-weight: 600; }
+  #bake-log .more { margin-top: 4px; color: rgba(255,255,255,0.6); font-style: italic; }
   #viewer-labels { position: absolute; inset: 0; pointer-events: none; overflow: hidden; }
   .viewer-label {
     position: absolute; transform: translate(-50%, -100%); white-space: nowrap; font-size: 11px;
@@ -266,12 +288,13 @@
 <main id="main">
   <div id="workspace">
     <section id="stage-section">
-      <h2>stage <span class="count" style="font-weight:400">1 house · 2 ¾ · 3 top · drag orbit · scroll dolly · drag mark in top view</span><button id="btn-viewer-names" class="toggle" aria-pressed="false" title="Show/hide each duck's role name above its head (remembered in this browser)">names</button><button id="btn-bake-open" title="Load a baked pose cache (a .duckbake.json from tools/bake) and play it back in place of the kinematic preview — docs/viewer.md &quot;Create Preview&quot;">Play Baked…</button><button id="btn-bake-exit" class="hidden" title="Back to the live kinematic preview">Kinematic ↩</button></h2>
+      <h2>stage <span class="count" style="font-weight:400">1 house · 2 ¾ · 3 top · drag orbit · scroll dolly · drag mark in top view</span><button id="btn-viewer-names" class="toggle" aria-pressed="false" title="Show/hide each duck's role name above its head (remembered in this browser)">names</button><button id="btn-create-preview" title="Create Preview unavailable — checking…" disabled>Create Preview</button><button id="btn-bake-open" title="Load a baked pose cache (a .duckbake.json from tools/bake) and play it back in place of the kinematic preview — docs/viewer.md &quot;Create Preview&quot;">Play Baked…</button><button id="btn-bake-exit" class="hidden" title="Back to the live kinematic preview">Kinematic ↩</button></h2>
       <div id="viewer-wrap">
         <canvas id="stage"></canvas>
         <div id="viewer-role-labels"></div>
         <div id="viewer-labels"></div>
         <div id="viewer-badge">kinematic preview</div>
+        <div id="bake-log" class="hidden"></div>
       </div>
       <div id="stage-legend"></div>
     </section>
@@ -326,6 +349,7 @@ import {
 import { DUCK_HEIGHT_M } from './viewer-duck.js';
 import * as bakeCache from './bake-cache.js'; // Feature A: baked-physics pose cache playback (docs/viewer.md "Create Preview")
 import { loadRealDuckAssets } from './duck-mesh.js'; // Feature B: real MicroDuck meshes when assets/microduck/ is present
+import * as cp from './create-preview.js'; // Feature C: the Create Preview button itself, talking to scripts/editor_server.py
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -344,6 +368,7 @@ const FIELD_COLORS = {
 const EVENT_COLORS = { do: '#ffd166', sound: '#3ecf8e', mode: '#d77bff' };
 const ROLE_COLORS = ['#4da3ff', '#3ecf8e', '#f0b429', '#ff7ab6', '#d77bff', '#ff7a59', '#5be0e0', '#c3d64f', '#ff9f43', '#9aa1ad'];
 const DEMO_URL = '../shows/demo/demo.duckshow.json';
+const DEMO_SHOW_PATH = '/shows/demo/demo.duckshow.json'; // DEMO_URL's own repo-root-relative form — see create-preview.js's normalizeShowPath()
 const VIEWER_ORBIT_SPEED = 0.008;   // radians per pixel of drag
 const VIEWER_DOLLY_SPEED = 0.0015;  // exponential distance change per wheel-delta unit
 const VIEWER_MARK_HIT_M = 0.28;     // metres — pick radius for grabbing a start mark in Top view
@@ -387,6 +412,28 @@ const state = {
   // live kinematic preview (the normal state). Non-null only after its
   // show.sha256 has matched showText above — see loadBakeCache().
   bakeCache: null,
+  // Feature C (docs/viewer.md "Create Preview" — the button itself): the
+  // repo-root-relative path of the currently loaded show ("/shows/octet/
+  // octet.duckshow.json"), when known. Set by loadShowText() only when the
+  // show came from a URL this editor constructed itself (Load demo,
+  // ?show=, scripts/edit.sh's show argument); left null for a show opened
+  // via Open… or drag & drop, since the browser's File API never exposes
+  // a filesystem path a server request could use. See create-preview.js's
+  // createPreviewState(), which reads this the same way it reads
+  // showText === null — "no known source to bake from", not an error.
+  showPath: null,
+  // GET /api/capabilities (scripts/editor_server.py), or null before it
+  // has loaded or if the request failed outright — which is the expected
+  // shape when this page is opened from file:// or served by plain
+  // `python3 -m http.server` (neither has an /api/capabilities route to
+  // hit). Fetched once in boot(); the server's own capability doesn't
+  // change while the editor stays open, so this is never re-fetched.
+  capabilities: null,
+  // The in-flight (or just-finished) POST /api/bake job — { id, timer } —
+  // or null. See createPreview()/pollBakeJob() below; non-null is also
+  // what tells updateCreatePreviewUi() to leave the button's progress
+  // label alone rather than recomputing it from createPreviewState().
+  bakeJob: null,
 };
 
 function duration() { return state.norm?.meta.duration ?? 0; }
@@ -589,6 +636,7 @@ function renderAll() {
   $('file-name').classList.toggle('dirty', state.dirty);
   $('btn-undo').disabled = !state.history.length;
   $('btn-redo').disabled = !state.future.length;
+  updateCreatePreviewUi();
 }
 
 function layoutTimeline() {
@@ -1487,6 +1535,7 @@ async function loadBakeCache(file) {
   if (summary.fallenRoles.length) notes.push(`${summary.fallenRoles.length} fell`);
   status(`playing baked physics — ${file.name}: ${summary.roles} roles, ${summary.duration}s${notes.length ? ' · ' + notes.join(' · ') : ''}`, 'ok');
   updateBakeUi();
+  renderBakeLogPanel(raw);
   renderAll();
 }
 
@@ -1496,6 +1545,7 @@ function exitBakeMode({ quiet = false } = {}) {
   state.bakeCache = null;
   if (!quiet) status('back to the kinematic preview');
   updateBakeUi();
+  renderBakeLogPanel(null);
   renderAll();
 }
 
@@ -1530,6 +1580,203 @@ function paintBakedViewer() {
   viewer.lastLabels = labels;
   paintEventLabels(labels);
   updateRoleLabelPositions();
+}
+
+// ---------------------------------------------------------------------------
+// Feature C — the Create Preview button itself (docs/viewer.md "Create
+// Preview (baked physics)"). scripts/editor_server.py is what makes this
+// possible: a small stdlib-only local server (replacing plain
+// `python3 -m http.server` in scripts/edit.sh) that can run tools/bake as
+// a subprocess on request. Everything below just drives that HTTP API and
+// then hands the result to the exact same playback path loadBakeCache()
+// above already uses (state.bakeCache / updateBakeUi() / paintBakedViewer())
+// — Create Preview is "Play Baked…" with the file-picker step automated
+// away, not a second rendering path. The pure decision logic (is the
+// button usable, how to phrase progress/errors/the log) lives in
+// create-preview.js so it's covered by editor/tests without a browser;
+// this block is only the DOM/fetch wiring around it.
+// ---------------------------------------------------------------------------
+
+/** Fetched once at boot (see boot()) — fire-and-forget, same pattern as loadRealMeshAssets(). A failed fetch (file://, or served by plain http.server with no /api routes) is the expected default, not an error — create-preview.js's createPreviewState() reads capabilities:null as exactly that case. */
+async function loadCapabilities() {
+  try {
+    const res = await fetch('/api/capabilities', { cache: 'no-cache' });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    state.capabilities = await res.json();
+  } catch (_) {
+    state.capabilities = null;
+  }
+  updateCreatePreviewUi();
+}
+
+/** Reflects capabilities + show state onto the button — never a dead disabled button with no explanation (docs/viewer.md). Called from renderAll(); skipped while a bake is actually in flight, since createPreview()/pollBakeJob() own the button's label and disabled state for that stretch. */
+function updateCreatePreviewUi() {
+  const btn = $('btn-create-preview');
+  if (!btn || state.bakeJob) return;
+  const s = cp.createPreviewState({ capabilities: state.capabilities, showPath: state.showPath, dirty: state.showText === null });
+  btn.disabled = !s.enabled;
+  btn.textContent = 'Create Preview';
+  btn.title = s.enabled
+    ? 'Bake the loaded show through MuJoCo + the shipped ONNX policies and play back the result — docs/viewer.md "Create Preview"'
+    : `Create Preview unavailable — ${s.reason}`;
+}
+
+/** btn-create-preview click: POST /api/bake for the loaded show, then poll it to completion. */
+async function createPreview() {
+  if (state.bakeJob) return; // a bake is already running — the button is disabled for this, but guard anyway
+  const s = cp.createPreviewState({ capabilities: state.capabilities, showPath: state.showPath, dirty: state.showText === null });
+  if (!s.enabled) { status(`Create Preview unavailable — ${s.reason}`, 'error'); return; }
+
+  pause();
+  let res, job;
+  try {
+    res = await fetch('/api/bake', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ show: state.showPath }),
+    });
+    job = await res.json();
+  } catch (err) {
+    status(`Create Preview failed to start: ${err.message}`, 'error');
+    return;
+  }
+  if (!res.ok) {
+    status(`Create Preview refused: ${(job && job.error) || `HTTP ${res.status}`}`, 'error');
+    return;
+  }
+
+  state.bakeJob = { id: job.id, timer: null };
+  const btn = $('btn-create-preview');
+  if (btn) { btn.disabled = true; btn.textContent = cp.formatBakeProgress(job); }
+  status(cp.formatBakeProgress(job), '');
+  pollBakeJob(job.id);
+}
+
+const BAKE_POLL_MS = 300;
+
+/** Polls GET /api/bake/<job id> until it reaches a terminal state (create-preview.js's isTerminalBakeStatus), updating the button/status line with real progress each tick — never a fake spinner (docs/viewer.md). */
+function pollBakeJob(jobId) {
+  const tick = async () => {
+    if (!state.bakeJob || state.bakeJob.id !== jobId) return; // superseded (shouldn't happen — the button is disabled meanwhile) or the page moved on
+    let res, job;
+    try {
+      res = await fetch(`/api/bake/${jobId}`, { cache: 'no-cache' });
+      job = await res.json();
+    } catch (err) {
+      // Transient (e.g. a dropped connection mid-request) — try again
+      // rather than giving up on one blip; the server-side job keeps
+      // running regardless of whether we're polling it.
+      state.bakeJob.timer = setTimeout(tick, BAKE_POLL_MS);
+      return;
+    }
+    if (!state.bakeJob || state.bakeJob.id !== jobId) return;
+
+    if (!res.ok) {
+      // The job id is no longer known to the server (e.g. it restarted) —
+      // there is nothing left to poll for.
+      state.bakeJob = null;
+      updateCreatePreviewUi();
+      status(`Create Preview lost track of its bake job — ${(job && job.error) || `HTTP ${res.status}`}`, 'error');
+      return;
+    }
+
+    if (!cp.isTerminalBakeStatus(job.status)) {
+      const btn = $('btn-create-preview');
+      if (btn) btn.textContent = cp.formatBakeProgress(job);
+      status(cp.formatBakeProgress(job), '');
+      state.bakeJob.timer = setTimeout(tick, BAKE_POLL_MS);
+      return;
+    }
+
+    state.bakeJob = null;
+    updateCreatePreviewUi(); // button back to its normal capabilities-driven state before either branch below
+
+    if (job.status === 'error') {
+      // Failure must be legible: the baker's own stderr, not a generic
+      // error (docs/viewer.md) — formatBakeError() is exactly job.error
+      // plus job.log_tail, nothing smoothed over.
+      status(`Create Preview failed — ${cp.formatBakeError(job)}`, 'error');
+      return;
+    }
+    await loadBakedCacheFromUrl(job.output_url);
+  };
+  tick();
+}
+
+/** Fetches the cache a finished bake job wrote and plays it back — the same validate → hash-check → state.bakeCache handoff loadBakeCache() uses for a manually-picked file, so a Create Preview cache and a "Play Baked…" cache behave identically once loaded. */
+async function loadBakedCacheFromUrl(url) {
+  if (!url) { status('Create Preview finished but did not report a cache — see tmp/editor-server.log', 'error'); return; }
+  if (!state.showText) {
+    // The show was edited (or replaced) while the bake was running — the
+    // same "refuse outright" policy loadBakeCache() applies to an
+    // unverifiable cache, not a weaker one just because this bake started
+    // out honestly matching what was on disk (docs/viewer.md "Create
+    // Preview": unsaved edits are refused, not baked-around).
+    status('Create Preview finished, but the show was edited while it was baking — its cache can no longer be verified against the loaded show. Reload the show and try again.', 'error');
+    return;
+  }
+  let raw;
+  try {
+    const res = await fetch(url, { cache: 'no-cache' });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    raw = await res.json();
+  } catch (err) {
+    status(`Create Preview finished but the cache could not be loaded: ${err.message}`, 'error');
+    return;
+  }
+  try { bakeCache.validateBakeCache(raw); } catch (err) { status(`Create Preview wrote an invalid cache: ${err.message}`, 'error'); return; }
+
+  const match = await bakeCache.checkShowHashMatch(raw, state.showText);
+  if (!match.ok) {
+    status('Create Preview\'s cache does not match the loaded show (hash mismatch) — the show file may have changed on disk during the bake. Not playing it back.', 'error');
+    return;
+  }
+
+  state.bakeCache = raw;
+  updateBakeUi();
+  renderBakeLogPanel(raw);
+  status(`Create Preview done — ${cp.formatBakeSummary(bakeCache.summarize(raw))}`, 'ok');
+  renderAll();
+}
+
+/** Populates (or hides) the small overlay panel listing a baked cache's log entries — used by both loadBakeCache() and Create Preview's own success path, so the log reads the same regardless of how the cache was opened. This is deliberately not folded into the one-line status() message: docs/viewer.md calls the log "the most useful output" and says it "must not be buried" — a single ellipsis-truncated status line (see #status .msg's CSS) is exactly the kind of burying that warns against. */
+function renderBakeLogPanel(cache) {
+  const el = $('bake-log');
+  if (!el) return;
+  const log = cache && Array.isArray(cache.log) ? cache.log : [];
+  if (!log.length) { el.classList.add('hidden'); el.replaceChildren(); return; }
+
+  const { entries, more } = cp.bakeLogEntries({ log }, 12);
+  const head = document.createElement('div');
+  head.className = 'head';
+  const title = document.createElement('span');
+  title.textContent = 'bake log';
+  const count = document.createElement('span');
+  count.className = 'count';
+  count.textContent = `${log.length} entr${log.length === 1 ? 'y' : 'ies'}`;
+  const close = document.createElement('button');
+  close.textContent = '×';
+  close.title = 'Dismiss';
+  close.onclick = () => el.classList.add('hidden');
+  head.append(title, count, close);
+
+  const ul = document.createElement('ul');
+  for (const e of entries) {
+    const li = document.createElement('li');
+    const b = document.createElement('b');
+    b.textContent = e.role || '?';
+    li.append(b, document.createTextNode(` @ ${fmt(e.t, 1)}s — ${e.kind || ''}${e.detail ? `: ${e.detail}` : ''}`));
+    ul.append(li);
+  }
+
+  el.replaceChildren(head, ul);
+  if (more) {
+    const moreEl = document.createElement('div');
+    moreEl.className = 'more';
+    moreEl.textContent = `+${more} more in the cache's own log`;
+    el.append(moreEl);
+  }
+  el.classList.remove('hidden');
 }
 
 /** Shows (or updates) the "viewer unavailable" overlay banner over the stage canvas. */
@@ -2042,7 +2289,13 @@ $('audio-mute').onchange = (e) => { if (state.audio.gain) state.audio.gain.gain.
 // ---------------------------------------------------------------------------
 // File I/O
 // ---------------------------------------------------------------------------
-function loadShowText(text, fileName) {
+// `path`, when known, is the repo-root-relative server path the show was
+// fetched from ("/shows/octet/octet.duckshow.json") — only loadDemo() and
+// loadShowFromUrl() below have one; Open… and drag & drop pass nothing,
+// since the File API never exposes a filesystem path a server request
+// could use. Feeds state.showPath, which gates the Create Preview button
+// (create-preview.js's createPreviewState()) — see docs/viewer.md.
+function loadShowText(text, fileName, path = null) {
   try {
     const show = core.parseShow(text);
     pause();
@@ -2053,6 +2306,7 @@ function loadShowText(text, fileName) {
     // can be checked against (bake-cache.js checkShowHashMatch), until
     // the next edit invalidates it (see setShow's dirty:true branch).
     state.showText = text;
+    state.showPath = path;
     zoomFit();
     setViewerCameraPreset('house');
     const errs = state.issues.filter((i) => i.severity === 'error').length;
@@ -2082,6 +2336,11 @@ $('bake-file').onchange = async (e) => {
   e.target.value = '';
 };
 $('btn-bake-exit').onclick = () => exitBakeMode();
+
+// Feature C (docs/viewer.md "Create Preview") — bake the loaded show
+// via scripts/editor_server.py and play back the result automatically;
+// see createPreview()/pollBakeJob() above.
+$('btn-create-preview').onclick = () => createPreview();
 
 async function save() {
   let text;
@@ -2115,6 +2374,7 @@ $('btn-new').onclick = () => {
   pause(); state.selection = null; state.collapsed.clear(); state.fileName = 'untitled.duckshow.json'; state.fileHandle = null; state.playhead = 0;
   setShow(show, { dirty: false, resetHistory: true }); zoomFit();
   state.showText = null; // no source file to verify a baked cache's hash against (see loadBakeCache)
+  state.showPath = null; // ditto — nothing for Create Preview to bake either (see create-preview.js)
   setViewerCameraPreset('house');
   status('new show');
 };
@@ -2124,7 +2384,7 @@ async function loadDemo({ quiet = false } = {}) {
     const res = await fetch(DEMO_URL, { cache: 'no-cache' });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const text = await res.text();
-    return loadShowText(text, 'demo.duckshow.json');
+    return loadShowText(text, 'demo.duckshow.json', DEMO_SHOW_PATH);
   } catch (err) {
     const why = location.protocol === 'file:'
       ? 'the page is opened from file://, so it cannot fetch ../shows/demo/demo.duckshow.json. Run `python3 -m http.server 8000` in the repo root and open http://localhost:8000/editor/duckshow-editor.html, or use Open… to pick the file.'
@@ -2141,7 +2401,10 @@ async function loadShowFromUrl(url, { quiet = false } = {}) {
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const text = await res.text();
     const name = url.split('/').pop() || 'show.duckshow.json';
-    return loadShowText(text, name);
+    // `url` is already exactly the "/shows/…" repo-root-relative form
+    // (scripts/edit.sh builds it that way) — normalizeShowPath() just
+    // confirms the shape rather than trusting it blindly.
+    return loadShowText(text, name, cp.normalizeShowPath(url));
   } catch (err) {
     if (!quiet) status(`could not load ${url}: ${err.message}`, 'error');
     return false;
@@ -2252,6 +2515,12 @@ async function boot() {
   // once ready, repainting itself — never blocks the rest of boot(), and
   // resolves to a silent no-op when the directory is absent (Feature B).
   loadRealMeshAssets();
+  // Fire-and-forget, same reasoning: GET /api/capabilities, which only
+  // scripts/editor_server.py serves — resolves to state.capabilities =
+  // null (button disabled, reason explained) for file:// or plain
+  // http.server, exactly like Feature B's asset probe does for a missing
+  // assets/microduck/ (Feature C).
+  loadCapabilities();
   state.show = null;
   setShow(starterShow(), { dirty: false, resetHistory: true });
   state.fileName = 'starter.duckshow.json';

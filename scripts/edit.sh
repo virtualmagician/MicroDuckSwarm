@@ -8,6 +8,14 @@
 #
 # Serves the repo root (Chrome and Safari refuse ES-module imports from
 # file://, so a server is required) and shuts it down again on Ctrl+C.
+#
+# Serving is scripts/editor_server.py (docs/viewer.md "Create Preview") --
+# a stdlib-only drop-in for `python3 -m http.server` that additionally
+# lets the editor's Create Preview button run tools/bake itself, bound to
+# 127.0.0.1 only. If it fails to start for any reason, this script falls
+# straight back to plain `python3 -m http.server`, so the editor still
+# works — just without the Create Preview button, which the page itself
+# will explain (GET /api/capabilities is unreachable, same as file://).
 set -euo pipefail
 
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
@@ -62,12 +70,17 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-python3 -m http.server "$PORT" --bind 127.0.0.1 >/dev/null 2>&1 &
-SERVER_PID=$!
-
-# wait for it to actually accept connections before opening a browser at it
-for _ in $(seq 1 50); do
-  if python3 -c "
+# Blocks until the port at 127.0.0.1:$1 accepts a connection, or until
+# $2 (a still-running background PID, checked so a server that crashed on
+# startup doesn't make us wait out the whole timeout) exits first. Used
+# for both the primary server and the http.server fallback below.
+wait_for_port() {
+  local port="$1" pid="$2"
+  for _ in $(seq 1 50); do
+    if [ -n "$pid" ] && ! kill -0 "$pid" 2>/dev/null; then
+      return 1  # the server process already died — no point waiting further
+    fi
+    if python3 -c "
 import socket, sys
 s = socket.socket(); s.settimeout(0.2)
 try:
@@ -76,14 +89,39 @@ except OSError:
     sys.exit(1)
 finally:
     s.close()
-" "$PORT" 2>/dev/null; then
-    break
-  fi
-  sleep 0.1
-done
+" "$port" 2>/dev/null; then
+      return 0
+    fi
+    sleep 0.1
+  done
+  return 1
+}
+
+mkdir -p "$REPO/tmp"
+SERVER_LOG="$REPO/tmp/editor-server.log"
+: > "$SERVER_LOG"
+
+python3 "$REPO/scripts/editor_server.py" "$PORT" >"$SERVER_LOG" 2>&1 &
+SERVER_PID=$!
+
+if wait_for_port "$PORT" "$SERVER_PID"; then
+  BAKE_SERVER=1
+else
+  # editor_server.py never came up (crashed, import error, permission
+  # issue — see $SERVER_LOG). Fall back to the plain static server so the
+  # editor still works; Create Preview will report itself unavailable.
+  kill "$SERVER_PID" 2>/dev/null || true
+  wait "$SERVER_PID" 2>/dev/null || true
+  echo "editor_server.py did not start (see tmp/editor-server.log) — falling back to plain http.server. Create Preview will be unavailable."
+  BAKE_SERVER=0
+  python3 -m http.server "$PORT" --bind 127.0.0.1 >/dev/null 2>&1 &
+  SERVER_PID=$!
+  wait_for_port "$PORT" "$SERVER_PID" || true
+fi
 
 echo "duckshow editor → $URL"
 [ -n "$SHOW_PARAM" ] && echo "loading           ${SHOW_PARAM#?show=/}"
+[ "$BAKE_SERVER" = "1" ] && echo "baking            available via Create Preview (see docs/viewer.md)"
 echo "Ctrl+C to stop."
 
 if command -v open >/dev/null 2>&1; then
