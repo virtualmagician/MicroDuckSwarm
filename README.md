@@ -46,7 +46,7 @@ The stage viewer is a **kinematic preview**. It shows staging, spacing and silho
 
 The floor is measured: 1 m major lines, 10 cm minor divisions, tinted axes through the origin. A MicroDuck is 25 cm tall, so it stands about two and a half minor squares high.
 
-![Close view of the MicroDuck meshes: head shell, camera lens, bill and articulated legs](docs/images/viewer-closeup.png)
+![Close view of the MicroDuck meshes: head shell, camera lens, servo linkages and articulated legs, feet flat on the floor](docs/images/viewer-closeup.png)
 
 ![Top-down view showing the eight-duck formation and start marks](docs/images/viewer-top.png)
 
