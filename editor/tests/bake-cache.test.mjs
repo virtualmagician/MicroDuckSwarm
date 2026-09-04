@@ -207,3 +207,61 @@ test('summarize reports duration, unsimulated and fallen roles', () => {
   assert.deepEqual(s.unsimulatedRoles, ['wren']);
   assert.deepEqual(s.fallenRoles, ['reed']);
 });
+
+// ---------------------------------------------------------------------------
+// Optional `joints` block (docs/bake-format.md). Additive: it is what makes a
+// baked preview show real physics legs instead of the procedural walk cycle,
+// and every cache baked before it existed must keep working untouched.
+// ---------------------------------------------------------------------------
+
+/** fixtureCache() plus a `joints` block on the one role, each joint ramping at its own rate. */
+function fixtureWithJoints({ n = 5 } = {}) {
+  const cache = fixtureCache({ n });
+  const role = cache.roles[0];
+  cache.poses[role].joints = {
+    left_knee: Array.from({ length: n }, (_, i) => i * 0.5),
+    right_knee: Array.from({ length: n }, (_, i) => -i * 0.25),
+  };
+  return cache;
+}
+
+test('joints: a cache without the block still validates (every cache already on disk)', () => {
+  const cache = validateBakeCache(fixtureCache());
+  assert.equal(cache.poses.lead.joints, undefined);
+});
+
+test('joints: a pose from a jointless cache has no .joints, so the renderer falls back', () => {
+  const pose = poseAtTime(validateBakeCache(fixtureCache()), 'lead', 0.02);
+  assert.equal(pose.joints, undefined);
+});
+
+test('joints: a present block validates and survives round-trip', () => {
+  const cache = validateBakeCache(fixtureWithJoints());
+  assert.deepEqual(Object.keys(cache.poses.lead.joints).sort(), ['left_knee', 'right_knee']);
+});
+
+test('joints: sampled angles interpolate between frames like every other field', () => {
+  const cache = validateBakeCache(fixtureWithJoints());
+  // half-way between frame 2 and frame 3 at 50 Hz
+  const pose = poseAtTime(cache, 'lead', 2.5 / 50);
+  assert.ok(Math.abs(pose.joints.left_knee - 1.25) < 1e-9, `left_knee ${pose.joints.left_knee}`);
+  assert.ok(Math.abs(pose.joints.right_knee - -0.625) < 1e-9, `right_knee ${pose.joints.right_knee}`);
+});
+
+test('joints: a non-frame-parallel array is rejected, not silently played out of step', () => {
+  const bad = fixtureWithJoints();
+  bad.poses.lead.joints.left_knee = [0, 1];  // shorter than x
+  assert.throws(() => validateBakeCache(bad), /joints\.left_knee length/);
+});
+
+test('joints: a non-object block is rejected', () => {
+  const bad = fixtureWithJoints();
+  bad.poses.lead.joints = [1, 2, 3];
+  assert.throws(() => validateBakeCache(bad), /joints is not an object/);
+});
+
+test('joints: a non-array joint entry is rejected', () => {
+  const bad = fixtureWithJoints();
+  bad.poses.lead.joints.left_knee = 0.5;
+  assert.throws(() => validateBakeCache(bad), /joints\.left_knee is not an array/);
+});

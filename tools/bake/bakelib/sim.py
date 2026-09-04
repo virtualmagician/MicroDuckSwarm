@@ -100,6 +100,12 @@ class RoleBakeResult:
     body_pitch: np.ndarray
     mouth_open: np.ndarray
     walk_phase: np.ndarray
+    # Per-frame angle of every actuated joint not already carried by a flat
+    # field above -- the ten leg joints (docs/bake-format.md's optional
+    # `poses[role].joints`). Without this the cache records no leg motion at
+    # all and the renderer re-synthesises the legs procedurally from
+    # walkPhase, so a "baked physics" preview shows the kinematic waddle.
+    joints: dict[str, np.ndarray] = field(default_factory=dict)
     log: list[RoleBakeLogEntry] = field(default_factory=list)
     simulated: bool = True  # False for a role this baker could not drive at all (e.g. roller mode)
 
@@ -181,6 +187,7 @@ def simulate_role(
     body_roll = np.zeros(frame_count)
     body_pitch = np.zeros(frame_count)
     mouth_open = np.zeros(frame_count)
+    joint_angles = {name: np.zeros(frame_count) for name in duckmodel.LEG_JOINT_NAMES}
 
     log: list[RoleBakeLogEntry] = []
     fallen_logged = False
@@ -190,6 +197,7 @@ def simulate_role(
     any_frozen = False   # did any window get held? -> role still reported in unsimulated_roles
 
     hi = {name: 7 + idx for name, idx in duckmodel.HEAD_JOINT_INDICES.items()}
+    li = {name: 7 + idx for name, idx in duckmodel.LEG_JOINT_INDICES.items()}
 
     for k in range(frame_count):
         t = k / CONTROL_HZ
@@ -218,6 +226,11 @@ def simulate_role(
         body_z[k] = data.qpos[2] - duck.nominal_height
         body_roll[k] = roll
         body_pitch[k] = pitch
+        # Straight off live MuJoCo state, exactly like the head joints below
+        # -- these are what make a baked preview show baked legs instead of
+        # the procedural walk cycle.
+        for name, adr in li.items():
+            joint_angles[name][k] = data.qpos[adr]
         neck_pitch[k] = data.qpos[hi["neck_pitch"]]
         head_pitch[k] = data.qpos[hi["head_pitch"]]
         head_yaw[k] = data.qpos[hi["head_yaw"]]
@@ -297,7 +310,8 @@ def simulate_role(
         x=x, y=y, heading=heading,
         head_yaw=head_yaw, head_pitch=head_pitch, head_roll=head_roll, neck_pitch=neck_pitch,
         body_z=body_z, body_roll=body_roll, body_pitch=body_pitch,
-        mouth_open=mouth_open, walk_phase=walk_phase, log=log, simulated=not any_frozen,
+        mouth_open=mouth_open, walk_phase=walk_phase, joints=joint_angles,
+        log=log, simulated=not any_frozen,
     )
 
 
@@ -339,5 +353,15 @@ def _static_role_result(duck, role, frame_count, mark, sampler, log) -> RoleBake
         head_roll=np.zeros(frame_count), neck_pitch=np.zeros(frame_count),
         body_z=np.zeros(frame_count), body_roll=np.zeros(frame_count), body_pitch=np.zeros(frame_count),
         mouth_open=mouth, walk_phase=np.zeros(frame_count),
+        # Hold every leg joint at the MJCF STAND keyframe for the whole show.
+        # Emitting the block (rather than omitting it) is deliberate: without
+        # it the renderer falls back to synthesising legs from walkPhase, and
+        # a role held static would still get a procedural rest pose derived
+        # from a different source than the one it is actually standing in.
+        # Standing still should mean standing in STAND, explicitly.
+        joints={
+            name: duck.stand_joint_qpos[idx] * ones
+            for name, idx in duckmodel.LEG_JOINT_INDICES.items()
+        },
         log=log, simulated=False,
     )

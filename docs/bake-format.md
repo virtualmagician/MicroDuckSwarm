@@ -398,7 +398,13 @@ Each role is spawned at its resolved stage mark (`editor.marks[role]` if the sho
       "headYaw": ["..."], "headPitch": ["..."], "headRoll": ["..."], "neckPitch": ["..."],
       "bodyZ": ["..."], "bodyRoll": ["..."], "bodyPitch": ["..."],
       "mouthOpen": ["..."],
-      "walkPhase": ["..."]
+      "walkPhase": ["..."],
+      "joints": {
+        "left_hip_yaw": ["... 3200 floats ..."], "left_hip_roll": ["..."],
+        "left_hip_pitch": ["..."], "left_knee": ["..."], "left_ankle": ["..."],
+        "right_hip_yaw": ["..."], "right_hip_roll": ["..."],
+        "right_hip_pitch": ["..."], "right_knee": ["..."], "right_ankle": ["..."]
+      }
     }
   },
   "log": [
@@ -409,6 +415,16 @@ Each role is spawned at its resolved stage mark (`editor.marks[role]` if the sho
 
 - **Field vocabulary** — `poses[role]` carries exactly the field names `docs/viewer.md`'s renderer contract uses (`{role, x, y, heading, headYaw, headPitch, headRoll, neckPitch, bodyZ, bodyRoll, bodyPitch, mouthOpen, walkPhase}`, minus `role` itself since it's the dict key, and minus the optional `resting` the kinematic path also doesn't require) — a consumer already written against the kinematic pose shape needs no new field names, only a new source of frames.
 - **Numeric arrays, not per-frame objects** — every array under one role is parallel, length `frame_count` (`round(duration * frame_rate)`, e.g. 3200 for a 64 s show at 50 Hz — `roles × frame_count` sums to exactly `docs/bake-parts.md`'s own "about 25,600 frames total" figure for the 8-duck 64 s octet). Values are rounded before serialization (4-5 decimal digits depending on field, see `bakelib/posecache.py`'s `_ROUND` table) — plenty of precision for anything a renderer draws, and it keeps an 8-duck 64 s cache at **~2.4 MB**, comfortably under the "couple of megabytes" target.
+- **`joints` (optional, additive)** — the per-frame angle in radians of every actuated joint the flat fields above do not already carry: the ten leg joints, keyed by their MJCF names verbatim (`left_hip_pitch`, snake_case, matching `duckmodel.JOINT_NAMES`, not the camelCase of the surrounding fields — those are camelCase only because they mirror the JS renderer contract). Each array is frame-parallel with `x`.
+
+  **Why it exists.** Without it a baked preview does not show baked legs. `bakelib/sim.py` integrates all 14 joints under MuJoCo + BAM at 200 Hz, but the cache used to persist only the trunk, the four head joints and `walkPhase` — and `walkPhase` is derived from *trunk displacement* (`_walk_phase_from_xy`), never from a leg. `editor/duck-mesh.js` then re-synthesised all ten leg angles from that scalar using the kinematic path's own `legSwing()`. So the legs in a "baked physics" preview were the kinematic waddle, re-keyed off however far the physics trunk happened to slide: physics simulated the legs, the format discarded them, and the renderer reinvented them. Compounded by the policy's stand/walk gate (see "The low-speed problem"), a show commanding below the gate produced a trunk that barely moved, hence a `walkPhase` that barely advanced, hence legs that barely animated — which reads as "the baked ducks aren't walking" even when the question of whether they *should* be is a separate one the bake answers correctly.
+
+  **Compatibility.** Purely additive: this does **not** bump the `duckbake/1` major (CLAUDE.md rule 4 — unknown fields are ignored everywhere). Verified against every existing consumer: `bake-cache.js`'s `validateBakeCache()` iterates a fixed `POSE_FIELDS` list and never enumerates `Object.keys(p)`; `poseAtTime()` copies only `POSE_FIELDS`; `scripts/editor_server.py`'s `_summarize_cache()` touches only `poses[role].x`. An older loader ignores the block silently and correctly. The reverse direction is the one that needs care, and is handled: every cache already on disk lacks the block, so a consumer must keep the procedural path as a **per-joint** fallback rather than an all-or-nothing one.
+
+  **Why "any recorded joint, by name" rather than "the ten leg joints".** A later baker can add the head four, or a roller model's wheel joints, with no further schema change.
+
+  **Precision and size** — 4 decimals, i.e. 1e-4 rad. That is about 15x finer than the XL330's own 4096-tick encoder resolution (1.53e-3 rad), so more digits carry no physical meaning. Measured on the real cache: it adds ~1.95 MB to the 8-role 64 s octet, taking it from 2.43 MB to ~4.38 MB. That is a gitignored local file fetched from 127.0.0.1 and parsed once; a compact encoding would save ~1 MB and cost the format its "plain floats, same field names" property, so it is not worth it. The head four are deliberately **not** repeated here — they already ship as `headYaw`/`headPitch`/`headRoll`/`neckPitch`.
+
 - **`unsimulated_roles`** — roles this baker declined to simulate at all (roller mode only, in v1); their pose arrays are still full-length (held static at the mark) so the cache stays well-formed, but a consumer should treat them as informational only.
 - **`fallen_roles`** — any role with at least one `kind: "fell"` log entry.
 

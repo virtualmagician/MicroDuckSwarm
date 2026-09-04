@@ -32,14 +32,22 @@
 // intended/actual divergence docs/viewer.md's "Create Preview" is about)
 // — so this module drives them the same way, no offset added.
 //
-// The 10 leg joints have no equivalent in EITHER pose stream (neither
-// carries individual joint angles) — there is nothing to play back, so
-// they are animated procedurally from walkPhase, anchored at the MJCF's
-// own scene.xml STAND keyframe and swung with viewer-duck.js's own
-// legSwing() shape (imported, not re-derived) so the real duck's gait
-// reads as the same "waddle" the primitive one does. This is a named
-// stylization, not a claim of physical accuracy, exactly like the
-// primitive duck's own walk cycle — see docs/viewer.md "What it is not".
+// The 10 leg joints are driven one of two ways, in this order:
+//
+//   1. A BAKED pose carrying `joints` (docs/bake-format.md
+//      `poses[role].joints`) supplies the real per-frame angle of each one,
+//      straight off MuJoCo. That is what makes a baked preview show a real
+//      gait -- actual foot placement, actual ground contact -- rather than
+//      the stylised waddle below. The lookup is per joint, so a cache
+//      recording only some still gets real angles for those.
+//   2. Otherwise -- the kinematic preview, and any cache baked before that
+//      block existed -- they are animated procedurally from walkPhase,
+//      anchored at the MJCF's own STAND keyframe and swung with
+//      viewer-duck.js's legSwing() shape (imported, not re-derived) so the
+//      real duck's gait reads as the same "waddle" the primitive one does.
+//      This is a named stylization, not a claim of physical accuracy,
+//      exactly like the primitive duck's own walk cycle -- see
+//      docs/viewer.md "What it is not".
 // ---------------------------------------------------------------------
 //
 // Coordinate systems: the MJCF is X-forward, Y-left, Z-up (confirmed by
@@ -188,6 +196,20 @@ export function buildJointAngles(pose, walkState) {
     ['head_yaw', pose.headYaw || 0],
     ['head_roll', pose.headRoll || 0],
   ]);
+  // A baked pose may carry the real per-frame angle of every leg joint,
+  // straight off MuJoCo (docs/bake-format.md `poses[role].joints`). When it
+  // does, use it: that is the whole point of baking, and it is the only way
+  // the preview shows a real gait rather than the procedural walk cycle
+  // below re-keyed off trunk displacement. The fallback is PER JOINT, not
+  // all-or-nothing, so a cache recording only some joints still gets real
+  // angles for those -- and every cache baked before the block existed
+  // behaves exactly as it did before.
+  const baked = pose.joints || null;
+  const bakedOr = (name, computed) => {
+    const v = baked ? baked[name] : undefined;
+    return typeof v === 'number' && Number.isFinite(v) ? v : computed;
+  };
+
   for (const [side, sign, prefix] of [[1, 1, 'left'], [-1, -1, 'right']]) {
     const { thigh, knee: kneeRaw } = legSwing(walkPhase, standAmount, side);
     // legSwing()'s knee carries a REST_KNEE_BEND pedestal that fades out as
@@ -199,10 +221,10 @@ export function buildJointAngles(pose, walkState) {
     // soles about 1 cm off the floor. Take only the dynamic part here.
     const knee = kneeRaw - REST_KNEE_BEND * (1 - standAmount);
     const stand = sign > 0 ? STAND_LEG.left : STAND_LEG.right;
-    angles.set(`${prefix}_hip_yaw`, stand.hip_yaw);
-    angles.set(`${prefix}_hip_roll`, stand.hip_roll);
-    angles.set(`${prefix}_hip_pitch`, stand.hip_pitch + sign * thigh);
-    angles.set(`${prefix}_knee`, stand.knee + sign * knee);
+    angles.set(`${prefix}_hip_yaw`, bakedOr(`${prefix}_hip_yaw`, stand.hip_yaw));
+    angles.set(`${prefix}_hip_roll`, bakedOr(`${prefix}_hip_roll`, stand.hip_roll));
+    angles.set(`${prefix}_hip_pitch`, bakedOr(`${prefix}_hip_pitch`, stand.hip_pitch + sign * thigh));
+    angles.set(`${prefix}_knee`, bakedOr(`${prefix}_knee`, stand.knee + sign * knee));
     // The three pitch joints do NOT share a world axis. Composing the body
     // quaternions and STAND's +/-5 deg hip_roll, the LEFT leg's hip_pitch and
     // ankle hinge about world (0, +0.9962, -0.0872) while the knee hinges
@@ -221,7 +243,7 @@ export function buildJointAngles(pose, walkState) {
     // own mj_forward at STAND, the corrected chain reproduces sole_left world
     // z 0.00282..0.01631 m to five decimals, and holds that orientation at
     // every walk phase and every standAmount.
-    angles.set(`${prefix}_ankle`, stand.ankle + sign * (knee - thigh));
+    angles.set(`${prefix}_ankle`, bakedOr(`${prefix}_ankle`, stand.ankle + sign * (knee - thigh)));
   }
   return angles;
 }

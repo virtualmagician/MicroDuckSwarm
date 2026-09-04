@@ -35,13 +35,26 @@ CACHE_FORMAT = "duckbake/1"
 # cache would be silently indistinguishable from a new one. See
 # docs/bake-format.md "Actuator model: BAM ported" for what changed and
 # what it did (and did not) fix.
-BAKE_LAYOUT_VERSION = 2
+# 3 (2026-09-04): the cache now records the ten leg joints per frame
+# (`poses[role].joints`). A layout-2 cache is not wrong about what it
+# contains, but a consumer that finds no `joints` block synthesises the legs
+# procedurally from walkPhase while still presenting itself as baked physics
+# -- silently wrong rather than merely stale, which is this constant's bar.
+# The `joints` field itself is purely additive and does NOT bump the
+# duckbake/1 major (CLAUDE.md #4: unknown fields are ignored everywhere).
+BAKE_LAYOUT_VERSION = 3
 
 _ROUND = {
     "x": 4, "y": 4, "heading": 5,
     "headYaw": 5, "headPitch": 5, "headRoll": 5, "neckPitch": 5,
     "bodyZ": 5, "bodyRoll": 5, "bodyPitch": 5,
     "mouthOpen": 4, "walkPhase": 4,
+    # Leg joint angles (the optional `joints` block). 4 decimals = 1e-4 rad,
+    # about 15x finer than the XL330's own 4096-tick encoder resolution
+    # (1.53e-3 rad) -- past the point where another digit means anything
+    # physical, and appreciably cheaper across a whole show than the 5 the
+    # head joints use.
+    "joints": 4,
 }
 
 
@@ -99,6 +112,15 @@ def build_cache(
             "mouthOpen": _round_list(r.mouth_open, _ROUND["mouthOpen"]),
             "walkPhase": _round_list(r.walk_phase, _ROUND["walkPhase"]),
         }
+        # Optional and additive (docs/bake-format.md). Omitted entirely rather
+        # than written empty when a result carries none, so the block's
+        # presence is a real signal to the renderer that it may stop guessing
+        # at the legs.
+        if r.joints:
+            poses[role]["joints"] = {
+                name: _round_list(arr, _ROUND["joints"])
+                for name, arr in r.joints.items()
+            }
         for entry in r.log:
             log.append(entry.to_json())
         if not r.simulated:

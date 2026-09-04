@@ -68,6 +68,23 @@ export function validateBakeCache(cache) {
     for (const field of POSE_FIELDS) {
       if (p[field].length !== n) throw new Error(`bake cache: poses.${role}.${field} length (${p[field].length}) does not match poses.${role}.x (${n})`);
     }
+    // `joints` is optional and additive (docs/bake-format.md): a cache baked
+    // before it existed simply has no block, and duck-mesh.js falls back to
+    // its procedural leg swing per joint. Deliberately NOT part of
+    // POSE_FIELDS -- every loop over that list treats its entries as required
+    // frame-parallel numeric arrays, so adding an optional object there would
+    // reject every cache already on disk. When the block IS present, every
+    // array must be frame-parallel like the rest, or the legs would play back
+    // out of step with the trunk with nothing on screen to say so.
+    if (p.joints !== undefined) {
+      if (!p.joints || typeof p.joints !== 'object' || Array.isArray(p.joints)) {
+        throw new Error(`bake cache: poses.${role}.joints is not an object`);
+      }
+      for (const [name, arr] of Object.entries(p.joints)) {
+        if (!arr || typeof arr.length !== 'number') throw new Error(`bake cache: poses.${role}.joints.${name} is not an array`);
+        if (arr.length !== n) throw new Error(`bake cache: poses.${role}.joints.${name} length (${arr.length}) does not match poses.${role}.x (${n})`);
+      }
+    }
   }
   return cache;
 }
@@ -118,6 +135,16 @@ export function poseAtTime(cache, role, t) {
   const frac = i1 > i0 ? clamp(raw - i0, 0, 1) : 0;
   const pose = { role };
   for (const field of POSE_FIELDS) pose[field] = lerp(p[field][i0], p[field][i1], frac);
+  // Recorded per-frame joint angles, when this cache has them. Lerped between
+  // adjacent frames exactly like every other field -- at 50 Hz the per-frame
+  // joint delta is small enough that linear interpolation is
+  // indistinguishable from the simulated curve. Absent for any cache baked
+  // before the block existed; duck-mesh.js falls back per joint.
+  if (p.joints) {
+    const joints = {};
+    for (const [name, arr] of Object.entries(p.joints)) joints[name] = lerp(arr[i0], arr[i1], frac);
+    pose.joints = joints;
+  }
   return pose;
 }
 

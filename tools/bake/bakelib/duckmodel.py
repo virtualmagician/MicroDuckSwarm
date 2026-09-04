@@ -39,6 +39,18 @@ HEAD_JOINT_INDICES = {
     "head_roll": JOINT_NAMES.index("head_roll"),
 }
 
+# The complement: every actuated joint the pose cache does NOT already carry
+# as a flat headYaw/headPitch/headRoll/neckPitch field -- i.e. the ten leg
+# joints. These are what docs/bake-format.md's optional `poses[role].joints`
+# block records. Derived from JOINT_NAMES rather than retyped, so the two can
+# never drift apart. Name -> index into the 14-vector (add 7 for the qpos
+# index, the same offset the head joints use).
+LEG_JOINT_INDICES = {
+    name: i for i, name in enumerate(JOINT_NAMES) if name not in HEAD_JOINT_INDICES
+}
+LEG_JOINT_NAMES: tuple[str, ...] = tuple(LEG_JOINT_INDICES)
+assert len(LEG_JOINT_NAMES) == 10, LEG_JOINT_NAMES
+
 # docs/bake-parts.md §3.1, confirmed independently two ways (microduck_rl's
 # README + the reference Space's constants.js, and mjlab's own
 # SimulationCfg default that microduck_rl's task configs never override):
