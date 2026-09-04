@@ -1646,10 +1646,31 @@ function paintBakedViewer() {
   const cache = state.bakeCache;
   const t = state.playhead;
   const roleSet = new Set(roles());
-  const poses = bakeCache.poseAllAtTime(cache, t).filter((p) => roleSet.has(p.role));
+  // Rehearsal solo/mute lives inside dv.deriveFrame(), which the baked path
+  // never calls — so a muted duck used to keep its full baked pose, its
+  // trail, its event labels and full brightness, and stay eligible for the
+  // selection rim, while updateRoleLabelPositions() dimmed its name pill from
+  // the same Set. The stage contradicted itself. Apply the same neutral rule
+  // here: hold a rehearsal-neutral role at its start mark, dimmed, with no
+  // trail, exactly as the kinematic path's neutralPoseAt() does.
+  const neutral = viewer.neutralRoles;
+  const marks = state.norm && state.norm.editor ? (state.norm.editor.marks || {}) : {};
+  const poses = bakeCache.poseAllAtTime(cache, t)
+    .filter((p) => roleSet.has(p.role))
+    .map((p) => {
+      if (!neutral.has(p.role)) return p;
+      const m = marks[p.role] || { x: p.x, y: p.y, heading: p.heading };
+      return {
+        role: p.role, x: m.x, y: m.y, heading: m.heading,
+        headYaw: 0, headPitch: 0, headRoll: 0, neckPitch: 0,
+        bodyZ: 0, bodyRoll: 0, bodyPitch: 0, mouthOpen: 0,
+        walkPhase: 0, resting: true, dimmed: true,
+      };
+    });
   const trails = {};
   for (const role of cache.roles) {
     if (!roleSet.has(role)) continue;
+    if (neutral.has(role)) { trails[role] = []; continue; }
     trails[role] = bakeCache.bakeTrail(cache, role, t, dv.TRAIL_MAX_POINTS, role === viewer.selectedRole);
   }
   viewer.renderer.setTrails(trails);
@@ -2004,6 +2025,32 @@ function worldToScreen(camera, aspect, world, cssW, cssH) {
   return { x: (ndc[0] * 0.5 + 0.5) * cssW, y: (1 - (ndc[1] * 0.5 + 0.5)) * cssH };
 }
 
+/**
+ * Where a role's duck is actually being drawn on the floor right now: the
+ * baked cache while one is playing, the kinematic dead-reckoned path
+ * otherwise. EVERY screen-space projection must go through this.
+ *
+ * Reading viewer.paths directly pins an overlay to the trajectory the
+ * choreography INTENDED while the mesh it belongs to follows the one physics
+ * ACTUALLY produced. Measured on shows/octet against its own bake, those two
+ * are up to 0.253 m apart — a whole duck-height of separation, and precisely
+ * the "labels move, ducks not so much" report.
+ *
+ * Returns null when there is nothing to point at, including a role the loaded
+ * cache never recorded — paintBakedViewer() declines to draw those too, so the
+ * label hides rather than hovering over empty floor.
+ */
+function rolePlanarPosition(role) {
+  if (state.bakeCache) {
+    const pose = bakeCache.poseAtTime(state.bakeCache, role, state.playhead);
+    return pose ? { x: pose.x, y: pose.y } : null;
+  }
+  const path = viewer.paths.get(role);
+  if (!path) return null;
+  const p = dv.sampleRolePath(path, state.playhead);
+  return { x: p.x, y: p.y };
+}
+
 function paintEventLabels(labels) {
   const host = $('viewer-labels');
   if (!host) return;
@@ -2012,9 +2059,10 @@ function paintEventLabels(labels) {
   const aspect = w / Math.max(1, h);
   const frag = document.createDocumentFragment();
   for (const label of labels) {
-    const path = viewer.paths.get(label.role);
-    if (!path) continue;
-    const p = dv.sampleRolePath(path, state.playhead);
+    // Same rule as the name pills: follow the duck actually on screen, which
+    // is the baked one while a bake is playing (see rolePlanarPosition).
+    const p = rolePlanarPosition(label.role);
+    if (!p) continue;
     const world = mapPoseToWorld({ x: p.x, y: p.y }).position;
     world[1] = DUCK_HEIGHT_M + 0.09;
     const screen = worldToScreen(viewer.camera, aspect, world, w, h);
@@ -2078,10 +2126,9 @@ function updateRoleLabelPositions() {
   const w = stageC.clientWidth || 1, h = stageC.clientHeight || 1;
   const aspect = w / Math.max(1, h);
   for (const [role, el] of viewer.roleLabelEls) {
-    const path = viewer.paths.get(role);
+    const p = rolePlanarPosition(role);
     let screen = null;
-    if (path) {
-      const p = dv.sampleRolePath(path, state.playhead);
+    if (p) {
       const world = mapPoseToWorld({ x: p.x, y: p.y }).position;
       world[1] = ROLE_LABEL_HEIGHT_M;
       screen = worldToScreen(viewer.camera, aspect, world, w, h);

@@ -172,7 +172,14 @@ const HEAD_LEVEL_COUNTER = REST_LEAN * 0.85;
 // A duck standing still still has bent knees, not locked-straight sticks;
 // legSwing blends from this toward the dynamic walk-cycle bend as
 // standAmount rises (docs/viewer.md "a visible knee").
-const REST_KNEE_BEND = 0.40;
+// Exported because editor/duck-mesh.js has to SUBTRACT it: this pedestal
+// exists for the primitive duck below, whose neutral leg is a straight
+// stick, but the real MicroDuck skeleton is already crouched at its own
+// MJCF STAND keyframe (the crouch lives in hip_pitch/ankle; STAND's knee is
+// -0.0049 rad, i.e. essentially straight). Adding this on top of that
+// double-crouches the real duck and floats its feet about a centimetre off
+// the floor. See duck-mesh.js buildJointAngles().
+export const REST_KNEE_BEND = 0.40;
 
 // Colour split (docs/viewer.md "Colour split" / "Colour"): white/cream
 // head shell and light-grey body panels take the role hue as a tint;

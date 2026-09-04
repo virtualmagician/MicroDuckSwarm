@@ -58,7 +58,7 @@ import {
   mat4FromXRotation, mat4FromZRotation, mat3FromMat4Rigid,
   uploadMesh, bindMeshAttribs, drawMesh,
 } from './viewer-gl.js';
-import { legSwing } from './viewer-duck.js';
+import { legSwing, REST_KNEE_BEND } from './viewer-duck.js';
 import { parseBinarySTL } from './stl-parser.js';
 
 // Relative to editor/*.html, matching how ../shows/... is already
@@ -189,13 +189,39 @@ export function buildJointAngles(pose, walkState) {
     ['head_roll', pose.headRoll || 0],
   ]);
   for (const [side, sign, prefix] of [[1, 1, 'left'], [-1, -1, 'right']]) {
-    const { thigh, knee } = legSwing(walkPhase, standAmount, side);
+    const { thigh, knee: kneeRaw } = legSwing(walkPhase, standAmount, side);
+    // legSwing()'s knee carries a REST_KNEE_BEND pedestal that fades out as
+    // standAmount rises. That pedestal is for the PRIMITIVE duck, whose
+    // neutral leg is a straight stick and would otherwise lock out. The real
+    // skeleton is already crouched at its own MJCF STAND keyframe -- the
+    // crouch lives in hip_pitch/ankle, and STAND's knee is -0.0049 rad, i.e.
+    // straight -- so adding 0.40 rad on top double-crouches it and floats the
+    // soles about 1 cm off the floor. Take only the dynamic part here.
+    const knee = kneeRaw - REST_KNEE_BEND * (1 - standAmount);
     const stand = sign > 0 ? STAND_LEG.left : STAND_LEG.right;
     angles.set(`${prefix}_hip_yaw`, stand.hip_yaw);
     angles.set(`${prefix}_hip_roll`, stand.hip_roll);
     angles.set(`${prefix}_hip_pitch`, stand.hip_pitch + sign * thigh);
     angles.set(`${prefix}_knee`, stand.knee + sign * knee);
-    angles.set(`${prefix}_ankle`, stand.ankle - sign * (thigh + knee));
+    // The three pitch joints do NOT share a world axis. Composing the body
+    // quaternions and STAND's +/-5 deg hip_roll, the LEFT leg's hip_pitch and
+    // ankle hinge about world (0, +0.9962, -0.0872) while the knee hinges
+    // about the OPPOSITE direction (0, -0.9962, +0.0872); the right leg
+    // mirrors all three. (Every joint's literal MJCF attribute is
+    // axis="0 0 1" -- these are the composed world axes, not values you can
+    // grep for in the XML.) So the sole's world pitch is
+    // hip_pitch - knee + ankle, not the plain sum, and STAND satisfies that
+    // identity exactly: -0.457924 - (-0.004940) + 0.452984 = 0.
+    //
+    // Holding the sole at its STAND orientation therefore means the ankle
+    // ADDS the knee bend and SUBTRACTS the thigh swing. Subtracting both
+    // doubled the knee into the ankle instead of cancelling it: at rest that
+    // put -0.40 rad in, pitching both soles 46 deg off the floor, and during
+    // a swing it reached 85 deg -- nearly vertical. Checked against MuJoCo's
+    // own mj_forward at STAND, the corrected chain reproduces sole_left world
+    // z 0.00282..0.01631 m to five decimals, and holds that orientation at
+    // every walk phase and every standAmount.
+    angles.set(`${prefix}_ankle`, stand.ankle + sign * (knee - thigh));
   }
   return angles;
 }

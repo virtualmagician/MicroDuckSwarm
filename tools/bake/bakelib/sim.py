@@ -130,7 +130,20 @@ def simulate_role(
 
     tracks = sampler.tracks
     mode_events = [e.mode for e in tracks.events if e.mode is not None]
-    if any(m != "walk" for m in mode_events):
+    # Scoped per-window as of 2026-09-04 (docs/bake-format.md "What isn't
+    # simulated"). This used to bail out for the WHOLE role the moment a
+    # non-walk mode appeared anywhere in it, which is why
+    # shows/showcase/showcase.duckshow.json -- the show written to demonstrate
+    # every policy -- baked to 41.75 s of a completely motionless duck: its
+    # single roller event at t=31.0 discarded the 74% of the show that is
+    # plain walk mode and perfectly drivable. The frame loop below now freezes
+    # only across the roller stretch itself.
+    #
+    # The all-or-nothing path is kept for the one case it is still right for:
+    # a role that is in a non-walk mode from the very start has no walk-mode
+    # stretch to simulate, and a per-frame freeze would just be a slower way
+    # of producing the same static array.
+    if mode_events and all(m != "walk" for m in mode_events) and (sampler.mode_at(0.0) or "walk") != "walk":
         # docs/duckshow-format.md: "the only two values real robotd
         # accepts" are "walk"/"roller". This baker only loads the legged
         # (walk-mode) MJCF and alpha_walking.onnx -- a roller-mode show
@@ -173,6 +186,8 @@ def simulate_role(
     fallen_logged = False
     prev_action = np.zeros(policyset.ACTION_LEN, dtype=np.float32)
     prev_event_t = -1e-9
+    frozen_mode = None   # the non-walk mode currently being held, or None while simulating
+    any_frozen = False   # did any window get held? -> role still reported in unsimulated_roles
 
     hi = {name: 7 + idx for name, idx in duckmodel.HEAD_JOINT_INDICES.items()}
 
@@ -231,6 +246,31 @@ def simulate_role(
         if k == frame_count - 1:
             break
 
+        # Roller (or any non-walk) stretch: this baker loads only the legged
+        # walk model, so driving alpha_walking.onnx here would simulate the
+        # wrong physical machine. Freeze instead -- skip the policy and the
+        # physics steps, so the pose recorded above simply holds -- and log
+        # the window once, at its own start time. Walk stretches on either
+        # side are simulated normally; see docs/bake-format.md "What isn't
+        # simulated". Resuming afterwards is an honest discontinuity: the
+        # frozen legged state is not a valid roller state, and nothing here
+        # pretends it is.
+        mode_now = sampler.mode_at(t) or "walk"
+        if mode_now != "walk":
+            if frozen_mode != mode_now:
+                frozen_mode = mode_now
+                any_frozen = True
+                log.append(RoleBakeLogEntry(
+                    role=role, t=t, kind="mode_unsimulated", detail=(
+                        f"'{mode_now}' mode from t={t:.2f}s: this baker drives only the legged "
+                        f"(walk-mode) model, so physics is frozen and the pose held for this "
+                        f"window. The role's walk-mode stretches are simulated normally. "
+                        f"See docs/bake-format.md \"What isn't simulated\"."
+                    ),
+                ))
+            continue
+        frozen_mode = None
+
         obs = observation.build_observation(duck, data, prev_action, sample.locomotion, sample.head, sample.pose)
         action = policyset.run_locomotion_policy(policies, obs)
         q_target = duck.stand_joint_qpos + action.astype(np.float64) * LOCOMOTION_ACTION_SCALE
@@ -257,7 +297,7 @@ def simulate_role(
         x=x, y=y, heading=heading,
         head_yaw=head_yaw, head_pitch=head_pitch, head_roll=head_roll, neck_pitch=neck_pitch,
         body_z=body_z, body_roll=body_roll, body_pitch=body_pitch,
-        mouth_open=mouth_open, walk_phase=walk_phase, log=log, simulated=True,
+        mouth_open=mouth_open, walk_phase=walk_phase, log=log, simulated=not any_frozen,
     )
 
 
