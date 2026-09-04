@@ -24,7 +24,18 @@ CACHE_FORMAT = "duckbake/1"
 # just stale -- folded into the cache key alongside the show hash and
 # policy hashes docs/viewer.md already calls for ("a cache keyed by show
 # hash and policy versions").
-BAKE_LAYOUT_VERSION = 1
+#
+# 2 (2026-09-04): the actuator plant changed -- MuJoCo's stock <position>
+# PD actuator swapped for the ported BAM XL330 torque/friction model
+# (bakelib/bam_actuator.py, docs/bake-parts.md §3.5). `physics_params`
+# below (timestep/decimation/control_hz/scene) does not name the actuator
+# model at all, so a show/policy/physics-identical bake now produces a
+# genuinely different simulated trajectory than layout 1 did for the exact
+# same cache_key inputs otherwise -- without this bump, an old layout-1
+# cache would be silently indistinguishable from a new one. See
+# docs/bake-format.md "Actuator model: BAM ported" for what changed and
+# what it did (and did not) fix.
+BAKE_LAYOUT_VERSION = 2
 
 _ROUND = {
     "x": 4, "y": 4, "heading": 5,

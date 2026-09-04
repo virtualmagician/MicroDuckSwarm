@@ -17,7 +17,7 @@ from dataclasses import dataclass, field
 import mujoco
 import numpy as np
 
-from . import duckmodel, marks, observation, policyset
+from . import bam_actuator, duckmodel, marks, observation, policyset
 
 CONTROL_HZ = duckmodel.CONTROL_HZ
 CONTROL_DECIMATION = duckmodel.CONTROL_DECIMATION
@@ -147,6 +147,14 @@ def simulate_role(
         return _static_role_result(duck, role, frame_count, mark, sampler, log)
 
     data = mujoco.MjData(duck.model)
+    # Build this role's BAM controller before reset_to_mark's mj_forward --
+    # mirrors bam.mujoco.Simulator.reset()'s own order (construct the
+    # controller against a freshly-zeroed MjData, *then* set qpos/qvel and
+    # call mj_forward), and also resets the shared model's
+    # dof_frictionloss/dof_damping back to zero first (see
+    # bam_actuator.new_controller's docstring for why that matters when one
+    # compiled MjModel is reused across every role).
+    controller = bam_actuator.new_controller(duck.bam_rig, duck.model, data)
     duckmodel.reset_to_mark(duck, data, mark.x, mark.y, mark.heading)
 
     x = np.zeros(frame_count)
@@ -225,11 +233,21 @@ def simulate_role(
 
         obs = observation.build_observation(duck, data, prev_action, sample.locomotion, sample.head, sample.pose)
         action = policyset.run_locomotion_policy(policies, obs)
-        ctrl = duck.stand_joint_qpos + action.astype(np.float64) * LOCOMOTION_ACTION_SCALE
-        data.ctrl[:] = ctrl
+        q_target = duck.stand_joint_qpos + action.astype(np.float64) * LOCOMOTION_ACTION_SCALE
+        # The policy's target *angle* updates once per control tick (50 Hz)
+        # -- same as before BAM. What changes is what turns that angle into
+        # torque: controller.update() now recomputes BAM's firmware
+        # voltage-control law + load-dependent friction every *physics*
+        # substep (200 Hz), not just once per control tick, exactly mirroring
+        # bam.mujoco.Simulator.step()'s own one-update()-per-mj_step() loop
+        # (docs/bake-parts.md §3.5 step 4) -- a real servo's internal PID
+        # loop runs far faster than the 50 Hz policy that sets its target.
+        for name, val in zip(duckmodel.JOINT_NAMES, q_target):
+            controller.set_q_target(name, val)
         prev_action = action
 
         for _ in range(CONTROL_DECIMATION):
+            controller.update()
             mujoco.mj_step(duck.model, data)
 
     walk_phase = _walk_phase_from_xy(x, y)

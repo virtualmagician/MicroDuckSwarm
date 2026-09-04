@@ -14,6 +14,8 @@ from pathlib import Path
 import mujoco
 import numpy as np
 
+from . import bam_actuator
+
 # The 14-DOF action space, in the exact order the exported MJCF declares its
 # <actuator> block (confirmed identical in both robot_walk.xml and
 # robot_allcollisions.xml) and the order docs/bake-parts.md §3.1 confirms
@@ -50,30 +52,62 @@ CONTROL_DECIMATION = 4
 CONTROL_HZ = 50.0
 assert abs(1.0 / CONTROL_HZ - PHYSICS_TIMESTEP * CONTROL_DECIMATION) < 1e-12
 
-# Which scene file this baker drives. docs/bake-parts.md's own parts table
-# recommends the full-collision model ("needed for stand/sit/ground-pick/
-# kick/roulade, i.e. every `do` skill event and the pose.z crouch") over the
-# walk-only model, even though this v1 baker does not yet drive the skill
-# policies themselves (see docs/bake-format.md "What isn't simulated") --
-# self-collision and ground contact still matter for an ordinary walk/crouch
-# bake, and for detecting a fall honestly rather than clipping through the
-# floor.
+# Which scene file this baker drives.
 #
-# `scene.xml` (which <include>s `robot_groundcontact.xml`), not
-# `scene_allcollisions.xml` -- this is the important, live-verified part:
-# upstream renamed the curated full-collision file that doc's table
-# originally called `robot_allcollisions.xml` to `robot_groundcontact.xml`
-# sometime before 2026-09-03, and reassigned the old name to a *different*
-# file (every geom gets a matching collision copy, not the curated subset
-# training actually used -- confirmed by direct read of
-# config_mjcf_groundcontact.json's `ignore` block vs. the new
-# robot_allcollisions.xml's own export config). docs/bake-parts.md itself
-# was re-verified against upstream the same day this baker was written and
-# now says plainly that the newer robot_allcollisions.xml "is not on the
-# needed list" for a bake driver. `scene.xml`'s STAND keyframe, actuator
-# order, and sensor set are byte-identical to `scene_allcollisions.xml`'s
-# (checked directly), so this is a same-day correction, not a rewrite.
-SCENE_FILENAME = "scene.xml"
+# 2026-09-04, corrected: this used to be `scene.xml` (-> `robot_groundcontact.xml`)
+# for every policy this baker runs, including ordinary locomotion. That was
+# wrong for the one policy this v1 baker actually drives:
+# `microduck_rl`'s `microduck_velocity_env_cfg.py` sets
+# `cfg.scene.entities = {"robot": MICRODUCK_WALK_ROBOT_CFG}`, which
+# `microduck_constants.py` resolves via `spec_fn=get_walk_spec` to
+# `MICRODUCK_WALK_XML = _ROBOT_DIR / "robot_walk.xml"` -- `alpha_walking.onnx`
+# was trained against `robot_walk.xml`, not `robot_groundcontact.xml`. This
+# baker now loads `scene_walk.xml` (-> `robot_walk.xml`) to match, for
+# exactly the same reason it picked BAM's XL330 parameters over MuJoCo's
+# stock actuator: fidelity to the trained plant, not just "a plausible MJCF".
+#
+# What `robot_walk.xml` actually drops relative to `robot_groundcontact.xml`
+# (direct diff, 2026-09-04): 6 fewer geoms (`ngeom` 82 -> 76) -- internal
+# self-collision-only meshes (`hip_l`, `leg` x2, `top_head_shell`, `jaw`,
+# `bottom_head_shell`, the `np_f970` sensor bracket) either dropped entirely
+# or downgraded from `class="collision"` to `class="self_collision_only"`.
+# The foot-ground contact geoms that actually drive locomotion dynamics
+# (`left_foot_collision`/`right_foot_collision`, mesh `sole_left`/
+# `sole_right`) are byte-identical in both files -- same pos, quat, mesh.
+# STAND keyframe, actuator block (`chosen_actuator`, `kp=0.55`), and sensor
+# set are also byte-identical between the two (checked directly).
+#
+# Measured consequence of the swap (docs/bake-format.md "MJCF variant
+# swap" has the full sweep): because only self-collision geometry differs,
+# and the low/mid-speed walk-initiation regime never engages self-collision
+# (an upright or gently-stepping duck's legs and head never touch its own
+# torso), switching to `scene_walk.xml` produced bit-for-bit identical net
+# travel at every tested commanded speed (0.05-0.40 m/s) and left the
+# walk-initiation threshold exactly where it was under `scene.xml`. This is
+# still the correct model to drive `alpha_walking.onnx` against -- it just
+# turned out not to be the axis the reported low-speed bug lives on.
+#
+# The skill family (`alpha_sitstand`, `alpha_ground_pick`, `ball_kick_*`,
+# `roulade`) and roller mode need `robot_groundcontact.xml` /
+# `robot_groundcontact_rollers.xml` respectively, per the same upstream
+# config (`get_standup_spec` / rollers spec_fn) -- moot for this v1 baker,
+# which never drives those policies at all (base locomotion keeps running
+# unmodified through a skill window, logged `skill_unsimulated`; roller mode
+# is logged `mode_unsimulated` and held static -- see "What isn't
+# simulated"). A future version that actually drives a skill policy for its
+# window would need to swap the compiled `MjModel` for that stretch (or load
+# both up front) rather than picking one scene for the whole bake, since a
+# single MJCF is not simultaneously correct for both families.
+#
+# Not `scene_allcollisions.xml`'s underlying `robot_allcollisions.xml`
+# either, for the reason already established before this correction:
+# upstream renamed the curated full-collision file this repo's research
+# originally catalogued as `robot_allcollisions.xml` to `robot_groundcontact.xml`,
+# and reassigned the old name to a *different*, denser file (every geom
+# gets a matching collision copy, not the curated self-collision subset
+# training used) that `docs/bake-parts.md` confirms directly "is not on the
+# needed list" for a bake driver.
+SCENE_FILENAME = "scene_walk.xml"
 
 # The exported scene's own STAND keyframe (docs/bake-parts.md §3.6 and this
 # file's own read of scene_allcollisions.xml's <keyframe> block) is the only
@@ -99,6 +133,7 @@ class DuckModel:
     nominal_height: float  # STAND qpos[2] -- trunk z at nominal standing pose
     trunk_body_id: int
     imu_sensor_adr: dict[str, tuple[int, int]]  # name -> (start, dim) into sensordata
+    bam_rig: bam_actuator.BamRig  # the ported XL330 actuator model -- see bakelib/bam_actuator.py
 
 
 def load_duck_model(mjcf_dir: Path) -> DuckModel:
@@ -115,7 +150,16 @@ def load_duck_model(mjcf_dir: Path) -> DuckModel:
             f"{scene_path} not found. tools/bake needs assets/microduck/ populated -- "
             f"see docs/bake-parts.md §2 for the (user-run, never automated) fetch commands."
         )
-    model = mujoco.MjModel.from_xml_path(str(scene_path))
+    # Loaded as an editable MjSpec, not directly to MjModel, so the 14
+    # stock <position> actuators can be converted to BAM's torque-motor
+    # plant before compiling (bakelib/bam_actuator.py, docs/bake-parts.md
+    # §3.5) -- mirrors bam.mjlab.BamActuator.edit_spec()'s own approach of
+    # editing the MjSpec once at build time, not patching the compiled
+    # MjModel after the fact.
+    spec = mujoco.MjSpec.from_file(str(scene_path))
+    bam_model = bam_actuator.load_bam_model()
+    force_limit = bam_actuator.edit_spec_to_bam(spec, JOINT_NAMES, bam_model)
+    model = spec.compile()
     model.opt.timestep = PHYSICS_TIMESTEP
 
     stand_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_KEY, STAND_KEYFRAME_NAME)
@@ -138,6 +182,8 @@ def load_duck_model(mjcf_dir: Path) -> DuckModel:
         dim = int(model.sensor_dim[sid])
         imu_sensor_adr[name] = (adr, dim)
 
+    bam_rig = bam_actuator.build_rig(model, JOINT_NAMES, bam_model, force_limit)
+
     return DuckModel(
         model=model,
         stand_qpos=stand_qpos,
@@ -145,6 +191,7 @@ def load_duck_model(mjcf_dir: Path) -> DuckModel:
         nominal_height=nominal_height,
         trunk_body_id=trunk_body_id,
         imu_sensor_adr=imu_sensor_adr,
+        bam_rig=bam_rig,
     )
 
 

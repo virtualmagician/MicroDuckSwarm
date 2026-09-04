@@ -16,13 +16,20 @@
 #   python3.12 -m venv .venv
 #   .venv/bin/pip install -r requirements.txt
 #
-# Python 3.12 is required, not just this repo's general 3.10+ floor.
-# mujoco and onnxruntime don't care, but the optional BAM actuator path
-# (docs/bake-parts.md §3.5, not implemented yet — see docs/bake-format.md
-# "What isn't simulated") pins better-actuator-models to >=3.12,<3.13.
-# Using 3.12 for the whole venv now means adding that package later is a
-# pip install, not a venv rebuild.
+# Python 3.12 is required, not just this repo's general 3.10+ floor:
+# better-actuator-models pins requires-python = ">=3.12,<3.13".
 
 mujoco==3.3.7
 onnxruntime==1.20.1
 numpy==2.2.6
+
+# BAM (Better Actuator Models) — the XL330 voltage-control-law torque/
+# friction plant alpha_walking.onnx was actually trained against
+# (docs/bake-parts.md §3.5), ported in via bakelib/bam_actuator.py. PyPI
+# distribution name is `better-actuator-models`; the import is `bam`.
+# Gotcha (docs/bake-parts.md §3.5 already flags this): the PyPI package
+# literally named `bam` is an unrelated CLI tool — do not `pip install
+# bam`. The [mujoco] extra pulls in only numpy/colorama/mujoco (not
+# [mjlab]'s torch/mujoco-warp/scipy — this baker uses only the plain-NumPy
+# CPU path, bam.mujoco.MujocoController, never bam.mjlab).
+better-actuator-models[mujoco]==1.0.2

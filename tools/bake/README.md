@@ -39,9 +39,10 @@ tools/bake/
   bake_show.py        # CLI entry point
   bakelib/
     duckmodel.py       # MJCF load, timestep injection, STAND-keyframe constants
-    marks.py            # ports editor/duckshow-viewer.js's resolveMark/defaultMarkFor
-    observation.py      # the 61-dim obs: 48 proprioception + 13 command
-    policyset.py         # manifest.json + onnxruntime session + hashing
-    sim.py                # per-role physics loop, bake log, fall detection
-    posecache.py           # cache assembly, cache-key hashing, JSON writer
+    bam_actuator.py     # ported BAM XL330 actuator model (replaces the stock <position> actuator)
+    marks.py              # ports editor/duckshow-viewer.js's resolveMark/defaultMarkFor
+    observation.py        # the 61-dim obs: 48 proprioception + 13 command
+    policyset.py           # manifest.json + onnxruntime session + hashing
+    sim.py                  # per-role physics loop, bake log, fall detection
+    posecache.py             # cache assembly, cache-key hashing, JSON writer
 ```
