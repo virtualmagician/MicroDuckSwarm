@@ -230,6 +230,19 @@
   #banner button { float: right; margin-left: 12px; }
   #drop-hint { position: fixed; inset: 0; background: rgba(77,163,255,0.12); border: 3px dashed var(--accent); z-index: 20; pointer-events: none; display: none; }
   body.dropping #drop-hint { display: block; }
+/* Setup mode: the start-marks table and formation controls (docs/authoring.md
+   "4 · Setup mode"). Sized to sit in the same rail as selection/validation. */
+#setup-formations { display: flex; flex-wrap: wrap; gap: 6px; align-items: flex-end; padding: 6px 8px; }
+#setup-formations label { display: flex; flex-direction: column; gap: 2px; font-size: 11px; color: #555; }
+#setup-formations select, #setup-formations input { font: inherit; padding: 2px 4px; }
+#setup-formations input { width: 62px; }
+#setup-formations button { align-self: flex-end; }
+#setup-marks { width: 100%; border-collapse: collapse; font-size: 12px; }
+#setup-marks th { text-align: left; font-weight: 500; color: #777; padding: 2px 6px; border-bottom: 1px solid #e2e2e2; }
+#setup-marks td { padding: 1px 6px; }
+#setup-marks td:first-child { white-space: nowrap; }
+#setup-marks input { width: 100%; min-width: 56px; font: inherit; padding: 1px 3px; }
+#setup-marks i { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 5px; vertical-align: middle; }
 </style>
 </head>
 <body>
@@ -289,7 +302,7 @@
 <main id="main">
   <div id="workspace">
     <section id="stage-section">
-      <h2>stage <span class="count" style="font-weight:400">1 house · 2 ¾ · 3 top · drag orbit · scroll dolly · drag mark in top view</span><button id="btn-viewer-names" class="toggle" aria-pressed="false" title="Show/hide each duck's role name above its head (remembered in this browser)">names</button><button id="btn-create-preview" title="Create Preview unavailable — checking…" disabled>Create Preview</button><button id="btn-bake-open" title="Load a baked pose cache (a .duckbake.json from tools/bake) and play it back in place of the kinematic preview — docs/viewer.md &quot;Create Preview&quot;">Play Baked…</button><button id="btn-bake-exit" class="hidden" title="Back to the live kinematic preview">Kinematic ↩</button></h2>
+      <h2>stage <span class="count" style="font-weight:400">1 house · 2 ¾ · 3 top · drag orbit · scroll dolly · drag mark in top view</span><button id="btn-viewer-names" class="toggle" aria-pressed="false" title="Show/hide each duck's role name above its head (remembered in this browser)">names</button><button id="btn-setup" class="toggle" aria-pressed="false" title="Setup mode (⌥P): place the cast. Switches to Top view and opens the marks table — docs/authoring.md &quot;Setup mode&quot;">setup</button><button id="btn-create-preview" title="Create Preview unavailable — checking…" disabled>Create Preview</button><button id="btn-bake-open" title="Load a baked pose cache (a .duckbake.json from tools/bake) and play it back in place of the kinematic preview — docs/viewer.md &quot;Create Preview&quot;">Play Baked…</button><button id="btn-bake-exit" class="hidden" title="Back to the live kinematic preview">Kinematic ↩</button></h2>
       <div id="viewer-wrap">
         <canvas id="stage"></canvas>
         <div id="viewer-role-labels"></div>
@@ -300,6 +313,22 @@
       <div id="stage-legend"></div>
     </section>
     <aside id="side">
+      <section id="setup-panel" class="hidden">
+        <h2>start marks <span id="setup-count" class="count"></span></h2>
+        <div id="setup-formations">
+          <label>formation
+            <select id="setup-kind"><option value="line">line</option><option value="arc">arc</option><option value="grid">grid</option></select>
+          </label>
+          <label>facing
+            <select id="setup-facing"><option value="front">downstage</option><option value="centre">centre</option><option value="keep">keep</option></select>
+          </label>
+          <label id="setup-spacing-wrap">spacing m <input id="setup-spacing" type="number" step="0.05" value="0.45"></label>
+          <label id="setup-cols-wrap" class="hidden">cols <input id="setup-cols" type="number" step="1" min="1" value="4"></label>
+          <button id="setup-apply" title="Rewrite every start mark into this formation (one undoable edit)">apply to cast</button>
+        </div>
+        <table id="setup-marks"><thead><tr><th>role</th><th>x m</th><th>y m</th><th>heading rad</th></tr></thead><tbody></tbody></table>
+        <div class="full hint">+x is downstage, +y is house-left, heading 0 faces downstage. Drag a ring in the stage to move a duck; type here for exact values.</div>
+      </section>
       <section id="inspector">
         <h2>selection <span id="inspector-title" class="count"></span></h2>
         <div id="inspector-body"><div class="full hint">Click a keyframe or event. Double-click (or ⌘-click) a lane to add one.</div></div>
@@ -665,6 +694,7 @@ function renderAll() {
   syncViewerShow();
   paintViewer();
   updateReadouts();
+  renderSetupPanel();   // after syncViewerShow, which is what refreshes viewer.marks
   updateTimeLabel();
   $('file-name').textContent = state.fileName;
   $('file-name').classList.toggle('dirty', state.dirty);
@@ -2196,6 +2226,106 @@ function easeViewerCameraForLabels(name) {
 }
 
 /** Switch to a named camera preset; the renderer eases itself over ~0.5s (docs/viewer.md "Camera"). */
+// ---------------------------------------------------------------------------
+// Setup mode: placing the cast (docs/authoring.md "4 · Setup mode")
+// ---------------------------------------------------------------------------
+// Start positions are show content -- robotd has no idea where a duck is on a
+// floor, so every position the system knows is dead-reckoned from the mark the
+// author set. Dragging a ring in Top view already set x/y; nothing ever set
+// heading, and there was no way to type an exact value or place a whole cast
+// at once. This is session state, never written into the show file: what it
+// edits is editor.marks, exactly what a drag already edited.
+const setup = { on: false };
+
+function setSetupMode(on) {
+  setup.on = Boolean(on);
+  $('btn-setup').setAttribute('aria-pressed', String(setup.on));
+  $('setup-panel').classList.toggle('hidden', !setup.on);
+  // Top is the only view where a floor position can be judged, and it is the
+  // only view a mark drag works in, so entering setup mode goes there rather
+  // than leaving the author to notice their drags do nothing.
+  if (setup.on && viewer.presetName !== 'top') setViewerCameraPreset('top');
+  if (setup.on) renderSetupPanel();
+}
+
+function renderSetupPanel() {
+  if (!setup.on) return;
+  const body = $('setup-marks').querySelector('tbody');
+  const names = roles();
+  $('setup-count').textContent = names.length ? `${names.length} role${names.length === 1 ? '' : 's'}` : '';
+  body.replaceChildren();
+  for (const role of names) {
+    const m = viewer.marks.get(role) || { x: 0, y: 0, heading: 0 };
+    const tr = document.createElement('tr');
+    const label = document.createElement('td');
+    const dot = document.createElement('i');
+    dot.style.background = (viewer.palette.get(role) || {}).hex || roleColor(role);
+    label.append(dot, document.createTextNode(role));
+    tr.appendChild(label);
+    for (const field of ['x', 'y', 'heading']) {
+      const td = document.createElement('td');
+      const input = document.createElement('input');
+      input.type = 'number';
+      input.step = field === 'heading' ? '0.05' : '0.01';
+      input.value = String(round3(m[field]));
+      input.dataset.role = role;
+      input.dataset.field = field;
+      // change, not input: committing on every keystroke would put a dozen
+      // undo entries in the stack for one typed number.
+      input.addEventListener('change', onSetupFieldChange);
+      td.appendChild(input);
+      tr.appendChild(td);
+    }
+    body.appendChild(tr);
+  }
+}
+
+function round3(v) { return Math.round((Number(v) || 0) * 1000) / 1000; }
+
+function onSetupFieldChange(e) {
+  const { role, field } = e.target.dataset;
+  const value = Number(e.target.value);
+  if (!Number.isFinite(value)) { renderSetupPanel(); return; }  // reject NaN by re-rendering the old value
+  const current = viewer.marks.get(role) || { x: 0, y: 0, heading: 0 };
+  commit(core.setMark(state.show, role, { ...current, [field]: value }));
+}
+
+function applyFormation() {
+  const names = roles();
+  if (!names.length) return;
+  const kind = $('setup-kind').value;
+  const facing = $('setup-facing').value;
+  const opts = {
+    facing,
+    current: Object.fromEntries(names.map((r) => [r, viewer.marks.get(r) || { x: 0, y: 0, heading: 0 }])),
+  };
+  if (kind === 'grid') {
+    opts.cols = Math.max(1, Math.round(Number($('setup-cols').value) || 4));
+    opts.dx = opts.dy = Number($('setup-spacing').value) || 0.45;
+  } else if (kind === 'arc') {
+    opts.radius = Number($('setup-spacing').value) || 1.2;
+  } else {
+    opts.spacing = Number($('setup-spacing').value) || 0.45;
+  }
+  const marks = core.formationMarks(names, kind, opts);
+  // One undoable edit for the whole cast, not one per duck: setMark() returns
+  // a new doc each time, so fold them all before committing once.
+  let next = state.show;
+  for (const [role, mark] of Object.entries(marks)) next = core.setMark(next, role, mark);
+  commit(next);
+  status(`${kind} formation applied to ${names.length} role${names.length === 1 ? '' : 's'}`, 'ok');
+}
+
+$('btn-setup').onclick = () => setSetupMode(!setup.on);
+$('setup-apply').onclick = applyFormation;
+$('setup-kind').onchange = () => {
+  const kind = $('setup-kind').value;
+  $('setup-cols-wrap').classList.toggle('hidden', kind !== 'grid');
+  const label = $('setup-spacing-wrap');
+  label.firstChild.textContent = kind === 'arc' ? 'radius m ' : 'spacing m ';
+  $('setup-spacing').value = kind === 'arc' ? '1.2' : '0.45';
+};
+
 function setViewerCameraPreset(name) {
   if (!viewer.renderer) return;
   viewer.presetName = name;
@@ -2578,6 +2708,7 @@ window.addEventListener('keydown', (e) => {
   // Alt+S was free — plain 's'/'S' (below) is already "toggle snap", and
   // this must never collide with it.
   if (e.altKey && (e.code === 'KeyS' || e.key.toLowerCase() === 's')) { e.preventDefault(); toggleSoloSelectedRole(); return; }
+  if (e.altKey && (e.code === 'KeyP' || e.key.toLowerCase() === 'p')) { e.preventDefault(); setSetupMode(!setup.on); return; }
   const g = grid();
   const stepT = state.snap && g.length ? (core.beatPeriod(Number(musicMeta().bpm)) / state.subdivision) : FRAME;
   switch (e.key) {

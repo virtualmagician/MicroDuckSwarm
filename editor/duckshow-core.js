@@ -1295,6 +1295,101 @@ export function setMark(show, role, mark) {
   return next;
 }
 
+/**
+ * Start marks for a whole cast in one of three formations, as
+ * {role: {x, y, heading}}. Pure: takes role names, returns marks, touches no
+ * show document -- the caller feeds each result through setMark().
+ *
+ * Show-space convention, same as everywhere else in the format: +x is
+ * downstage (toward the audience), +y is house-left, heading is radians CCW
+ * with 0 facing downstage. So a "line" varies y at constant x, which is a
+ * line across the stage as an audience sees it.
+ *
+ * `kind`:
+ *   'line' -- evenly spaced along y at constant x. opts.spacing (m, default
+ *             0.45), opts.x (default 0).
+ *   'grid' -- opts.cols columns across y, rows stacked upstage in -x.
+ *             opts.dx / opts.dy (default 0.45 each), opts.x (front row).
+ *   'arc'  -- on a circle of opts.radius (default 1.2) centred at
+ *             (opts.cx, opts.cy), spanning opts.spread radians (default
+ *             Math.PI * 0.6) and centred on straight-downstage.
+ *
+ * `opts.facing`:
+ *   'keep'   -- leave heading at whatever `current` holds for that role (0 if absent)
+ *   'front'  -- every duck faces downstage (heading 0). The default.
+ *   'centre' -- every duck faces (opts.cx, opts.cy), useful with 'arc'
+ */
+export function formationMarks(roles, kind = 'line', opts = {}) {
+  const list = (Array.isArray(roles) ? roles : []).filter((r) => typeof r === 'string' && r);
+  const n = list.length;
+  const out = {};
+  if (!n) return out;
+
+  const facing = opts.facing || 'front';
+  const current = opts.current || {};
+  const cx = Number.isFinite(opts.cx) ? opts.cx : 0;
+  const cy = Number.isFinite(opts.cy) ? opts.cy : 0;
+
+  const place = (role, x, y) => {
+    let heading;
+    if (facing === 'keep') heading = Number(current[role]?.heading) || 0;
+    else if (facing === 'centre') heading = Math.atan2(cy - y, cx - x);
+    else heading = 0;
+    out[role] = { x: round6(x), y: round6(y), heading: round6(heading) };
+  };
+
+  if (kind === 'line') {
+    const spacing = Number.isFinite(opts.spacing) ? opts.spacing : 0.45;
+    const x = Number.isFinite(opts.x) ? opts.x : 0;
+    // Centred on y = cy, so an even cast straddles the centre line and an odd
+    // one puts a duck on it.
+    const y0 = cy + ((n - 1) / 2) * spacing;
+    list.forEach((role, i) => place(role, x, y0 - i * spacing));
+    return out;
+  }
+
+  if (kind === 'grid') {
+    const cols = Math.max(1, Math.floor(Number(opts.cols) || Math.ceil(Math.sqrt(n))));
+    const dx = Number.isFinite(opts.dx) ? opts.dx : 0.45;
+    const dy = Number.isFinite(opts.dy) ? opts.dy : 0.45;
+    const x0 = Number.isFinite(opts.x) ? opts.x : 0;
+    const rows = Math.ceil(n / cols);
+    list.forEach((role, i) => {
+      const r = Math.floor(i / cols);
+      const c = i % cols;
+      const inRow = Math.min(cols, n - r * cols);          // last row may be short
+      const y = cy + ((inRow - 1) / 2) * dy - c * dy;
+      // Rows stack upstage (-x) so row 0 is nearest the audience, and the
+      // whole block is centred on x0 the way the line is centred on cy.
+      const x = x0 + ((rows - 1) / 2) * dx - r * dx;
+      place(role, x, y);
+    });
+    return out;
+  }
+
+  if (kind === 'arc') {
+    const radius = Number.isFinite(opts.radius) ? opts.radius : 1.2;
+    const spread = Number.isFinite(opts.spread) ? opts.spread : Math.PI * 0.6;
+    // A single duck sits at the centre of the span rather than at one end.
+    const step = n > 1 ? spread / (n - 1) : 0;
+    // A lone duck belongs at the middle of the span, not at one end of it --
+    // with n === 1 the usual -spread/2 start would park it at the edge.
+    const a0 = n > 1 ? -spread / 2 : 0;
+    list.forEach((role, i) => {
+      const a = a0 + i * step;
+      place(role, cx + radius * Math.cos(a), cy + radius * Math.sin(a));
+    });
+    return out;
+  }
+
+  throw new Error(`unknown formation: ${kind}`);
+}
+
+export const FORMATION_KINDS = Object.freeze(['line', 'arc', 'grid']);
+export const FORMATION_FACINGS = Object.freeze(['front', 'centre', 'keep']);
+
+function round6(v) { return Math.round(v * 1e6) / 1e6; }
+
 /** A fresh, valid show document. */
 export function newShow({ name = 'Untitled', author = null, duration = 30, bpm = 120, beatOffset = 0, roles = ['lead'], created = null } = {}) {
   const meta = { name };

@@ -44,6 +44,42 @@ swarmctl record --roster roster.json --duck duck-01 --role lead --out shows/mine
 - `editor/duckshow-editor.html`: one file, no build step, no CDN — imports the core module; Open/Save via `<input type=file>` and a download link; header fields (name, bpm, beat_offset, duration, music file name); one lane group per role with sub-lanes locomotion (vx/vy/vyaw), head (4), pose (z/roll/pitch + active), mouth, events; beat grid drawn from bpm/beat_offset with a snap toggle; zoom + horizontal scroll; playhead scrub with live value readout; keyframe drag in time and value, click-to-add, delete, interp cycling; event editing with dropdowns limited to the enums; a validation panel (errors/warnings with role/track/t, click to jump); a top-down stage canvas showing every role's dead-reckoned path with per-role start marks the user can drag (persisted under a top-level `"editor": {"marks": {role: {x, y, heading}}}` field, which every loader ignores). Optional music: load an audio file to play along with the playhead (Web Audio); no beat detection in v1 — type the BPM.
 - Tests: `node --test editor/tests` (Node's built-in runner, no npm packages) covering sampler parity with hand-computed values, validator parity with the fixtures, round-trip preservation, dead-reckoning of a straight walk and a turn, and edit operations. The editor HTML is smoke-tested by loading the demo show in a headless check only where a browser is available (not required in CI).
 
+## 4 · Setup mode — placing the cast
+
+Start positions are show content: `robotd` has no notion of where a duck is on
+a floor, so every position the system knows comes from the mark the author set
+and the dead reckoning integrated from it. Getting the marks right is the
+first authoring step for any piece, and until now the only way to set one was
+to drag a ring in Top view, which set `x` and `y` but never `heading`.
+
+**Setup mode** (the `setup` toggle in the stage header, or `⌥P`) turns the
+stage into a placement surface:
+
+- Switches to Top view, since that is the only view where a floor position can
+  be judged accurately.
+- Shows a **marks table** in the rail: one row per role with numeric `x`, `y`
+  and `heading` fields. Typing a value commits it the same way a drag does, as
+  one undoable edit.
+- Leaves the existing ring drag alone for position. Heading is set by typing a
+  value or by a formation's facing rule; there is **no drag-to-rotate handle
+  yet**, so a one-off heading is a typed number. Heading is radians, CCW, with
+  0 facing downstage, matching the `.duckshow` convention everywhere else.
+- Offers **formation helpers** that rewrite every mark at once: line, arc and
+  grid, each with a spacing or radius, and a facing rule (keep current, face
+  downstage, or face the centre of the formation).
+
+The helpers are pure functions in `editor/duckshow-core.js`
+(`formationMarks(roles, kind, opts)`), so they are unit-tested without a
+browser and could be reused by a future CLI. They are an authoring
+convenience, not a format change: everything still lands in the same
+`editor.marks` block, which every loader ignores.
+
+**Stage extents are the author's business, not the format's.** Nothing here
+validates that a mark is inside a real venue's floor, because the format has no
+concept of stage size and inventing one would be a fiction. The measured grid
+(1 m major, 10 cm minor) is the readout; a duck placed 4 m from the origin is
+legal and will be drawn there.
+
 ## Decisions log
 
 - 2026-09-02 — Puppet channel added to SwarmLink as the single live-intent path (works against mock and real ducks; doubles as the show-night nudge layer). Recorder input is abstracted so scripted recordings are reproducible in CI. Editor logic lives in a DOM-free module so the same validator/sampler rules are tested in a third implementation against the shared fixtures.

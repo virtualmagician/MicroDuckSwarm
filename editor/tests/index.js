@@ -18,6 +18,7 @@ import './roundtrip.test.mjs';
 import './integrate.test.mjs';
 import './editops.test.mjs';
 import './beatgrid.test.mjs';
+import './formations.test.mjs';
 import './viewer-gl.test.mjs';
 import './viewer-pose.test.mjs';
 import './rehearsal.test.mjs';
