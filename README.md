@@ -93,6 +93,7 @@ Not built yet, and what unblocks each item.
 | **Servo cues:** laser homing, colour-beacon homing, marker following | Camera access for our agent alongside `mediad`, which owns it for WebRTC. Untested. |
 | **Intended-versus-actual drift diff:** planned and simulated paths drawn together | Nothing. Both paths are on disk in comparable coordinates. |
 | **`roulade` and roller mode** in the bake | `roulade` executes but ends inverted, and `manifest.json` marks it `chain: true` without naming what it chains into. Roller mode needs a second MJCF (`robot_groundcontact_rollers.xml`) and `roller.onnx` loaded alongside the legged model. The other three skills are driven. |
+| **Timeline control track:** hold cues that stop the show and wait for an operator cue or a sensor | Designed and reviewed, not built. Needs a `/duckswarm/resume` verb and a load-outcome gate on play first; sensor triggers need a duck sensor surface `robotd` does not expose. [`docs/control-track.md`](docs/control-track.md) |
 | **Overhead tag tracking** for tight walking formations | Only if in-place work and loose blocking prove insufficient in rehearsal. |
 | **Markerless person following** on the onboard NPU (~0.8 TOPS) | After marker-based servo cues work. |
 | **Blender import** for spatial authoring | Only if timeline authoring proves too slow for longer pieces. |
@@ -112,6 +113,7 @@ Most of this is gated on hardware. MicroDuck currently quotes a four-to-six mont
 | `docs/viewer.md` | The 3D stage viewer and the baked-physics preview |
 | `docs/bake-parts.md` | What the bake needs, where each part comes from, and its licence |
 | `docs/bake-format.md` | The `duckbake/1` pose-cache format |
+| `docs/control-track.md` | Hold/resume cues: the design, and what blocks it |
 | `docs/provisioning.md` | Installing the agent on a duck, and pushing shows and policies |
 | `python/duckshow/` | Format library: parse, validate, sample at 50 Hz |
 | `python/duck_agent/` | On-duck agent: clock discipline, local playback, telemetry, puppet channel |
