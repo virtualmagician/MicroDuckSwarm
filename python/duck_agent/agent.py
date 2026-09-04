@@ -1173,7 +1173,19 @@ class DuckAgent:
             elif puppet.move is not None:
                 move_out = dict(puppet.move)  # no locomotion track: nudged from standing
                 puppet_applied = True
-        if move_out is None and self._puppet_move_applied:
+        if locomotion_frozen:
+            # Freeze means COMMAND zero, not stop commanding. Leaving move_out
+            # as None sends no robot.move at all, so the duck coasts at its
+            # last commanded velocity until robotd's 500 ms deadman
+            # (deploy/robotd.toml) happens to catch it -- up to half a second
+            # of unwanted travel at the start of every servo hold, and a
+            # silent dependence on a safety net that exists for lost links,
+            # not for choreography. docs/duckshow-format.md has always
+            # described this mode as "freeze locomotion"; this makes the code
+            # mean that. Sending zero every tick also keeps the deadman fed,
+            # which is what every other playing tick already does.
+            move_out = dict(_ZERO_MOVE)
+        elif move_out is None and self._puppet_move_applied:
             move_out = dict(_ZERO_MOVE)  # the puppet's velocity would otherwise be held forever
 
         head_out: Optional[dict[str, Any]] = None
