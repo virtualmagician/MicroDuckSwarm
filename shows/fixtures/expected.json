@@ -32,5 +32,10 @@
     "errors": 1,
     "warnings": 0,
     "error_substr": "not a valid drive mode"
+  },
+  "warn-skill-occupancy-overlap": {
+    "errors": 0,
+    "warnings": 1,
+    "warning_substr": "execution of do='ground_pick'"
   }
 }

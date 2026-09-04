@@ -107,6 +107,19 @@ final class DuckShowFixtureTests: XCTestCase {
         XCTAssertTrue(report.errors.contains { $0.message.contains("no tracks entry") }, "\(report.errors)")
     }
 
+    func testSkillOccupancyOverlapMatchesCanonicalWarningCount() throws {
+        // A ground_pick followed 0.5 s later by a kick warns (the kick
+        // begins well inside ground_pick's 2.8 s occupancy window); a
+        // roulade immediately followed by another roulade does not
+        // (manifest.json's "chain": true) -- see
+        // shows/fixtures/expected.json.
+        let expected = try Self.loadExpected()["warn-skill-occupancy-overlap"]
+        let report = try loadFixture("warn-skill-occupancy-overlap").validate()
+        XCTAssertEqual(report.errors.count, expected?.errors ?? -1)
+        XCTAssertEqual(report.warnings.count, expected?.warnings ?? -1)
+        XCTAssertTrue(report.warnings.contains { $0.message.contains("execution of do='ground_pick'") }, "\(report.warnings)")
+    }
+
     func testUnsortedEventsMatchesCanonicalNoErrorsOrWarnings() throws {
         // docs/duckshow-format.md only requires sorting for curve tracks
         // (locomotion/head/pose/mouth), not the point-event track, so

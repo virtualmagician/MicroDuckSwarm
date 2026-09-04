@@ -9,6 +9,7 @@ without touching validator.py.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Optional
 
 # Closed enums from docs/duckshow-format.md's "Event track" table -- these
 # mirror robotd-api.md's Skill / SoundTag enums (docs/robotd-api.md), so an
@@ -43,6 +44,61 @@ DRIVE_MODES = (
     "walk",
     "roller",
 )
+
+# Per-skill occupancy durations (seconds), sourced from
+# assets/microduck/policies/manifest.json (schema_version 2, control_hz
+# 50; see docs/duckshow-format.md's "Skill durations and occupancy" for
+# the full authoring mapping table). Each of these `do` skills is an
+# *episodic* policy clip: once started, it runs to completion -- a
+# discrete event scheduled inside that window is scheduling against a
+# duck that physically cannot have finished the first skill yet (see
+# validator.py's _check_skill_occupancy_overlap). This is a different
+# concern from `min_event_interval_s` below (command flooding).
+#
+# `sit_toggle` (alpha_sitstand.onnx) is deliberately absent: the
+# manifest marks it "kind": "scripted", not "episodic", and gives it a
+# ramp_s/unwind_s posture transition rather than a fixed duration_s --
+# docs/bake-format.md records that the hand-off semantics for a second
+# sit_toggle mid-ramp are unverified (shows/octet/octet.duckshow.json's
+# `reed` role fires two 2.0 s apart on purpose, to exercise exactly that
+# unresolved case). There is no confirmed number to warn against, so
+# sit_toggle never occupies for the purposes of this check -- neither as
+# the earlier (occupying) skill nor as the later (interrupting) one.
+SKILL_DURATIONS_S = {
+    "ground_pick": 2.8,  # alpha_ground_pick.onnx, walk-mode duration
+    "roulade": 1.0,  # roulade.onnx
+    "kick_left": 0.5,  # ball_kick_left.onnx
+    "kick_right": 0.5,  # ball_kick_right.onnx
+}
+
+# ground_pick's occupancy in roller mode: the robot runs roller_crouch.onnx
+# instead of alpha_ground_pick.onnx (docs/duckshow-format.md's authoring
+# mapping table names roller_crouch as "the roller-mode variant of ground
+# pick", never itself authored directly by a `do` event) -- a longer clip,
+# not just a renamed one. Which mode is "in effect" for a given
+# ground_pick event is resolved from the mode event(s) preceding it, the
+# same rule late-join/seek uses for gait (Sampler.mode_at).
+GROUND_PICK_ROLLER_DURATION_S = 3.5
+
+# Skills whose manifest.json entry is "chain": true -- manifest.json
+# marks roulade.onnx this way, and docs/bake-format.md's own reading is
+# "chained to something else the manifest doesn't specify": a repeat of
+# one of these immediately after itself is the documented way to keep
+# the effect going, not an authoring mistake, so the occupancy-overlap
+# check below must never warn about that specific pairing.
+CHAINING_SKILLS = ("roulade",)
+
+
+def skill_duration_s(skill: str, mode: Optional[str]) -> Optional[float]:
+    """Occupancy duration (seconds) for a `do` skill event, given the
+    drive mode active when it starts (`mode` is a `Sampler.mode_at()`
+    result: `"walk"`, `"roller"`, or `None` when no `mode` event
+    precedes it). Returns `None` when no confirmed duration exists
+    (currently only `sit_toggle` -- see `SKILL_DURATIONS_S` above).
+    """
+    if skill == "ground_pick" and mode == "roller":
+        return GROUND_PICK_ROLLER_DURATION_S
+    return SKILL_DURATIONS_S.get(skill)
 
 
 @dataclass(frozen=True)

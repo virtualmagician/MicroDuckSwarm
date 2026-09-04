@@ -86,6 +86,28 @@ also triggered early, exactly once, by `stop`, `panic`, a fresh `load`, or
 end-of-show. A `sound` event with no `hold` is a single one-shot trigger:
 no re-sending, nothing to release.
 
+#### Skill durations and occupancy
+
+Each `do` skill is a fixed `.onnx` policy running against a policy slot (docs/robotd-api.md's "Custom .onnx policies & modes"); `assets/microduck/policies/manifest.json` (schema_version 2, `control_hz` 50) says how it behaves once it starts, and this is the full authoring mapping:
+
+| Authored (`do` / implicit) | Policy | Kind | Duration |
+|---|---|---|---|
+| `ground_pick` | `alpha_ground_pick.onnx` (walk mode) / `roller_crouch.onnx` (roller mode) | episodic | 2.8 s (walk) / 3.5 s (roller) |
+| `roulade` | `roulade.onnx` | episodic, chains | 1.0 s |
+| `kick_left` | `ball_kick_left.onnx` | episodic | 0.5 s |
+| `kick_right` | `ball_kick_right.onnx` | episodic | 0.5 s |
+| `sit_toggle` | `alpha_sitstand.onnx` | scripted | no fixed duration — `ramp_s` 2.0 s / `unwind_s` 1.0 s posture transition; the hand-off timing for a second `sit_toggle` mid-ramp is not confirmed |
+| implicit in `locomotion` | `alpha_walking.onnx` (walk mode) / `roller.onnx` (roller mode) | perpetual | runs continuously |
+| implicit in `pose` | `alpha_stand.onnx` | perpetual | runs continuously |
+
+`roller_crouch.onnx` is never authored directly — it is simply what the robot runs *instead of* `alpha_ground_pick.onnx` when a `ground_pick` event fires while the duck is in roller mode. Which mode is "in effect" for a given `ground_pick` is resolved from the `mode` events preceding it, the same rule late-join/seek uses for gait (above). The other three episodic skills' durations do not depend on drive mode.
+
+An *episodic* skill (everything above except `sit_toggle`) runs its whole clip once started — the robot cannot interrupt it to honor a second command any sooner. Scheduling a second skill event inside that window is legal (the robot will accept the command and something will happen) but is very likely not what the author meant, so the validator raises it as a **warning**, naming both skills, the overlap in seconds, and the occupying skill's duration. This is a different concern from the event-density limit below, which is about command flooding (any two discrete events, regardless of type or duration) — the two rules run independently and can both fire on the same pair of events.
+
+`roulade` is the one documented exception: `manifest.json` marks it `"chain": true`, meaning a `roulade` immediately following a `roulade` is the intended way to keep rolling, not two skills contending for one window — that specific pairing never warns. `sit_toggle` has no confirmed duration at all (see the table above), so it never participates in this check, whether it is the occupying skill or the interrupting one.
+
+Durations live in `python/duckshow/limits.py`'s `SKILL_DURATIONS_S` / `GROUND_PICK_ROLLER_DURATION_S` / `CHAINING_SKILLS`, mirrored in SwarmLink and the editor.
+
 ### Servo track (`servo`) — reserved in v1
 
 Declared in the spec so files can carry it, but v1 agents only honor `{"mode": "hold"}` (freeze locomotion, keep pose/head). Future modes: `laser_homing`, `color_homing` (`"target": "<beacon-id>"`), `follow_marker`. During a servo window, the servo controller owns `locomotion`/`head`; curve tracks resume when the window ends.
@@ -96,6 +118,8 @@ Two distinct mechanisms here, and they must not be conflated (docs/robotd-api.md
 
 1. **Which gait plays at runtime** is a `mode` event (above), sent over the wire as exactly `"walk"` or `"roller"` — the only two values real robotd accepts. There is no wire mechanism to name a custom mode.
 2. **What a given mode actually does** is a *pre-show configuration* question: a fixed **policy slot** (`walk`, `stand`, `sitstand`, `ground_pick`, `kick_left`, `kick_right`, `roulade`, and the roller-family equivalents) is pointed at a custom `.onnx` file, applied by restarting `robotd` during load-in — never mid-show.
+
+Mode isn't only cosmetic: it also picks which policy a `ground_pick` event runs and for how long — see "Skill durations and occupancy" above.
 
 Shows that need a non-stock policy declare it so SwarmLink can provision it and duck-agent can verify it landed:
 
@@ -124,6 +148,7 @@ Shows that need a non-stock policy declare it so SwarmLink can provision it and 
 | pose z / roll / pitch | ≤ 0.05 m / 0.5 rad / 0.5 rad |
 | mouth open | 0.0 – 1.0 |
 | event density | ≥ 0.25 s between discrete events per duck |
+| skill occupancy | a `do` skill event starting before the previous skill's duration has elapsed → **warning** (see "Skill durations and occupancy" above); `roulade` chaining into itself is exempt |
 
 Limits live in `python/duckshow/limits.py` as data, not scattered constants; the validator reports every violation with role, track, and `t`.
 

@@ -1,0 +1,14 @@
+{
+  "format": "duckshow/1",
+  "meta": { "name": "Fixture: a skill scheduled before the previous one finishes warns; roulade chaining does not", "duration": 6.0 },
+  "requires": { "policies": [] },
+  "cast": [ { "role": "lead" }, { "role": "loop" } ],
+  "tracks": {
+    "lead": {
+      "events": [ { "t": 0.0, "do": "ground_pick" }, { "t": 0.5, "do": "kick_left" } ]
+    },
+    "loop": {
+      "events": [ { "t": 0.0, "do": "roulade" }, { "t": 0.5, "do": "roulade" } ]
+    }
+  }
+}

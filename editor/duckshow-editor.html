@@ -768,6 +768,13 @@ function updateReadouts() {
       const mode = s.modeAt(t);
       const recent = s.eventsBetween(t - 0.5, t).map((e) => e.do ?? e.sound ?? (e.mode ? `mode ${e.mode}` : '?'));
       ro.textContent = (mode ? `mode: ${mode}` : 'mode: —') + (recent.length ? `  ◆ ${recent.join(', ')}` : '');
+      // Drive-mode discoverability: hovering the readout explains that
+      // roller is more than a label -- it swaps the locomotion policy and
+      // changes what ground_pick does (docs/duckshow-format.md "Skill
+      // durations and occupancy").
+      ro.title = mode === 'roller'
+        ? `roller mode: locomotion runs roller.onnx; ground_pick runs roller_crouch.onnx (${core.GROUND_PICK_ROLLER_DURATION_S}s) instead of alpha_ground_pick.onnx (${core.SKILL_DURATIONS_S.ground_pick}s)`
+        : `walk mode: locomotion runs alpha_walking.onnx; ground_pick runs alpha_ground_pick.onnx (${core.SKILL_DURATIONS_S.ground_pick}s)`;
       continue;
     }
     const frame = sampler(role).at(t)[track];
@@ -969,6 +976,26 @@ function drawEventsLane(ctx, lane, t0, t1, W, issues, sel) {
     const x = xOf(e.t);
     const isSel = sel && sel.kind === 'event' && sel.role === lane.role && sel.index === e.index;
     const issue = issues.get(`${lane.role}|events|${e.t}`);
+
+    // A `do` skill occupies the robot for a known duration once it starts
+    // (docs/duckshow-format.md "Skill durations and occupancy") -- draw
+    // that as a bar behind the marker, not just the instant it fires, so
+    // an author can see at a glance when a later event lands inside it.
+    if (kind === 'do') {
+      const durationS = core.skillInfo(e.do, sampler(lane.role).modeAt(e.t)).duration_s;
+      if (durationS !== null) {
+        const barW = Math.max(2, durationS * state.pxPerSec);
+        ctx.fillStyle = EVENT_COLORS.do;
+        ctx.globalAlpha = 0.20;
+        ctx.fillRect(x, ym - 5, barW, 10);
+        ctx.globalAlpha = 1;
+        ctx.strokeStyle = EVENT_COLORS.do;
+        ctx.globalAlpha = 0.55;
+        ctx.strokeRect(x + 0.5, ym - 5, barW, 10);
+        ctx.globalAlpha = 1;
+      }
+    }
+
     ctx.fillStyle = kind ? EVENT_COLORS[kind] : css('--err');
     ctx.beginPath(); ctx.moveTo(x, ym - 6); ctx.lineTo(x + 6, ym); ctx.lineTo(x, ym + 6); ctx.lineTo(x - 6, ym); ctx.closePath(); ctx.fill();
     if (issue) { ctx.strokeStyle = issue === 'error' ? css('--err') : css('--warn'); ctx.lineWidth = 2; ctx.stroke(); ctx.lineWidth = 1; }
@@ -1280,6 +1307,14 @@ function renderInspector() {
     vs.value = String(e.mode ?? core.DRIVE_MODES[0]);
     vs.onchange = () => commit(core.setEventAction(state.show, sel.role, sel.index, 'mode', vs.value));
     row('mode', vs);
+    // Drive-mode discoverability: roller isn't just cosmetic -- it swaps
+    // the locomotion policy AND changes what ground_pick does (a longer,
+    // different clip). See core.skillInfo / limits.py's SKILL_DURATIONS_S.
+    const modeNote = document.createElement('div'); modeNote.className = 'full hint';
+    modeNote.textContent = 'roller swaps the locomotion policy (alpha_walking.onnx → roller.onnx) and changes what '
+      + `ground_pick does: it runs roller_crouch.onnx (${core.GROUND_PICK_ROLLER_DURATION_S}s) instead of `
+      + `alpha_ground_pick.onnx (${core.SKILL_DURATIONS_S.ground_pick}s).`;
+    body.appendChild(modeNote);
   } else {
     const vs = document.createElement('select');
     for (const v of (kind === 'do' ? core.SKILLS : core.SOUND_TAGS)) { const o = document.createElement('option'); o.value = v; o.textContent = v; vs.appendChild(o); }
@@ -1288,6 +1323,21 @@ function renderInspector() {
     vs.value = String(current);
     vs.onchange = () => commit(core.setEventAction(state.show, sel.role, sel.index, kind, vs.value));
     row(kind === 'do' ? 'skill' : 'sound', vs);
+    if (kind === 'do') {
+      // Duration/kind readout: what the robot actually does once this
+      // skill starts (docs/duckshow-format.md "Skill durations and
+      // occupancy"). ground_pick is mode-dependent -- resolved from the
+      // mode event(s) preceding this one, the same rule the timeline
+      // occupancy bar and the skill-occupancy validator warning use.
+      const doMode = sampler(sel.role).modeAt(e.t);
+      const info = core.skillInfo(current, doMode);
+      const doNote = document.createElement('div'); doNote.className = 'full hint';
+      doNote.textContent = info.duration_s !== null
+        ? `${info.kind} · ${info.policy} · occupies ${info.duration_s}s`
+          + (current === 'ground_pick' ? ` (${doMode === 'roller' ? 'roller' : 'walk'} mode)` : '')
+        : `${info.kind} · ${info.policy} · no fixed occupancy duration (posture transition)`;
+      body.appendChild(doNote);
+    }
     if (kind === 'sound') {
       const hold = row('hold (s)', num(e.hold, { step: 0.1, min: 0 }));
       hold.placeholder = 'none';

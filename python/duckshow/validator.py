@@ -13,7 +13,7 @@ import math
 from dataclasses import dataclass
 from typing import Optional
 
-from .limits import DEFAULT_LIMITS, DRIVE_MODES, Limits, SKILLS, SOUND_TAGS
+from .limits import CHAINING_SKILLS, DEFAULT_LIMITS, DRIVE_MODES, Limits, SKILLS, SOUND_TAGS, skill_duration_s
 from .model import VALID_INTERPS, Show
 from .sampler import Sampler
 
@@ -204,6 +204,51 @@ def _check_mode_locomotion_overlap(issues, role, show: Show, events, limits: Lim
             )
 
 
+def _check_skill_occupancy_overlap(issues, role, show: Show, events) -> None:
+    """A `do` skill runs its whole episodic clip to completion once
+    started (docs/duckshow-format.md's "Skill durations and occupancy",
+    sourced from assets/microduck/policies/manifest.json's duration_s
+    figures) -- unlike `_check_event_density`'s 0.25 s spacing rule
+    (about command flooding and applying to every discrete event, any
+    type), scheduling a second skill *inside* that window schedules
+    against a duck that physically cannot have finished the first one
+    yet. The robot will still accept the command and something will
+    happen, so this is a WARNING, not an error -- nothing here is
+    unsafe, the author just probably did not mean it.
+
+    Only consecutive pairs of `do` events are compared (mirroring
+    `_check_event_density`'s prev_t walk), each against the skill
+    immediately before it in time order -- not every earlier skill.
+    `roulade` is "chain": true in the manifest: a `roulade` immediately
+    following a `roulade` is the documented way to keep rolling, not two
+    skills contending for one window (limits.CHAINING_SKILLS), so that
+    specific pairing never warns. `sit_toggle` has no confirmed duration
+    (limits.skill_duration_s returns None for it) and so never occupies
+    here, whether it is the earlier or the later event.
+    """
+    skill_events = sorted((e for e in events if e.do is not None), key=lambda e: e.t)
+    if len(skill_events) < 2:
+        return
+    sampler = Sampler(show, role)
+    prev = skill_events[0]
+    for cur in skill_events[1:]:
+        if not (prev.do in CHAINING_SKILLS and cur.do == prev.do):
+            duration = skill_duration_s(prev.do, sampler.mode_at(prev.t))
+            if duration is not None:
+                end = prev.t + duration
+                if cur.t < end - _EPS:
+                    overlap = end - cur.t
+                    _warning(
+                        issues,
+                        role,
+                        "events",
+                        cur.t,
+                        f"do={cur.do!r} at t={cur.t} begins {overlap}s into the {duration}s "
+                        f"execution of do={prev.do!r} at t={prev.t}",
+                    )
+        prev = cur
+
+
 def _check_meta_duration(issues: list[Issue], show: Show) -> None:
     """meta.duration is not optional in practice: docs/duckshow-format.md
     documents real playback-ending semantics for it ("playback ends here
@@ -284,6 +329,7 @@ def validate(show: Show, limits: Limits = DEFAULT_LIMITS) -> list[Issue]:
         _check_event_density(issues, role, tracks.events, limits)
         _check_mode_value(issues, role, tracks.events)
         _check_mode_locomotion_overlap(issues, role, show, tracks.events, limits)
+        _check_skill_occupancy_overlap(issues, role, show, tracks.events)
 
         _check_servo(issues, role, tracks.servo)
 

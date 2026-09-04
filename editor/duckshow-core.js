@@ -42,6 +42,88 @@ export const SOUND_TAGS = Object.freeze(['alarm', 'greet', 'inquire', 'peck', 'c
 // python/duckshow/limits.py's DRIVE_MODES.
 export const DRIVE_MODES = Object.freeze(['walk', 'roller']);
 
+// Per-skill occupancy durations (seconds), sourced from
+// assets/microduck/policies/manifest.json (schema_version 2, control_hz 50;
+// see docs/duckshow-format.md "Skill durations and occupancy" for the full
+// authoring mapping table). Each of these `do` skills is an *episodic*
+// policy clip: once started, it runs to completion, so a discrete event
+// scheduled inside that window is scheduling against a duck that
+// physically cannot have finished the first skill yet (see
+// checkSkillOccupancyOverlap below). Mirrors python/duckshow/limits.py's
+// SKILL_DURATIONS_S.
+//
+// `sit_toggle` (alpha_sitstand.onnx) is deliberately absent: the manifest
+// marks it "kind": "scripted", not "episodic", and gives it a
+// ramp_s/unwind_s posture transition rather than a fixed duration_s --
+// docs/bake-format.md records that the hand-off semantics for a second
+// sit_toggle mid-ramp are unverified. There is no confirmed number to warn
+// against, so sit_toggle never occupies for the purposes of this check,
+// neither as the earlier (occupying) skill nor the later (interrupting)
+// one.
+export const SKILL_DURATIONS_S = Object.freeze({
+  ground_pick: 2.8, // alpha_ground_pick.onnx, walk-mode duration
+  roulade: 1.0, // roulade.onnx
+  kick_left: 0.5, // ball_kick_left.onnx
+  kick_right: 0.5, // ball_kick_right.onnx
+});
+
+// ground_pick's occupancy in roller mode: the robot runs roller_crouch.onnx
+// instead of alpha_ground_pick.onnx (docs/duckshow-format.md's authoring
+// mapping table names roller_crouch as "the roller-mode variant of ground
+// pick", never itself authored directly by a `do` event) -- a longer clip,
+// not just a renamed one. Mirrors python/duckshow/limits.py's
+// GROUND_PICK_ROLLER_DURATION_S.
+export const GROUND_PICK_ROLLER_DURATION_S = 3.5;
+
+// Skills whose manifest.json entry is "chain": true -- a repeat of one of
+// these immediately after itself is the documented way to keep the effect
+// going, not an authoring mistake, so the occupancy-overlap check below
+// must never warn about that specific pairing. Mirrors
+// python/duckshow/limits.py's CHAINING_SKILLS.
+export const CHAINING_SKILLS = Object.freeze(['roulade']);
+
+/**
+ * Occupancy duration (seconds) for a `do` skill event, given the drive mode
+ * active when it starts (a Sampler.modeAt() result: 'walk'/'roller'/null).
+ * null when no confirmed duration exists (currently only sit_toggle).
+ * Mirrors python/duckshow/limits.py's skill_duration_s.
+ */
+export function skillDurationS(skill, mode) {
+  if (skill === 'ground_pick' && mode === 'roller') return GROUND_PICK_ROLLER_DURATION_S;
+  return Object.prototype.hasOwnProperty.call(SKILL_DURATIONS_S, skill) ? SKILL_DURATIONS_S[skill] : null;
+}
+
+// Display-only metadata for the five `do` skills (the editor's event
+// inspector and timeline occupancy bars) -- not consulted by validate();
+// SKILL_DURATIONS_S / GROUND_PICK_ROLLER_DURATION_S above are the numbers
+// that actually drive the validator warning.
+export const SKILL_KIND = Object.freeze({
+  ground_pick: 'episodic',
+  roulade: 'episodic',
+  kick_left: 'episodic',
+  kick_right: 'episodic',
+  sit_toggle: 'scripted',
+});
+export const SKILL_POLICY_FILE = Object.freeze({
+  ground_pick: 'alpha_ground_pick.onnx',
+  roulade: 'roulade.onnx',
+  kick_left: 'ball_kick_left.onnx',
+  kick_right: 'ball_kick_right.onnx',
+  sit_toggle: 'alpha_sitstand.onnx',
+});
+export const GROUND_PICK_ROLLER_POLICY_FILE = 'roller_crouch.onnx';
+
+/** Display metadata for one skill event: {kind, policy, duration_s}. */
+export function skillInfo(skill, mode) {
+  const rollerish = skill === 'ground_pick' && mode === 'roller';
+  return {
+    kind: Object.prototype.hasOwnProperty.call(SKILL_KIND, skill) ? SKILL_KIND[skill] : null,
+    policy: rollerish ? GROUND_PICK_ROLLER_POLICY_FILE
+      : (Object.prototype.hasOwnProperty.call(SKILL_POLICY_FILE, skill) ? SKILL_POLICY_FILE[skill] : null),
+    duration_s: skillDurationS(skill, mode),
+  };
+}
+
 export const CURVE_TRACKS = Object.freeze(['locomotion', 'head', 'pose', 'mouth']);
 export const ALL_TRACKS = Object.freeze(['locomotion', 'head', 'pose', 'mouth', 'events', 'servo']);
 
@@ -664,6 +746,46 @@ function checkModeLocomotionOverlap(issues, role, norm, events, limits) {
   }
 }
 
+// Mirrors python/duckshow/validator.py's _check_skill_occupancy_overlap:
+// a `do` skill runs its whole episodic clip to completion once started
+// (docs/duckshow-format.md "Skill durations and occupancy") -- unlike
+// checkEventDensity's 0.25s spacing rule (command flooding, applies to
+// every discrete event regardless of type), scheduling a second skill
+// *inside* that window schedules against a duck that physically cannot
+// have finished the first one yet. WARNING, not an error: the robot still
+// accepts the command and something happens, so this is very likely not
+// what the author meant rather than something unsafe.
+//
+// Only consecutive pairs of `do` events are compared, each against the
+// skill immediately before it in time order, not every earlier skill.
+// roulade is "chain": true in the manifest: a roulade immediately
+// following a roulade is the documented way to keep rolling, not two
+// skills contending for one window (CHAINING_SKILLS), so that specific
+// pairing never warns. sit_toggle has no confirmed duration
+// (skillDurationS returns null for it) and so never occupies here,
+// whether it is the earlier or the later event.
+function checkSkillOccupancyOverlap(issues, role, norm, events) {
+  const skillEvents = events.filter((e) => e.do !== null).slice().sort((a, b) => a.t - b.t);
+  if (skillEvents.length < 2) return;
+  const sampler = createSampler(norm, role);
+  let prev = skillEvents[0];
+  for (const cur of skillEvents.slice(1)) {
+    if (!(CHAINING_SKILLS.includes(prev.do) && cur.do === prev.do)) {
+      const duration = skillDurationS(prev.do, sampler.modeAt(prev.t));
+      if (duration !== null) {
+        const end = prev.t + duration;
+        if (cur.t < end - EPS) {
+          const overlap = end - cur.t;
+          issue(issues, 'warning', role, 'events', cur.t,
+            `do=${pyRepr(cur.do)} at t=${pyFloatStr(cur.t)} begins ${pyFloatStr(overlap)}s into the `
+            + `${pyFloatStr(duration)}s execution of do=${pyRepr(prev.do)} at t=${pyFloatStr(prev.t)}`);
+        }
+      }
+    }
+    prev = cur;
+  }
+}
+
 function checkMetaDuration(issues, norm) {
   const duration = norm.meta.duration;
   if (duration === null) {
@@ -737,6 +859,7 @@ export function validate(show, limits = DEFAULT_LIMITS) {
     checkEventDensity(issues, role, tracks.events, limits);
     checkModeValue(issues, role, tracks.events);
     checkModeLocomotionOverlap(issues, role, norm, tracks.events, limits);
+    checkSkillOccupancyOverlap(issues, role, norm, tracks.events);
 
     checkServo(issues, role, tracks.servo);
   }

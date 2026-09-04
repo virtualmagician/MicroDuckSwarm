@@ -260,6 +260,116 @@ class ModeLocomotionOverlapTest(unittest.TestCase):
         self.assertFalse(_issues_by_message_substr(issues, "overlaps nonzero locomotion"))
 
 
+class SkillOccupancyOverlapTest(unittest.TestCase):
+    """A `do` skill occupies the robot for its full episodic duration
+    (docs/duckshow-format.md "Skill durations and occupancy"); a second
+    skill scheduled inside that window is a WARNING naming both skills,
+    the overlap, and the occupying skill's duration -- distinct from the
+    0.25s _check_event_density spacing rule, which still applies to
+    every discrete event regardless of type.
+    """
+
+    def _show_with_events(self, events, duration=10.0):
+        return Show(
+            format="duckshow/1",
+            meta=Meta(duration=duration),
+            requires=Requires(),
+            cast=[CastMember(role="lead")],
+            tracks={"lead": RoleTracks(events=events)},
+        )
+
+    def test_second_skill_inside_occupancy_window_warns_naming_both_and_overlap(self) -> None:
+        show = self._show_with_events(
+            [Event(t=0.0, do="ground_pick"), Event(t=0.5, do="kick_left")]
+        )
+        issues = validate(show)
+        warnings = [i for i in issues if i.severity == "warning"]
+        self.assertEqual(len(warnings), 1, warnings)
+        self.assertEqual(
+            warnings[0].message,
+            "do='kick_left' at t=0.5 begins 2.3s into the 2.8s execution of do='ground_pick' at t=0.0",
+        )
+        self.assertEqual(warnings[0].t, 0.5)
+        self.assertEqual([i for i in issues if i.severity == "error"], [])
+
+    def test_second_skill_after_occupancy_window_does_not_warn(self) -> None:
+        # Exactly at the boundary: the first skill's occupancy has ended.
+        show = self._show_with_events(
+            [Event(t=0.0, do="ground_pick"), Event(t=2.8, do="kick_left")]
+        )
+        issues = validate(show)
+        self.assertFalse(_issues_by_message_substr(issues, "execution of do="))
+
+    def test_roulade_followed_by_roulade_does_not_warn(self) -> None:
+        # manifest.json marks roulade.onnx "chain": true -- a repeat
+        # immediately after itself is the documented way to keep
+        # rolling, not two skills contending for one window, even though
+        # 0.5s is inside roulade's own 1.0s duration.
+        show = self._show_with_events(
+            [Event(t=0.0, do="roulade"), Event(t=0.5, do="roulade")]
+        )
+        issues = validate(show)
+        self.assertEqual([i for i in issues if i.severity == "warning"], [])
+        self.assertEqual([i for i in issues if i.severity == "error"], [])
+
+    def test_ground_pick_duration_depends_on_preceding_mode_event(self) -> None:
+        # Same events, only the drive mode differs: in roller mode
+        # ground_pick occupies 3.5s (roller_crouch.onnx) instead of 2.8s
+        # (alpha_ground_pick.onnx), resolved from the mode event
+        # preceding it -- long enough to newly overlap a skill that a
+        # walk-mode ground_pick would not have reached.
+        walk_show = self._show_with_events(
+            [Event(t=1.0, do="ground_pick"), Event(t=4.0, do="kick_right")]
+        )
+        self.assertEqual([i for i in validate(walk_show) if i.severity == "warning"], [])
+
+        roller_show = self._show_with_events(
+            [
+                Event(t=0.0, mode="roller"),
+                Event(t=1.0, do="ground_pick"),
+                Event(t=4.0, do="kick_right"),
+            ]
+        )
+        warnings = [i for i in validate(roller_show) if i.severity == "warning"]
+        self.assertEqual(len(warnings), 1, warnings)
+        self.assertEqual(
+            warnings[0].message,
+            "do='kick_right' at t=4.0 begins 0.5s into the 3.5s execution of do='ground_pick' at t=1.0",
+        )
+
+    def test_sit_toggle_has_no_duration_so_never_occupies(self) -> None:
+        # sit_toggle (alpha_sitstand.onnx) is "scripted", not "episodic" --
+        # no confirmed duration_s in the manifest -- so it never warns as
+        # the *occupying* skill, no matter how soon the next skill fires
+        # (as long as the unrelated 0.25s density rule is still honored).
+        show = self._show_with_events(
+            [Event(t=0.0, do="sit_toggle"), Event(t=0.3, do="kick_left")]
+        )
+        issues = validate(show)
+        self.assertEqual([i for i in issues if i.severity == "warning"], [])
+        self.assertEqual([i for i in issues if i.severity == "error"], [])
+
+    def test_sit_toggle_can_still_be_the_interrupting_skill(self) -> None:
+        # sit_toggle has no duration of its own, but it can still be the
+        # *later* skill that begins inside another skill's window.
+        show = self._show_with_events(
+            [Event(t=0.0, do="ground_pick"), Event(t=0.5, do="sit_toggle")]
+        )
+        warnings = [i for i in validate(show) if i.severity == "warning"]
+        self.assertEqual(len(warnings), 1, warnings)
+        self.assertIn("do='sit_toggle' at t=0.5", warnings[0].message)
+        self.assertIn("execution of do='ground_pick' at t=0.0", warnings[0].message)
+
+    def test_kicks_and_density_rule_are_independent(self) -> None:
+        # The pre-existing 0.25s _check_event_density rule still fires on
+        # its own terms, unaffected by this check.
+        show = self._show_with_events(
+            [Event(t=0.0, do="kick_left"), Event(t=0.1, do="kick_right")]
+        )
+        issues = validate(show)
+        self.assertTrue(_issues_by_message_substr(issues, "is less than 0.25s after previous event"))
+
+
 class FixtureParityTest(unittest.TestCase):
     """Data-driven regression coverage for shows/fixtures/*.duckshow.json
     against shows/fixtures/expected.json (F67): each fixture is a small,

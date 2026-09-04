@@ -247,4 +247,81 @@ final class DuckShowParityTests: XCTestCase {
         let undeclaredButValid = try self.show(tracks: "{\"events\":[{\"t\":1.0,\"mode\":\"roller\"}]}")
         XCTAssertTrue(undeclaredButValid.validate().isValid)
     }
+
+    // MARK: Skill occupancy overlap -- fixtures from python/tests/test_validator.py's SkillOccupancyOverlapTest
+
+    private func occupancyWarnings(_ report: ValidationReport) -> [ValidationIssue] {
+        report.warnings.filter { $0.message.contains("execution of do=") }
+    }
+
+    func testSecondSkillInsideOccupancyWindowWarnsNamingBothAndOverlap() throws {
+        let show = try show(tracks: "{\"events\":[{\"t\":0.0,\"do\":\"ground_pick\"},{\"t\":0.5,\"do\":\"kick_left\"}]}")
+        let report = show.validate()
+        XCTAssertTrue(report.isValid, "\(report.errors)")
+        XCTAssertEqual(
+            occupancyWarnings(report).map(\.message),
+            ["do='kick_left' at t=0.5 begins 2.3s into the 2.8s execution of do='ground_pick' at t=0.0"]
+        )
+    }
+
+    func testSecondSkillAfterOccupancyWindowDoesNotWarn() throws {
+        // Exactly at the boundary: the first skill's occupancy has ended.
+        let show = try show(tracks: "{\"events\":[{\"t\":0.0,\"do\":\"ground_pick\"},{\"t\":2.8,\"do\":\"kick_left\"}]}")
+        XCTAssertTrue(occupancyWarnings(show.validate()).isEmpty)
+    }
+
+    func testRouladeFollowedByRouladeDoesNotWarn() throws {
+        // manifest.json marks roulade.onnx "chain": true -- a repeat
+        // immediately after itself is the documented way to keep rolling,
+        // not two skills contending for one window, even though 0.5s is
+        // inside roulade's own 1.0s duration.
+        let show = try show(tracks: "{\"events\":[{\"t\":0.0,\"do\":\"roulade\"},{\"t\":0.5,\"do\":\"roulade\"}]}")
+        let report = show.validate()
+        XCTAssertTrue(report.isValid, "\(report.errors)")
+        XCTAssertTrue(report.warnings.isEmpty, "\(report.warnings)")
+    }
+
+    func testGroundPickDurationDependsOnPrecedingModeEvent() throws {
+        // Same events, only the drive mode differs: in roller mode
+        // ground_pick occupies 3.5s (roller_crouch.onnx) instead of 2.8s
+        // (alpha_ground_pick.onnx), resolved from the mode event preceding
+        // it -- long enough to newly overlap a skill a walk-mode
+        // ground_pick would not have reached.
+        let walkShow = try show(tracks: "{\"events\":[{\"t\":1.0,\"do\":\"ground_pick\"},{\"t\":4.0,\"do\":\"kick_right\"}]}")
+        XCTAssertTrue(occupancyWarnings(walkShow.validate()).isEmpty)
+
+        let rollerShow = try show(tracks: """
+        {"events":[{"t":0.0,"mode":"roller"},{"t":1.0,"do":"ground_pick"},{"t":4.0,"do":"kick_right"}]}
+        """, requires: rollerPolicy)
+        XCTAssertEqual(
+            occupancyWarnings(rollerShow.validate()).map(\.message),
+            ["do='kick_right' at t=4.0 begins 0.5s into the 3.5s execution of do='ground_pick' at t=1.0"]
+        )
+    }
+
+    func testSitToggleHasNoDurationSoNeverOccupies() throws {
+        // sit_toggle (alpha_sitstand.onnx) is "scripted", not "episodic" --
+        // no confirmed duration_s in the manifest -- so it never warns as
+        // the *occupying* skill.
+        let show = try show(tracks: "{\"events\":[{\"t\":0.0,\"do\":\"sit_toggle\"},{\"t\":0.3,\"do\":\"kick_left\"}]}")
+        let report = show.validate()
+        XCTAssertTrue(report.isValid, "\(report.errors)")
+        XCTAssertTrue(report.warnings.isEmpty, "\(report.warnings)")
+    }
+
+    func testSitToggleCanStillBeTheInterruptingSkill() throws {
+        let show = try show(tracks: "{\"events\":[{\"t\":0.0,\"do\":\"ground_pick\"},{\"t\":0.5,\"do\":\"sit_toggle\"}]}")
+        let warnings = occupancyWarnings(show.validate())
+        XCTAssertEqual(warnings.count, 1, "\(warnings)")
+        XCTAssertTrue(warnings[0].message.contains("do='sit_toggle' at t=0.5"), warnings[0].message)
+        XCTAssertTrue(warnings[0].message.contains("execution of do='ground_pick' at t=0.0"), warnings[0].message)
+    }
+
+    func testSkillOccupancyAndDensityRuleAreIndependent() throws {
+        // The pre-existing 0.25s spacing rule still fires on its own
+        // terms, unaffected by this check.
+        let show = try show(tracks: "{\"events\":[{\"t\":0.0,\"do\":\"kick_left\"},{\"t\":0.1,\"do\":\"kick_right\"}]}")
+        let report = show.validate()
+        XCTAssertTrue(report.errors.contains { $0.message.contains("is less than 0.25s after previous event") }, "\(report.errors)")
+    }
 }

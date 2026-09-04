@@ -588,6 +588,7 @@ public extension Show {
             validateEventActionNames(roleTracks.events, role: role, into: &report)
             validateModeValue(roleTracks.events, role: role, into: &report)
             validateModeOverlap(roleTracks.events, locomotion: roleTracks.locomotion, role: role, into: &report)
+            validateSkillOccupancyOverlap(roleTracks.events, role: role, into: &report)
         }
 
         return report
@@ -613,6 +614,57 @@ public extension Show {
     // string. A `mode` event's value must be one of these two. Kept in
     // sync with `python/duckshow/limits.py`'s `DRIVE_MODES`.
     static let driveModes: [String] = ["walk", "roller"]
+
+    // Per-skill occupancy durations (seconds), sourced from
+    // assets/microduck/policies/manifest.json (schema_version 2, control_hz
+    // 50; see docs/duckshow-format.md "Skill durations and occupancy" for
+    // the full authoring mapping table). Each of these `do` skills is an
+    // *episodic* policy clip: once started, it runs to completion, so a
+    // discrete event scheduled inside that window is scheduling against a
+    // duck that physically cannot have finished the first skill yet (see
+    // `validateSkillOccupancyOverlap` below). Kept in sync with
+    // `python/duckshow/limits.py`'s `SKILL_DURATIONS_S`.
+    //
+    // `sit_toggle` (alpha_sitstand.onnx) is deliberately absent: the
+    // manifest marks it "kind": "scripted", not "episodic", and gives it a
+    // ramp_s/unwind_s posture transition rather than a fixed duration_s --
+    // docs/bake-format.md records that the hand-off semantics for a second
+    // sit_toggle mid-ramp are unverified. There is no confirmed number to
+    // warn against, so sit_toggle never occupies for the purposes of this
+    // check, neither as the earlier (occupying) skill nor the later
+    // (interrupting) one.
+    static let skillDurationsS: [String: Double] = [
+        "ground_pick": 2.8, // alpha_ground_pick.onnx, walk-mode duration
+        "roulade": 1.0, // roulade.onnx
+        "kick_left": 0.5, // ball_kick_left.onnx
+        "kick_right": 0.5, // ball_kick_right.onnx
+    ]
+
+    /// ground_pick's occupancy in roller mode: the robot runs
+    /// roller_crouch.onnx instead of alpha_ground_pick.onnx
+    /// (docs/duckshow-format.md's authoring mapping table names
+    /// roller_crouch as "the roller-mode variant of ground pick", never
+    /// itself authored directly) -- a longer clip, not just a renamed one.
+    /// Kept in sync with `python/duckshow/limits.py`'s
+    /// `GROUND_PICK_ROLLER_DURATION_S`.
+    static let groundPickRollerDurationS: Double = 3.5
+
+    /// Skills whose manifest.json entry is "chain": true -- a repeat of one
+    /// of these immediately after itself is the documented way to keep the
+    /// effect going, not an authoring mistake, so the occupancy-overlap
+    /// check below must never warn about that specific pairing. Kept in
+    /// sync with `python/duckshow/limits.py`'s `CHAINING_SKILLS`.
+    static let chainingSkills: Set<String> = ["roulade"]
+
+    /// Occupancy duration (seconds) for a `do` skill event, given the
+    /// drive mode active when it starts (`"walk"`, `"roller"`, or `nil`
+    /// when no `mode` event precedes it). `nil` when no confirmed duration
+    /// exists (currently only `sit_toggle`). Mirrors
+    /// `python/duckshow/limits.py`'s `skill_duration_s`.
+    static func skillDurationS(_ skill: String, mode: String?) -> Double? {
+        if skill == "ground_pick" && mode == "roller" { return groundPickRollerDurationS }
+        return skillDurationsS[skill]
+    }
 
     // Limits — see docs/duckshow-format.md "Validation limits".
     private var limitVx: Double { 0.25 }
@@ -827,5 +879,59 @@ public extension Show {
             kf0.vy + (kf1.vy - kf0.vy) * frac,
             kf0.vyaw + (kf1.vyaw - kf0.vyaw) * frac
         )
+    }
+
+    /// The latest `mode` event with `t <= at` (for seek/late-join gait
+    /// resolution, and here for resolving which drive mode a `do` skill
+    /// starts in). Mirrors `python/duckshow/sampler.py`'s `Sampler.mode_at`.
+    private func modeAt(_ events: [Event], at t: Double) -> String? {
+        var best: (t: Double, mode: String)?
+        for event in events {
+            guard case .mode(let name) = event.action, event.t <= t else { continue }
+            if best == nil || event.t > best!.t { best = (event.t, name) }
+        }
+        return best?.mode
+    }
+
+    /// Parity with `validator.py:_check_skill_occupancy_overlap` /
+    /// `limits.py`'s `SKILL_DURATIONS_S` etc: a `do` skill runs its whole
+    /// episodic clip to completion once started -- scheduling a second
+    /// skill inside that window schedules against a duck that physically
+    /// cannot have finished the first one yet. WARNING, not an error: the
+    /// robot still accepts the command and something happens, so this is
+    /// very likely not what the author meant rather than something unsafe.
+    /// Distinct from `validateEvents`'s 0.25s spacing rule, which is about
+    /// command flooding and applies to every discrete event regardless of
+    /// type -- the two run independently and can both fire on one pair.
+    ///
+    /// Only consecutive pairs of `do` events are compared (mirroring
+    /// `validateEvents`'s `previous` walk), each against the skill
+    /// immediately before it in time order, not every earlier skill.
+    /// `roulade` is "chain": true in the manifest: a `roulade` immediately
+    /// following a `roulade` is the documented way to keep rolling, not two
+    /// skills contending for one window (`Show.chainingSkills`), so that
+    /// specific pairing never warns. `sit_toggle` has no confirmed duration
+    /// (`Show.skillDurationS` returns `nil` for it) and so never occupies
+    /// here, whether it is the earlier or the later event.
+    private func validateSkillOccupancyOverlap(
+        _ events: [Event], role: String, into report: inout ValidationReport
+    ) {
+        let skillEvents = events.compactMap { event -> (t: Double, skill: String)? in
+            guard case .skill(let name) = event.action else { return nil }
+            return (event.t, name)
+        }.sorted { $0.t < $1.t }
+        guard skillEvents.count >= 2 else { return }
+        var prev = skillEvents[0]
+        for cur in skillEvents.dropFirst() {
+            defer { prev = cur }
+            if Self.chainingSkills.contains(prev.skill) && cur.skill == prev.skill { continue }
+            guard let duration = Self.skillDurationS(prev.skill, mode: modeAt(events, at: prev.t)) else { continue }
+            let end = prev.t + duration
+            if cur.t < end - epsilon {
+                let overlap = end - cur.t
+                report.warnings.append(ValidationIssue(role: role, track: "events", t: cur.t,
+                    message: "do='\(cur.skill)' at t=\(cur.t) begins \(overlap)s into the \(duration)s execution of do='\(prev.skill)' at t=\(prev.t)"))
+            }
+        }
     }
 }
