@@ -237,8 +237,9 @@
 <div id="banner" class="hidden">
   <button onclick="this.parentNode.classList.add('hidden')">dismiss</button>
   <b>The editor module did not load.</b>
-  <div id="banner-text">This page imports <code>./duckshow-core.js</code> as an ES module. When the file is opened from <code>file://</code>, Chrome and Safari refuse module imports (Firefox allows them).
-  Serve the repo instead: run <code>python3 -m http.server 8000</code> in the repo root and open <code>http://localhost:8000/editor/duckshow-editor.html</code>.</div>
+  <div id="banner-text">This page imports <code>./duckshow-core.js</code> as an ES module. Two things cause that to fail.
+  Opened from <code>file://</code>, Chrome and Safari refuse module imports outright (Firefox allows them) — serve the repo instead: run <code>./scripts/edit.sh</code> from the repo root, which starts the editor server and opens this page for you.
+  Served, but by something other than <code>scripts/editor_server.py</code> (a plain <code>python3 -m http.server</code>, for instance), your browser may be holding a <em>cached, older</em> copy of one of these modules while this page is current — a mismatch that breaks the editor with no obvious cause. Hard-reload (<code>⇧⌘R</code>, or <code>Ctrl+Shift+R</code>) and use <code>./scripts/edit.sh</code>, which serves everything <code>no-store</code>.</div>
 </div>
 
 <header id="topbar">
@@ -350,6 +351,39 @@ import { DUCK_HEIGHT_M } from './viewer-duck.js';
 import * as bakeCache from './bake-cache.js'; // Feature A: baked-physics pose cache playback (docs/viewer.md "Create Preview")
 import { loadRealDuckAssets } from './duck-mesh.js'; // Feature B: real MicroDuck meshes when assets/microduck/ is present
 import * as cp from './create-preview.js'; // Feature C: the Create Preview button itself, talking to scripts/editor_server.py
+
+// ---------------------------------------------------------------------------
+// Module-skew guard
+// ---------------------------------------------------------------------------
+// The editor is a set of separately-fetched ES modules: no bundler, no content
+// hashes in the URLs, and `import` has no cache-mode option the way fetch()
+// does (every data fetch in this file already passes {cache:'no-cache'}; the
+// module graph cannot). A browser is therefore free to pair THIS freshly
+// fetched HTML with a heuristically-cached older duckshow-core.js.
+//
+// That is not hypothetical. It happened: this file read core.SKILL_DURATIONS_S,
+// the cached core.js predated that export, and the resulting TypeError fired
+// deep inside boot()'s first setShow() -- so boot aborted before honouring
+// ?show=, the two-role starter show stayed on screen, and nothing said why.
+// The symptom ("nothing in the editor works") pointed nowhere near the cause.
+//
+// scripts/editor_server.py now sends no-store, which stops NEW skew. It cannot
+// reach a cache entry the browser never revalidates -- only a changed URL or a
+// hard reload does. So check the contract explicitly and fail with the one
+// instruction that actually works, instead of letting an arbitrary property
+// access throw somewhere downstream.
+const EXPECTED_CORE_API = 1;
+if (core.MODULE_API !== EXPECTED_CORE_API) {
+  const got = core.MODULE_API === undefined ? 'an older build (no MODULE_API)' : `API ${core.MODULE_API}`;
+  const msg = `duckshow-core.js is ${got}, but this page needs API ${EXPECTED_CORE_API}. `
+            + 'Your browser is running a cached copy of the editor scripts. '
+            + 'Hard-reload this page (⇧⌘R on macOS, Ctrl+Shift+R elsewhere) to pick up the current ones.';
+  const banner = document.getElementById('banner');
+  const text = document.getElementById('banner-text');
+  if (text) text.textContent = msg;          // leave the dismiss button in place
+  if (banner) banner.classList.remove('hidden');
+  throw new Error(msg); // stop before boot() so nothing half-initialises
+}
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -2598,7 +2632,24 @@ async function boot() {
   state.rehearsal = dv.pruneRehearsalState(loadRehearsalState(), roles());
   renderAll();
 }
-boot();
+// A throw anywhere in boot() used to leave the page in whatever half-built
+// state it had reached, with nothing on screen to say so: the editor still
+// *looked* loaded (chrome, empty timeline, the two-role starter show that
+// boot installs before fetching the real one), so the failure read as
+// "nothing in the editor works" rather than "boot died on line N". That
+// happened for real when a browser paired fresh HTML with a cached, older
+// duckshow-core.js: the missing export threw inside the first setShow(),
+// and ?show= never got a chance to load. scripts/editor_server.py now sends
+// no-store so that specific skew cannot recur, but any future boot-time
+// throw deserves to be visible rather than silent -- surface it in the
+// status bar (and keep it in the console) instead of failing quietly.
+boot().catch((err) => {
+  console.error('boot() failed', err);
+  try {
+    status(`editor failed to start: ${err && err.message ? err.message : err}. `
+         + 'If you have just pulled changes, hard-reload the page (⇧⌘R) to clear cached scripts.', 'error');
+  } catch (_) { /* status() itself may be unavailable this early */ }
+});
 </script>
 </body>
 </html>

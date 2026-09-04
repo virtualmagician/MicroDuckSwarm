@@ -10,6 +10,7 @@ import {
   BAKE_JOB_STATUSES, isTerminalBakeStatus,
   formatBakeProgress, formatBakeSummary, formatBakeError, bakeLogEntries,
 } from '../create-preview.js';
+import { summarize } from '../bake-cache.js';
 
 // ---------------------------------------------------------------------------
 // normalizeShowPath
@@ -123,9 +124,43 @@ test('formatBakeProgress: degrades gracefully without a known cast size', () => 
   assert.equal(formatBakeProgress(job), 'baking lead 0%…');
 });
 
-test('formatBakeSummary: matches bake-cache.js\'s summarize() phrasing so both paths read the same', () => {
+test('formatBakeSummary: accepts the server job.summary shape (snake_case)', () => {
+  // scripts/editor_server.py's _summarize_cache() spells these the way the
+  // on-disk duckbake/1 cache does.
   const summary = { roles: 8, duration: 64, unsimulated_roles: ['lead'], fallen_roles: [] };
   assert.equal(formatBakeSummary(summary), '8 roles, 64s · 1 unsimulated');
+});
+
+test('formatBakeSummary: accepts bake-cache.js summarize() output (camelCase), for real', () => {
+  // Regression: this used to be asserted against a hand-written snake_case
+  // literal, so it never actually exercised the Create Preview path -- which
+  // passes summarize()'s camelCase object. Both note fields silently read as
+  // undefined there, so a bake with an unsimulated role or a fallen duck
+  // reported a clean "N roles, Ns". Drive the REAL producer here so the two
+  // shapes can never drift apart again unnoticed.
+  const cache = {
+    roles: ['lead', 'echo', 'drift', 'spark', 'reed', 'wren', 'sable', 'flare'],
+    show: { duration: 64 },
+    unsimulated_roles: ['lead'],
+    fallen_roles: ['echo'],
+  };
+  const summary = summarize(cache);
+  assert.deepEqual(Object.keys(summary).sort(), ['duration', 'fallenRoles', 'roles', 'unsimulatedRoles']);
+  assert.equal(formatBakeSummary(summary), '8 roles, 64s · 1 unsimulated · 1 fell');
+});
+
+test('formatBakeSummary: both producers render an identical line for the same cache', () => {
+  // The docstring's actual promise: "the two paths read identically".
+  const cache = {
+    roles: ['a', 'b'], show: { duration: 16 },
+    unsimulated_roles: ['a'], fallen_roles: [],
+  };
+  const fromPlayBaked = formatBakeSummary(summarize(cache));
+  const fromCreatePreview = formatBakeSummary({
+    roles: cache.roles.length, duration: cache.show.duration,
+    unsimulated_roles: cache.unsimulated_roles, fallen_roles: cache.fallen_roles,
+  });
+  assert.equal(fromPlayBaked, fromCreatePreview);
 });
 
 test('formatBakeSummary: no notes clause when nothing unsimulated or fallen', () => {

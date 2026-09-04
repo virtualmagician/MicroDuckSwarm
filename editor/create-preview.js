@@ -91,8 +91,19 @@ export function formatBakeProgress(job) {
 export function formatBakeSummary(summary) {
   if (!summary) return '';
   const notes = [];
-  const un = Array.isArray(summary.unsimulated_roles) ? summary.unsimulated_roles.length : 0;
-  const fell = Array.isArray(summary.fallen_roles) ? summary.fallen_roles.length : 0;
+  // Two producers feed this, and they spell these two fields differently:
+  // scripts/editor_server.py's _summarize_cache() ships snake_case in
+  // job.summary (matching the on-disk duckbake/1 field names), while
+  // bake-cache.js's summarize() returns camelCase for an already-parsed
+  // cache. The Create Preview path passes the camelCase one; reading only
+  // snake_case here meant `un`/`fell` were always 0 on that path, so a bake
+  // containing an unsimulated role (roller mode) or a duck that fell over
+  // reported a clean "8 roles, 64s" -- silently, and only on the path most
+  // people use. Accept either spelling rather than making one caller convert.
+  const unList = summary.unsimulated_roles ?? summary.unsimulatedRoles;
+  const fellList = summary.fallen_roles ?? summary.fallenRoles;
+  const un = Array.isArray(unList) ? unList.length : 0;
+  const fell = Array.isArray(fellList) ? fellList.length : 0;
   if (un) notes.push(`${un} unsimulated`);
   if (fell) notes.push(`${fell} fell`);
   return `${summary.roles} roles, ${summary.duration}s${notes.length ? ` · ${notes.join(' · ')}` : ''}`;

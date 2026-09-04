@@ -327,6 +327,40 @@ class Handler(http.server.SimpleHTTPRequestHandler):
     def log_message(self, fmt: str, *args) -> None:  # keep default stderr access logging
         super().log_message(fmt, *args)
 
+    # -- caching: never, for anything ------------------------------------
+    #
+    # SimpleHTTPRequestHandler sends Last-Modified but no Cache-Control, so a
+    # browser is free to apply *heuristic* caching (RFC 9111 4.2.2) and reuse
+    # an asset without revalidating. The editor is a set of separately-fetched
+    # ES modules, and heuristic caching applies to each one independently --
+    # which means a browser can pair a freshly-fetched duckshow-editor.html
+    # with a stale cached duckshow-core.js from a previous session. That skew
+    # is not a soft failure: the HTML referenced core.SKILL_DURATIONS_S, the
+    # cached core.js predated that export, and the resulting TypeError fired
+    # inside boot()'s first setShow() -- aborting boot before it could load
+    # the ?show= file, leaving the two-role starter show on screen and the
+    # rest of the editor uninitialised. It looked like "the editor is broken",
+    # not like "one asset is stale", which is exactly what makes it worth
+    # preventing at the source rather than debugging again.
+    #
+    # This is a localhost authoring server whose whole job is to show the
+    # working tree as it is right now, so correctness beats every byte of
+    # caching. no-store on every response (not just /api/*, which already set
+    # it) is the blunt, complete fix.
+    def send_response(self, *args, **kwargs) -> None:
+        self._cache_control_sent = False
+        super().send_response(*args, **kwargs)
+
+    def send_header(self, keyword: str, value: str) -> None:
+        if keyword.lower() == "cache-control":
+            self._cache_control_sent = True
+        super().send_header(keyword, value)
+
+    def end_headers(self) -> None:
+        if not getattr(self, "_cache_control_sent", False):
+            self.send_header("Cache-Control", "no-store, must-revalidate")
+        super().end_headers()
+
     # -- JSON helpers --------------------------------------------------
     def _json(self, status: int, obj: dict) -> None:
         body = json.dumps(obj).encode("utf-8")

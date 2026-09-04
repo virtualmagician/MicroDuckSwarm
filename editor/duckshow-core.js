@@ -1,5 +1,25 @@
 // duckshow-core.js — pure ES module, no DOM, no dependencies.
 //
+// MODULE_API: bump this whenever this module's *exported surface* changes --
+// a new export, a removed one, a renamed one, or a changed shape that
+// duckshow-editor.html reads. duckshow-editor.html asserts it at boot and
+// refuses to start with a clear "hard-reload" message on a mismatch.
+//
+// This exists because the editor is a set of separately-fetched ES modules
+// with no bundler and no content hashes in their URLs, so a browser can pair
+// a freshly-fetched duckshow-editor.html with a heuristically-cached older
+// copy of THIS file. That happened: the HTML read core.SKILL_DURATIONS_S, the
+// cached module predated that export, and the TypeError fired inside boot()'s
+// first setShow() -- aborting boot before it honoured ?show=, leaving the
+// two-role starter show on screen with no error anywhere. It read as "the
+// whole editor is broken".
+//
+// scripts/editor_server.py now sends no-store, which prevents NEW skew. It
+// cannot help a browser that already holds a stale entry: no response header
+// reaches a cache entry that is never revalidated. Only a changed URL or a
+// hard reload does. So this constant is the client-side backstop -- it turns
+// an arbitrary downstream TypeError into one accurate instruction.
+//
 // The third implementation of the .duckshow/1 contract (docs/duckshow-format.md),
 // alongside python/duckshow (canonical) and SwarmLink/Sources/SwarmLink/DuckShow.swift.
 //
@@ -29,6 +49,8 @@ export const INTERP_LINEAR = 'linear';
 export const INTERP_SMOOTH = 'smooth';
 export const VALID_INTERPS = Object.freeze([INTERP_STEP, INTERP_LINEAR, INTERP_SMOOTH]);
 export const DEFAULT_INTERP = INTERP_LINEAR;
+
+export const MODULE_API = 1;
 
 export const SKILLS = Object.freeze(['ground_pick', 'kick_left', 'kick_right', 'sit_toggle', 'roulade']);
 export const SOUND_TAGS = Object.freeze(['alarm', 'greet', 'inquire', 'peck', 'chirp', 'coo', 'wheee']);

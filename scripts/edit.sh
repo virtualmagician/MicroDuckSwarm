@@ -112,11 +112,36 @@ else
   # editor still works; Create Preview will report itself unavailable.
   kill "$SERVER_PID" 2>/dev/null || true
   wait "$SERVER_PID" 2>/dev/null || true
-  echo "editor_server.py did not start (see tmp/editor-server.log) — falling back to plain http.server. Create Preview will be unavailable."
+  # The fallback is NOT merely "the same server minus Create Preview".
+  # `python3 -m http.server` sends Last-Modified and no Cache-Control, which
+  # lets a browser apply heuristic freshness (RFC 9111 4.2.2) to each ES
+  # module independently. The editor has no bundler and no content hashes in
+  # its module URLs, so one fallback session can leave a stale
+  # duckshow-core.js cached at this exact origin and path -- and a LATER,
+  # perfectly good editor_server.py session cannot undo it, because a cache
+  # entry that is never revalidated never sees the new no-store header. That
+  # is a fresh HTML paired with an old module: the editor breaks with no
+  # visible cause. Say so plainly rather than naming Create Preview as the
+  # only casualty, and keep the fallback's own output instead of discarding
+  # it, so a second failure is not silent too.
+  echo ""
+  echo "WARNING: editor_server.py did not start (see tmp/editor-server.log)."
+  echo "         Falling back to plain http.server, which means:"
+  echo "           - Create Preview is unavailable (no bake API), and"
+  echo "           - assets are served WITHOUT Cache-Control, so your browser may"
+  echo "             cache editor scripts and later pair them with a newer page."
+  echo "         If the editor misbehaves, hard-reload (Shift-Cmd-R / Ctrl-Shift-R)."
+  echo "         Prefer fixing the cause above and re-running this script."
+  echo ""
   BAKE_SERVER=0
-  python3 -m http.server "$PORT" --bind 127.0.0.1 >/dev/null 2>&1 &
+  python3 -m http.server "$PORT" --bind 127.0.0.1 >>"$SERVER_LOG" 2>&1 &
   SERVER_PID=$!
-  wait_for_port "$PORT" "$SERVER_PID" || true
+  if ! wait_for_port "$PORT" "$SERVER_PID"; then
+    echo "the http.server fallback could not bind port $PORT either (see $SERVER_LOG)."
+    echo "Something else is already listening there — opening the browser now would"
+    echo "load whatever that is, not this checkout. Re-run with a different PORT."
+    exit 1
+  fi
 fi
 
 echo "duckshow editor → $URL"
