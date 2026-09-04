@@ -85,9 +85,10 @@ test('interp must be step/linear/smooth', () => {
 });
 
 test('limits table: over-limit errors with Python float text, at-limit passes', () => {
-  assert.deepEqual(messages(errors(show({ locomotion: [{ t: 0.0, vx: 0.5 }] }))), ['vx=0.5 exceeds limit of +/-0.25']);
-  assert.deepEqual(errors(show({ locomotion: [{ t: 0.0, vx: DEFAULT_LIMITS.max_abs_vx, vy: -0.2, vyaw: 1.5 }] })), []);
-  assert.deepEqual(messages(errors(show({ locomotion: [{ t: 0.0, vy: 0.21 }] }))), ['vy=0.21 exceeds limit of +/-0.2']);
+  assert.deepEqual(messages(errors(show({ locomotion: [{ t: 0.0, vx: 0.5 }] }))), [`vx=0.5 exceeds limit of +/-${DEFAULT_LIMITS.max_abs_vx}`]);
+  assert.deepEqual(errors(show({ locomotion: [{ t: 0.0, vx: DEFAULT_LIMITS.max_abs_vx, vy: -DEFAULT_LIMITS.max_abs_vy, vyaw: DEFAULT_LIMITS.max_abs_vyaw }] })), []);
+  const overVy = Number((DEFAULT_LIMITS.max_abs_vy + 0.01).toFixed(4));
+  assert.deepEqual(messages(errors(show({ locomotion: [{ t: 0.0, vy: overVy }] }))), [`vy=${overVy} exceeds limit of +/-${DEFAULT_LIMITS.max_abs_vy}`]);
   assert.deepEqual(messages(errors(show({ locomotion: [{ t: 0.0, vyaw: -2 }] }))), ['vyaw=-2.0 exceeds limit of +/-1.5']);
   assert.deepEqual(messages(errors(show({ head: [{ t: 0.0, head_yaw: 2.0 }] }))), ['head_yaw=2.0 exceeds limit of +/-1.2']);
   assert.deepEqual(messages(errors(show({ pose: [{ t: 0.0, z: 1.0 }] }))), ['z=1.0 exceeds limit of +/-0.05']);
@@ -250,7 +251,7 @@ test('issue order matches Python: duration, then per role (sort, interp, limits,
   const perRole = [
     'locomotion keyframes are not sorted by t',
     "locomotion keyframe interp='bogus' is not one of ('step', 'linear', 'smooth')",
-    'vx=0.5 exceeds limit of +/-0.25',
+    `vx=0.5 exceeds limit of +/-${DEFAULT_LIMITS.max_abs_vx}`,
     'open=2.0 outside allowed range [0.0, 1.0]',
     "do='fly' is not a recognized skill (expected one of ('ground_pick', 'kick_left', 'kick_right', 'sit_toggle', 'roulade'))",
     'event at t=0.5 is less than 0.25s after previous event at t=0.4',

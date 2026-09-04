@@ -141,14 +141,33 @@ Shows that need a non-stock policy declare it so SwarmLink can provision it and 
 
 | Quantity | Limit |
 |---|---|
-| \|vx\| | ≤ 0.25 m/s |
-| \|vy\| | ≤ 0.20 m/s |
+| \|vx\| | ≤ 0.40 m/s |
+| \|vy\| | ≤ 0.40 m/s |
 | \|vyaw\| | ≤ 1.5 rad/s |
 | head angles | ≤ 1.2 rad each |
 | pose z / roll / pitch | ≤ 0.05 m / 0.5 rad / 0.5 rad |
 | mouth open | 0.0 – 1.0 |
 | event density | ≥ 0.25 s between discrete events per duck |
 | skill occupancy | a `do` skill event starting before the previous skill's duration has elapsed → **warning** (see "Skill durations and occupancy" above); `roulade` chaining into itself is exempt |
+
+### Why the translation limits are 0.40 (raised 2026-09-04)
+
+They were 0.25 / 0.20, picked as cautious stage speeds before anything was measured. Measuring `alpha_walking.onnx` showed those caps were not conservative, they were **unusable**: the policy has a sharp stand/walk gate and emits no gait at all below a threshold per axis (`docs/bake-format.md`, "The low-speed problem"). Against the old caps:
+
+| axis | gait threshold | old cap | old usable band |
+|---|---|---|---|
+| `vx` forward | 0.238 m/s | 0.25 | 0.238 to 0.25 |
+| `vx` backward | -0.326 m/s | -0.25 | **empty** |
+| `vy` lateral | 0.312 m/s | 0.20 | **empty** |
+| `vyaw` | 1.047 rad/s | 1.5 | 1.047 to 1.5 |
+
+A cap below the gate does not make the duck move slowly and safely; it makes the duck **not move at all**, while the show still validates clean. Every reverse and every sidestep in every show in this repo was silently a no-op. Forward motion survived only in a 0.012 m/s sliver at the very top of the legal range.
+
+0.40 is not an arbitrary loosening. It is the edge of the policy's own training distribution: `microduck_rl` sampled `lin_vel_x` uniformly from **(-0.4, 0.4)**, so commanding beyond it asks for behaviour the policy was never trained to produce. `vy` is raised to match rather than to a separately-derived number, since no per-axis training range for lateral velocity has been found; if one turns up, tighten it.
+
+`vyaw` stays 1.5: it was already above its gate and already usable.
+
+**These thresholds are measured in the baker's simulated plant, not on hardware.** That plant also under-tracks (a 0.40 command yields about 0.154 m/s achieved), and a plant that under-tracks gates later than the real machine, so a real duck may well gait below these numbers. The day-one hardware measurement is specific and cheap: ramp `vx`, `vy` and `vyaw` from zero and record where stepping begins. Retune both these caps and `docs/bake-format.md`'s table from those three numbers.
 
 Limits live in `python/duckshow/limits.py` as data, not scattered constants; the validator reports every violation with role, track, and `t`.
 

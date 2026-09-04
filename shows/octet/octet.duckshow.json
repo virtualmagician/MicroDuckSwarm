@@ -344,28 +344,28 @@
         },
         {
           "t": 12.5,
-          "vx": 0.15,
+          "vx": 0.34,
           "vy": 0.0,
           "vyaw": 0.0,
           "interp": "linear"
         },
         {
           "t": 13.5,
-          "vx": 0.15,
+          "vx": 0.34,
           "vy": 0.0,
           "vyaw": 0.0,
           "interp": "linear"
         },
         {
           "t": 14.0,
-          "vx": -0.15,
+          "vx": -0.34,
           "vy": 0.0,
           "vyaw": 0.0,
           "interp": "linear"
         },
         {
           "t": 15.0,
-          "vx": -0.15,
+          "vx": -0.34,
           "vy": 0.0,
           "vyaw": 0.0,
           "interp": "linear"
@@ -386,28 +386,28 @@
         },
         {
           "t": 52.5,
-          "vx": 0.2,
+          "vx": 0.38,
           "vy": 0.0,
           "vyaw": 0.0,
           "interp": "linear"
         },
         {
           "t": 53.5,
-          "vx": 0.2,
+          "vx": 0.38,
           "vy": 0.0,
           "vyaw": 0.0,
           "interp": "linear"
         },
         {
           "t": 54.0,
-          "vx": -0.2,
+          "vx": -0.38,
           "vy": 0.0,
           "vyaw": 0.0,
           "interp": "linear"
         },
         {
           "t": 55.0,
-          "vx": -0.2,
+          "vx": -0.38,
           "vy": 0.0,
           "vyaw": 0.0,
           "interp": "linear"
@@ -719,28 +719,28 @@
         },
         {
           "t": 12.5,
-          "vx": 0.15,
+          "vx": 0.34,
           "vy": 0.0,
           "vyaw": 0.0,
           "interp": "linear"
         },
         {
           "t": 13.5,
-          "vx": 0.15,
+          "vx": 0.34,
           "vy": 0.0,
           "vyaw": 0.0,
           "interp": "linear"
         },
         {
           "t": 14.0,
-          "vx": -0.15,
+          "vx": -0.34,
           "vy": 0.0,
           "vyaw": 0.0,
           "interp": "linear"
         },
         {
           "t": 15.0,
-          "vx": -0.15,
+          "vx": -0.34,
           "vy": 0.0,
           "vyaw": 0.0,
           "interp": "linear"
@@ -761,28 +761,28 @@
         },
         {
           "t": 52.5,
-          "vx": 0.2,
+          "vx": 0.38,
           "vy": 0.0,
           "vyaw": 0.0,
           "interp": "linear"
         },
         {
           "t": 53.5,
-          "vx": 0.2,
+          "vx": 0.38,
           "vy": 0.0,
           "vyaw": 0.0,
           "interp": "linear"
         },
         {
           "t": 54.0,
-          "vx": -0.2,
+          "vx": -0.38,
           "vy": 0.0,
           "vyaw": 0.0,
           "interp": "linear"
         },
         {
           "t": 55.0,
-          "vx": -0.2,
+          "vx": -0.38,
           "vy": 0.0,
           "vyaw": 0.0,
           "interp": "linear"
@@ -1078,28 +1078,28 @@
         },
         {
           "t": 12.5,
-          "vx": 0.15,
+          "vx": 0.34,
           "vy": 0.0,
           "vyaw": 0.0,
           "interp": "linear"
         },
         {
           "t": 13.5,
-          "vx": 0.15,
+          "vx": 0.34,
           "vy": 0.0,
           "vyaw": 0.0,
           "interp": "linear"
         },
         {
           "t": 14.0,
-          "vx": -0.15,
+          "vx": -0.34,
           "vy": 0.0,
           "vyaw": 0.0,
           "interp": "linear"
         },
         {
           "t": 15.0,
-          "vx": -0.15,
+          "vx": -0.34,
           "vy": 0.0,
           "vyaw": 0.0,
           "interp": "linear"
@@ -1120,28 +1120,28 @@
         },
         {
           "t": 52.5,
-          "vx": 0.2,
+          "vx": 0.38,
           "vy": 0.0,
           "vyaw": 0.0,
           "interp": "linear"
         },
         {
           "t": 53.5,
-          "vx": 0.2,
+          "vx": 0.38,
           "vy": 0.0,
           "vyaw": 0.0,
           "interp": "linear"
         },
         {
           "t": 54.0,
-          "vx": -0.2,
+          "vx": -0.38,
           "vy": 0.0,
           "vyaw": 0.0,
           "interp": "linear"
         },
         {
           "t": 55.0,
-          "vx": -0.2,
+          "vx": -0.38,
           "vy": 0.0,
           "vyaw": 0.0,
           "interp": "linear"
@@ -1417,28 +1417,28 @@
         },
         {
           "t": 12.5,
-          "vx": 0.15,
+          "vx": 0.34,
           "vy": 0.0,
           "vyaw": 0.0,
           "interp": "linear"
         },
         {
           "t": 13.5,
-          "vx": 0.15,
+          "vx": 0.34,
           "vy": 0.0,
           "vyaw": 0.0,
           "interp": "linear"
         },
         {
           "t": 14.0,
-          "vx": -0.15,
+          "vx": -0.34,
           "vy": 0.0,
           "vyaw": 0.0,
           "interp": "linear"
         },
         {
           "t": 15.0,
-          "vx": -0.15,
+          "vx": -0.34,
           "vy": 0.0,
           "vyaw": 0.0,
           "interp": "linear"
@@ -1459,28 +1459,28 @@
         },
         {
           "t": 52.5,
-          "vx": 0.2,
+          "vx": 0.38,
           "vy": 0.0,
           "vyaw": 0.0,
           "interp": "linear"
         },
         {
           "t": 53.5,
-          "vx": 0.2,
+          "vx": 0.38,
           "vy": 0.0,
           "vyaw": 0.0,
           "interp": "linear"
         },
         {
           "t": 54.0,
-          "vx": -0.2,
+          "vx": -0.38,
           "vy": 0.0,
           "vyaw": 0.0,
           "interp": "linear"
         },
         {
           "t": 55.0,
-          "vx": -0.2,
+          "vx": -0.38,
           "vy": 0.0,
           "vyaw": 0.0,
           "interp": "linear"
@@ -1813,28 +1813,28 @@
         },
         {
           "t": 12.5,
-          "vx": 0.15,
+          "vx": 0.34,
           "vy": 0.0,
           "vyaw": 0.0,
           "interp": "linear"
         },
         {
           "t": 13.5,
-          "vx": 0.15,
+          "vx": 0.34,
           "vy": 0.0,
           "vyaw": 0.0,
           "interp": "linear"
         },
         {
           "t": 14.0,
-          "vx": -0.15,
+          "vx": -0.34,
           "vy": 0.0,
           "vyaw": 0.0,
           "interp": "linear"
         },
         {
           "t": 15.0,
-          "vx": -0.15,
+          "vx": -0.34,
           "vy": 0.0,
           "vyaw": 0.0,
           "interp": "linear"
@@ -1855,28 +1855,28 @@
         },
         {
           "t": 52.5,
-          "vx": 0.2,
+          "vx": 0.38,
           "vy": 0.0,
           "vyaw": 0.0,
           "interp": "linear"
         },
         {
           "t": 53.5,
-          "vx": 0.2,
+          "vx": 0.38,
           "vy": 0.0,
           "vyaw": 0.0,
           "interp": "linear"
         },
         {
           "t": 54.0,
-          "vx": -0.2,
+          "vx": -0.38,
           "vy": 0.0,
           "vyaw": 0.0,
           "interp": "linear"
         },
         {
           "t": 55.0,
-          "vx": -0.2,
+          "vx": -0.38,
           "vy": 0.0,
           "vyaw": 0.0,
           "interp": "linear"
@@ -2192,28 +2192,28 @@
         },
         {
           "t": 12.5,
-          "vx": 0.15,
+          "vx": 0.34,
           "vy": 0.0,
           "vyaw": 0.0,
           "interp": "linear"
         },
         {
           "t": 13.5,
-          "vx": 0.15,
+          "vx": 0.34,
           "vy": 0.0,
           "vyaw": 0.0,
           "interp": "linear"
         },
         {
           "t": 14.0,
-          "vx": -0.15,
+          "vx": -0.34,
           "vy": 0.0,
           "vyaw": 0.0,
           "interp": "linear"
         },
         {
           "t": 15.0,
-          "vx": -0.15,
+          "vx": -0.34,
           "vy": 0.0,
           "vyaw": 0.0,
           "interp": "linear"
@@ -2234,28 +2234,28 @@
         },
         {
           "t": 52.5,
-          "vx": 0.2,
+          "vx": 0.38,
           "vy": 0.0,
           "vyaw": 0.0,
           "interp": "linear"
         },
         {
           "t": 53.5,
-          "vx": 0.2,
+          "vx": 0.38,
           "vy": 0.0,
           "vyaw": 0.0,
           "interp": "linear"
         },
         {
           "t": 54.0,
-          "vx": -0.2,
+          "vx": -0.38,
           "vy": 0.0,
           "vyaw": 0.0,
           "interp": "linear"
         },
         {
           "t": 55.0,
-          "vx": -0.2,
+          "vx": -0.38,
           "vy": 0.0,
           "vyaw": 0.0,
           "interp": "linear"
@@ -2567,28 +2567,28 @@
         },
         {
           "t": 12.5,
-          "vx": 0.15,
+          "vx": 0.34,
           "vy": 0.0,
           "vyaw": 0.0,
           "interp": "linear"
         },
         {
           "t": 13.5,
-          "vx": 0.15,
+          "vx": 0.34,
           "vy": 0.0,
           "vyaw": 0.0,
           "interp": "linear"
         },
         {
           "t": 14.0,
-          "vx": -0.15,
+          "vx": -0.34,
           "vy": 0.0,
           "vyaw": 0.0,
           "interp": "linear"
         },
         {
           "t": 15.0,
-          "vx": -0.15,
+          "vx": -0.34,
           "vy": 0.0,
           "vyaw": 0.0,
           "interp": "linear"
@@ -2609,28 +2609,28 @@
         },
         {
           "t": 52.5,
-          "vx": 0.2,
+          "vx": 0.38,
           "vy": 0.0,
           "vyaw": 0.0,
           "interp": "linear"
         },
         {
           "t": 53.5,
-          "vx": 0.2,
+          "vx": 0.38,
           "vy": 0.0,
           "vyaw": 0.0,
           "interp": "linear"
         },
         {
           "t": 54.0,
-          "vx": -0.2,
+          "vx": -0.38,
           "vy": 0.0,
           "vyaw": 0.0,
           "interp": "linear"
         },
         {
           "t": 55.0,
-          "vx": -0.2,
+          "vx": -0.38,
           "vy": 0.0,
           "vyaw": 0.0,
           "interp": "linear"
@@ -2882,28 +2882,28 @@
         },
         {
           "t": 12.5,
-          "vx": 0.15,
+          "vx": 0.34,
           "vy": 0.0,
           "vyaw": 0.0,
           "interp": "linear"
         },
         {
           "t": 13.5,
-          "vx": 0.15,
+          "vx": 0.34,
           "vy": 0.0,
           "vyaw": 0.0,
           "interp": "linear"
         },
         {
           "t": 14.0,
-          "vx": -0.15,
+          "vx": -0.34,
           "vy": 0.0,
           "vyaw": 0.0,
           "interp": "linear"
         },
         {
           "t": 15.0,
-          "vx": -0.15,
+          "vx": -0.34,
           "vy": 0.0,
           "vyaw": 0.0,
           "interp": "linear"
@@ -2924,28 +2924,28 @@
         },
         {
           "t": 44.5,
-          "vx": 0.2,
+          "vx": 0.38,
           "vy": 0.0,
           "vyaw": 0.0,
           "interp": "linear"
         },
         {
           "t": 45.5,
-          "vx": 0.2,
+          "vx": 0.38,
           "vy": 0.0,
           "vyaw": 0.0,
           "interp": "linear"
         },
         {
           "t": 46.0,
-          "vx": -0.2,
+          "vx": -0.38,
           "vy": 0.0,
           "vyaw": 0.0,
           "interp": "linear"
         },
         {
           "t": 47.0,
-          "vx": -0.2,
+          "vx": -0.38,
           "vy": 0.0,
           "vyaw": 0.0,
           "interp": "linear"
@@ -2966,28 +2966,28 @@
         },
         {
           "t": 52.5,
-          "vx": 0.2,
+          "vx": 0.38,
           "vy": 0.0,
           "vyaw": 0.0,
           "interp": "linear"
         },
         {
           "t": 53.5,
-          "vx": 0.2,
+          "vx": 0.38,
           "vy": 0.0,
           "vyaw": 0.0,
           "interp": "linear"
         },
         {
           "t": 54.0,
-          "vx": -0.2,
+          "vx": -0.38,
           "vy": 0.0,
           "vyaw": 0.0,
           "interp": "linear"
         },
         {
           "t": 55.0,
-          "vx": -0.2,
+          "vx": -0.38,
           "vy": 0.0,
           "vyaw": 0.0,
           "interp": "linear"

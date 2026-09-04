@@ -151,8 +151,14 @@ export const ALL_TRACKS = Object.freeze(['locomotion', 'head', 'pose', 'mouth', 
 
 // Same field names as python/duckshow/limits.py so the two tables can be diffed.
 export const DEFAULT_LIMITS = Object.freeze({
-  max_abs_vx: 0.25,
-  max_abs_vy: 0.20,
+  // 0.40 = the edge of alpha_walking.onnx's training distribution
+  // (lin_vel_x sampled uniformly from (-0.4, 0.4)). The previous
+  // 0.25/0.20 sat BELOW the policy's stand/walk gate on three of four
+  // axes, so they produced no motion at all rather than slow motion.
+  // Mirrors python/duckshow/limits.py; see docs/duckshow-format.md
+  // "Why the translation limits are 0.40".
+  max_abs_vx: 0.40,
+  max_abs_vy: 0.40,
   max_abs_vyaw: 1.5,
   max_abs_head_angle: 1.2,
   max_abs_pose_z: 0.05,

@@ -313,6 +313,22 @@ obvious candidate for a policy-selection gap: it is plausible real `robotd` runs
 that policy below the gate and switches at the threshold, which this baker does
 not model (see "Which policy drives the bake").
 
+### Measured after raising the caps (2026-09-04)
+
+`limits.py`'s translation caps were raised to 0.40 and `shows/octet` rechoreographed onto symmetric magnitudes that clear both gates (0.34 and 0.38, forward and back). Baked result, against the same show before the change:
+
+| | before (0.15/0.20) | after (0.34/0.38) |
+|---|---|---|
+| trunk x-range | 0.011 m | 0.247 m |
+| `left_knee` range | 0.038 rad | 0.650 rad |
+| falls | none | none |
+
+That is a real gait rather than a static lean, and it is what the baked preview now replays, joint for joint.
+
+**Open, and needing hardware to settle: travel is asymmetric between directions, and the asymmetry is state-dependent.** An out-and-back pair commanded at equal magnitude does not return the duck to its mark. In the full `octet` bake every role ends about 0.10 m *behind* its mark after two such pairs; an isolated 1 s-out/1 s-back probe from a standing start drifts about 0.10 m *forward* instead, because at that magnitude the backward leg barely moves the duck at all. Same commands, opposite sign of error, depending on what came before.
+
+No magnitude pair was tuned to cancel this. Fitting constants to a plant already known to under-track by 2-3x (0.40 commanded yields about 0.154 m/s achieved) would be fitting the simulator's error, not the robot's, and this repo's standing rule is that a documented limitation beats a preview that lies. Add it to the day-one hardware list alongside the three gate ramps: command a real duck a symmetric out-and-back at several magnitudes and record the net displacement. If the real machine is symmetric, this is a simulation artefact and the caps need no further change; if it is not, the authoring model needs per-direction magnitudes and the editor should compute the return leg rather than making the author match it by hand.
+
 ### The four plant axes, eliminated
 
 Each tested directly, in isolation, measured before and after. All four correctly

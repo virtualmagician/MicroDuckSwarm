@@ -667,8 +667,14 @@ public extension Show {
     }
 
     // Limits — see docs/duckshow-format.md "Validation limits".
-    private var limitVx: Double { 0.25 }
-    private var limitVy: Double { 0.20 }
+    /// 0.40 = the edge of alpha_walking.onnx's training distribution
+    /// (lin_vel_x sampled uniformly from (-0.4, 0.4)). The previous
+    /// 0.25/0.20 sat below the policy's stand/walk gate on three of four
+    /// axes, producing no motion rather than slow motion. Mirrors
+    /// python/duckshow/limits.py; see docs/duckshow-format.md
+    /// "Why the translation limits are 0.40".
+    private var limitVx: Double { 0.40 }
+    private var limitVy: Double { 0.40 }
     private var limitVyaw: Double { 1.5 }
     private var limitHeadAngle: Double { 1.2 }
     private var limitPoseZ: Double { 0.05 }

@@ -365,7 +365,11 @@ class NudgeLayerTest(_PuppetAgentTest):
         self._start_walking()  # demo lead from t=3.6: timeline vx=0.1 until t=5.5
         sender = self._sender().start(move={"vx": 0.1, "vy": 0.05, "vyaw": -0.2})
         self.assertTrue(self._wait(lambda: self._has_move(vx=0.2, vy=0.05, vyaw=-0.2), timeout=0.6), "vector sum not applied")
-        sender.set(move={"vx": 0.2, "vy": 0.0, "vyaw": 0.0})  # 0.1 + 0.2 > max_abs_vx
+        # Derived from the limit, not a literal, so this keeps exercising the
+        # clamp after a hardware retune of limits.py (docs/duckshow-format.md
+        # "Why the translation limits are 0.40"). Timeline vx is 0.1, so
+        # nudging by the whole cap always overshoots it.
+        sender.set(move={"vx": LIM.max_abs_vx, "vy": 0.0, "vyaw": 0.0})
         self.assertTrue(self._wait(lambda: self._has_move(vx=LIM.max_abs_vx, vy=0.0, vyaw=0.0), timeout=0.6), "sum not clamped")
         self.assertLess(self.agent._current_show_time(), 5.5, "test overran the walk segment; timing assumptions broken")
         self.assertEqual(self.agent.state, "playing")
@@ -596,8 +600,17 @@ class PuppetParsingTest(unittest.TestCase):
                 parse_puppet_packet(msg)  # type: ignore[arg-type]
 
     def test_nudge_is_vector_sum_clamped(self) -> None:
+        # vy and vyaw inputs are fractions of their own limits so each pair sums
+        # past the cap whatever the cap is -- this test broke silently when the
+        # translation limits were raised from 0.25/0.20 to 0.40 with literals
+        # here (docs/duckshow-format.md "Why the translation limits are 0.40").
+        # vx stays a literal pair that does NOT clamp, so the same assertion
+        # still covers the unclamped axis.
+        vy_each = -0.7 * LIM.max_abs_vy      # two of these sum to 1.4x the cap
+        vyaw_each = 0.8 * LIM.max_abs_vyaw   # two of these sum to 1.6x the cap
         self.assertEqual(
-            nudge_move({"vx": 0.1, "vy": -0.15, "vyaw": 1.0}, {"vx": -0.05, "vy": -0.1, "vyaw": 1.0}),
+            nudge_move({"vx": 0.1, "vy": vy_each, "vyaw": vyaw_each},
+                       {"vx": -0.05, "vy": vy_each, "vyaw": vyaw_each}),
             {"vx": 0.05, "vy": -LIM.max_abs_vy, "vyaw": LIM.max_abs_vyaw},
         )
 

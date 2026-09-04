@@ -73,9 +73,17 @@ test('pyReprStr / pyRepr follow CPython repr()', () => {
 
 test('trackFields derives editing ranges from the limits table', () => {
   const f = trackFields(DEFAULT_LIMITS);
-  assert.deepEqual(f.locomotion.map((x) => [x.name, x.min, x.max]), [['vx', -0.25, 0.25], ['vy', -0.2, 0.2], ['vyaw', -1.5, 1.5]]);
+  // Derived from DEFAULT_LIMITS rather than literals: the point of this test
+  // is that trackFields READS the table, so hard-coding the table's current
+  // values here just makes it break on every retune without testing more.
+  const L = DEFAULT_LIMITS;
+  assert.deepEqual(f.locomotion.map((x) => [x.name, x.min, x.max]), [
+    ['vx', -L.max_abs_vx, L.max_abs_vx],
+    ['vy', -L.max_abs_vy, L.max_abs_vy],
+    ['vyaw', -L.max_abs_vyaw, L.max_abs_vyaw],
+  ]);
   assert.deepEqual(f.head.map((x) => x.name), ['neck_pitch', 'head_pitch', 'head_yaw', 'head_roll']);
-  assert.equal(f.head[0].max, 1.2);
+  assert.equal(f.head[0].max, L.max_abs_head_angle);
   assert.deepEqual(f.pose.map((x) => x.name), ['z', 'roll', 'pitch', 'active']);
   assert.equal(f.pose[3].bool, true);
   assert.deepEqual(f.mouth, [{ name: 'open', min: 0, max: 1, unit: '' }]);

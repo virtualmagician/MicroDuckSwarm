@@ -103,9 +103,24 @@ def skill_duration_s(skill: str, mode: Optional[str]) -> Optional[float]:
 
 @dataclass(frozen=True)
 class Limits:
-    # Locomotion (m/s, rad/s)
-    max_abs_vx: float = 0.25
-    max_abs_vy: float = 0.20
+    # Locomotion (m/s, rad/s).
+    #
+    # 0.40 is the edge of alpha_walking.onnx's own training distribution
+    # (microduck_rl sampled lin_vel_x uniformly from (-0.4, 0.4)), not an
+    # arbitrary loosening. The previous 0.25/0.20 were picked as cautious
+    # stage speeds before anything was measured; measurement showed they sat
+    # BELOW the policy's stand/walk gate on three of four axes (backward
+    # -0.326, lateral 0.312), so they did not produce slow motion, they
+    # produced none -- while the show still validated clean. See
+    # docs/duckshow-format.md "Why the translation limits are 0.40" and
+    # docs/bake-format.md "The low-speed problem".
+    #
+    # vyaw stays 1.5: already above its 1.047 rad/s gate, already usable.
+    #
+    # Measured in the baker's simulated plant, NOT on hardware. Retune from a
+    # real duck on day one (ramp each axis, record where stepping begins).
+    max_abs_vx: float = 0.40
+    max_abs_vy: float = 0.40
     max_abs_vyaw: float = 1.5
 
     # Head angles (rad), applies to each of neck_pitch/head_pitch/head_yaw/head_roll
