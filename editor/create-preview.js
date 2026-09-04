@@ -42,13 +42,11 @@ export function normalizeShowPath(raw) {
  * /api routes at all — both look like a fetch failure, not a JSON body).
  * `showPath` — normalizeShowPath() of the currently loaded show's known
  * server path, or null.
- * `dirty` — true once the loaded show has been edited since it was last
- * read from disk (mirrors duckshow-editor.html's `state.showText === null`).
- * A bake reads the show from disk, so an edited-but-unsaved document would
- * not match the cache it produces; refusing outright matches the existing
- * "Play Baked…" convention (bake-cache.js's checkShowHashMatch) rather than
- * inventing a second policy for the same problem — see docs/viewer.md
- * "Create Preview" for why refuse was chosen over "bake what's loaded".
+ * `dirty` — true once the loaded show has been edited since it was last read
+ * from disk (mirrors duckshow-editor.html's `state.showText === null`).
+ * Accepted for callers that still report it, but it no longer gates anything:
+ * the editor bakes the document it is holding rather than the file on disk.
+ * See docs/viewer.md "Create Preview" for why that replaced refusing.
  */
 export function createPreviewState({ capabilities, showPath, dirty }) {
   if (!capabilities) {
@@ -60,9 +58,15 @@ export function createPreviewState({ capabilities, showPath, dirty }) {
   if (!showPath) {
     return { enabled: false, reason: "this show wasn't opened from the repo (picked via Open… or dragged in) — load it via Load demo, ?show=, or scripts/edit.sh so the server knows its path" };
   }
-  if (dirty) {
-    return { enabled: false, reason: 'save your edits first — a bake reads the show from disk and would not match unsaved changes' };
-  }
+  // No dirty gate. This used to refuse unsaved edits outright, because a bake
+  // read the show from disk and an edited document would produce a cache whose
+  // hash could never be checked against what was on screen. The editor now
+  // POSTs the document itself (show_text) and pins state.showText to those
+  // same bytes, so the cache is verified against exactly what was baked. The
+  // old rule was unworkable in practice anyway: the browser cannot write the
+  // file back, so every edit disabled the button until the author moved a
+  // download over the original. `dirty` is still accepted and still reported
+  // by callers; it simply no longer blocks.
   return { enabled: true, reason: null };
 }
 

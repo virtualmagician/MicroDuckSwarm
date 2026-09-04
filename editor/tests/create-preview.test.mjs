@@ -83,10 +83,26 @@ test('createPreviewState: disabled with a reason when the loaded show has no kno
   assert.match(s.reason, /path/i);
 });
 
-test('createPreviewState: disabled with a reason when the show has unsaved edits', () => {
-  const s = createPreviewState({ capabilities: AVAILABLE_CAPS, showPath: '/shows/octet/octet.duckshow.json', dirty: true });
-  assert.equal(s.enabled, false);
-  assert.match(s.reason, /save/i);
+test('createPreviewState: unsaved edits no longer block the button', () => {
+  // Regression guard for the opposite of the old rule. Requiring a saved file
+  // was unworkable: a browser cannot write the show back (Save downloads a
+  // copy), so every edit disabled Create Preview until the author manually
+  // moved a download over the original. The editor now POSTs the document
+  // itself, so a dirty show bakes fine and the cache is hash-checked against
+  // exactly the bytes that were baked.
+  const caps = { available: true, reason: null, shows: [] };
+  const s = createPreviewState({ capabilities: caps, showPath: '/shows/octet/octet.duckshow.json', dirty: true });
+  assert.equal(s.enabled, true);
+  assert.equal(s.reason, null);
+});
+
+test('createPreviewState: dirty does not change the answer either way', () => {
+  const caps = { available: true, reason: null, shows: [] };
+  const path = '/shows/octet/octet.duckshow.json';
+  assert.deepEqual(
+    createPreviewState({ capabilities: caps, showPath: path, dirty: true }),
+    createPreviewState({ capabilities: caps, showPath: path, dirty: false }),
+  );
 });
 
 test('createPreviewState: capabilities/path checks take priority over the dirty check (most specific problem first is not required, but a reason is always present)', () => {

@@ -1763,12 +1763,19 @@ async function createPreview() {
   if (!s.enabled) { status(`Create Preview unavailable — ${s.reason}`, 'error'); return; }
 
   pause();
-  let res, job;
+  let res, job, bakeText;
   try {
+    // Bake the document the editor is holding, not the file on disk. The
+    // browser cannot write the file back (Save downloads a copy), so requiring
+    // a saved show meant every edit disabled this button until the author
+    // moved a download over the original -- constant once setup mode made
+    // moving marks an ordinary edit. `show` still rides along so the bake log
+    // and the cache name the real show rather than a scratch file.
+    bakeText = core.serializeShow(state.show);
     res = await fetch('/api/bake', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ show: state.showPath }),
+      body: JSON.stringify({ show: state.showPath, show_text: bakeText }),
     });
     job = await res.json();
   } catch (err) {
@@ -1780,6 +1787,12 @@ async function createPreview() {
     return;
   }
 
+  // These are the exact bytes the server is baking, so they become the show
+  // this cache will be hash-checked against. That is the original guarantee
+  // kept honestly rather than weakened: if the document is edited while the
+  // bake runs, setShow() nulls showText again and loadBakedCacheFromUrl()
+  // refuses the result, which is still the right answer.
+  state.showText = bakeText;
   state.bakeJob = { id: job.id, timer: null };
   const btn = $('btn-create-preview');
   if (btn) { btn.disabled = true; btn.textContent = cp.formatBakeProgress(job); }

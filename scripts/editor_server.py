@@ -12,6 +12,7 @@ tools/bake itself instead of requiring a terminal command.
     GET  /api/capabilities   -- can this machine bake at all, and which
                                  shows in the repo could be baked?
     POST /api/bake           -- {"show": "/shows/octet/octet.duckshow.json"}
+                                 or {"show_text": "<a .duckshow document>"}
                                  starts a bake, returns a job id immediately.
     GET  /api/bake/<job id>  -- progress, and once finished, the URL of the
                                  written cache plus a summary of its bake log.
@@ -27,14 +28,22 @@ deliberately narrowly:
   - Binds 127.0.0.1 ONLY. Never 0.0.0.0. This is not a command-line flag
     on purpose -- there is nothing for a caller of this script to get
     wrong. It must never be reachable from another machine on the network.
-  - The only thing an HTTP caller can influence is *which show already in
-    this repository* gets baked. POST /api/bake's body is a single
-    "show" string; resolve_show_path() below resolves it against the
-    repo root and refuses anything that (a) does not end in
-    ".duckshow.json", (b) does not resolve to a path inside the repo
-    (blocks "..", absolute paths outside the tree, and symlink escapes),
-    or (c) does not exist as a file. Nothing else about the request body
-    is read.
+  - An HTTP caller can influence WHAT gets baked, and nothing else. Two
+    forms are accepted:
+      "show": a repo-relative path. resolve_show_path() below resolves it
+        against the repo root and refuses anything that (a) does not end
+        in ".duckshow.json", (b) does not resolve to a path inside the
+        repo (blocks "..", absolute paths outside the tree, and symlink
+        escapes), or (c) does not exist as a file.
+      "show_text": a .duckshow document inline, which the editor sends
+        because a browser cannot write the file back (Save downloads a
+        copy). This NEVER takes a path from the request: the server picks
+        the scratch filename itself under the gitignored bakes/, so there
+        is nothing for a caller to steer. The body is parsed and checked
+        to be a JSON object carrying "format": "duckshow/N" before
+        anything is written or spawned.
+    No other request field influences a path, an argument, or the
+    filesystem.
   - The baker subprocess is always invoked as an explicit argv list --
     never shell=True, never string-interpolated into a shell command --
     so there is no shell metacharacter or quoting hazard to get right.
@@ -402,7 +411,10 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             length = int(self.headers.get("Content-Length", "0") or "0")
         except ValueError:
             length = 0
-        if length <= 0 or length > 1_000_000:
+        # 4 MB, not 1: the body may now carry a whole show document rather than
+        # just a path (see the show_text branch below). shows/octet is ~40 KB;
+        # the cap is a sanity bound, not a budget.
+        if length <= 0 or length > 4_000_000:
             return self._json_error(400, "missing or oversized request body")
         raw = self.rfile.read(length)
         try:
@@ -416,16 +428,56 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         if not caps["available"]:
             return self._json_error(409, caps["reason"] or "baking is not available on this machine")
 
-        try:
-            show_abs = resolve_show_path(body.get("show"))
-        except ShowPathError as exc:
-            return self._json_error(400, str(exc))
-
-        show_rel = "/" + show_abs.relative_to(REPO_ROOT).as_posix()
-        role_total = _count_roles(show_abs)
-
         BAKES_DIR.mkdir(parents=True, exist_ok=True)
         job_id = uuid.uuid4().hex[:12]
+
+        # Two ways to say what to bake.
+        #
+        #   {"show": "/shows/…"}   a repo-relative path, validated to resolve
+        #                          inside the repo. What a script uses.
+        #   {"show_text": "…"}     the document itself. What the editor uses,
+        #                          because the browser cannot write the file
+        #                          back (Save downloads a copy), so requiring a
+        #                          saved file meant every edit disabled the
+        #                          button until the author moved a download
+        #                          over the original.
+        #
+        # The show_text branch never takes a path from the request: the server
+        # picks the scratch filename itself, under the gitignored bakes/, so
+        # there is nothing here for a caller to steer. It is validated as a
+        # duckshow document before anything is spawned, so a malformed body
+        # fails here with a clear message rather than inside the baker.
+        show_text = body.get("show_text")
+        if show_text is not None:
+            if not isinstance(show_text, str):
+                return self._json_error(400, "show_text must be a string")
+            try:
+                doc = json.loads(show_text)
+            except json.JSONDecodeError as exc:
+                return self._json_error(400, f"show_text is not valid JSON: {exc}")
+            if not isinstance(doc, dict):
+                return self._json_error(400, "show_text must be a JSON object")
+            fmt = doc.get("format")
+            if not isinstance(fmt, str) or not fmt.startswith("duckshow/"):
+                return self._json_error(400, 'show_text is not a .duckshow document (no "format": "duckshow/N")')
+            show_abs = BAKES_DIR / f"{job_id}.show.json"
+            show_abs.write_text(show_text, encoding="utf-8")
+            # Reported for display only. The editor sends the path the document
+            # came from so the log and the cache still name the real show
+            # rather than a scratch file; absent, say plainly that it was
+            # baked from the editor's buffer.
+            origin = body.get("show")
+            show_rel = origin if isinstance(origin, str) and origin.startswith("/") else "(editor buffer)"
+            cast = doc.get("cast")
+            role_total = len(cast) if isinstance(cast, list) else None
+        else:
+            try:
+                show_abs = resolve_show_path(body.get("show"))
+            except ShowPathError as exc:
+                return self._json_error(400, str(exc))
+            show_rel = "/" + show_abs.relative_to(REPO_ROOT).as_posix()
+            role_total = _count_roles(show_abs)
+
         output_path = BAKES_DIR / f"{job_id}.duckbake.json"
 
         job = BakeJob(job_id, show_rel, show_abs, output_path, role_total)
