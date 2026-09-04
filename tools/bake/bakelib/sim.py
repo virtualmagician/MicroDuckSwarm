@@ -77,7 +77,7 @@ def _quat_to_yaw_pitch_roll(quat_wxyz: np.ndarray) -> tuple[float, float, float]
 class RoleBakeLogEntry:
     role: str
     t: float
-    kind: str  # "skill_unsimulated" | "mode_unsimulated" | "fell"
+    kind: str  # "skill_driven" | "skill_unsimulated" | "mode_unsimulated" | "fell"
     detail: str
 
     def to_json(self) -> dict:
@@ -108,6 +108,122 @@ class RoleBakeResult:
     joints: dict[str, np.ndarray] = field(default_factory=dict)
     log: list[RoleBakeLogEntry] = field(default_factory=list)
     simulated: bool = True  # False for a role this baker could not drive at all (e.g. roller mode)
+
+
+class _SkillDriver:
+    """Decides, per control tick, which policy drives the duck and with what
+    command block -- the base locomotion policy, or a skill's own.
+
+    docs/bake-format.md "Skills: four of five now driven" states the contract
+    and names the three inferences this implements. Nothing here blends or
+    eases across a hand-off: physics state (prev_action included) carries
+    across untouched, which is what a real robot does and what makes an
+    abrupt-looking boundary a real report rather than a hidden one.
+    """
+
+    def __init__(self, policies):
+        self.policies = policies
+        self.active = None      # SkillPolicy currently driving, or None
+        self.started_t = 0.0    # show time the current window began
+        self.seated = False     # sit_toggle is a STATE, not an impulse
+        self.unwinding = False  # seated -> standing, running out unwind_s
+        self.unwind_timed_out = False  # a stand-up that never reached upright
+
+    def trigger(self, skill: str, t: float):
+        """A `do` event fired. Returns the SkillPolicy that will drive it, or
+        None if this baker has no policy for it (roller-family only)."""
+        sp = self.policies.skills.get(skill)
+        if sp is None:
+            return None
+        if skill == "sit_toggle":
+            # Inference 3: sitting holds until toggled back. A toggle while
+            # seated begins the unwind from wherever the ramp had reached --
+            # which is exactly shows/octet's `reed`, two toggles 2.0 s apart
+            # against a 2.0 s ramp.
+            if self.seated:
+                self.seated, self.unwinding = False, True
+            else:
+                self.seated, self.unwinding = True, False
+        self.active, self.started_t = sp, t
+        return sp
+
+    # A stand-up that hands back mid-transition topples the duck: measured on
+    # shows/octet's `reed`, alpha_walking.onnx took over at exactly unwind_s
+    # with the trunk still at 0.068 m of its 0.120 m nominal and put it on the
+    # floor within 0.3 s. manifest.json's unwind_s is a nominal duration, not
+    # a guarantee about the physics, so the hand-off waits for the duck to
+    # actually be standing again -- with a hard cap so a stand-up that never
+    # completes cannot hold the policy forever.
+    UPRIGHT_HEIGHT_FRACTION = 0.90
+    UNWIND_TIMEOUT_FACTOR = 3.0
+
+    def _expired(self, t: float, height_ratio: float | None = None) -> bool:
+        sp = self.active
+        if sp is None:
+            return True
+        elapsed = t - self.started_t
+        if sp.kind == "scripted":
+            if self.seated:
+                return False  # hold the seated posture indefinitely
+            unwind = sp.unwind_s or 0.0
+            if elapsed < unwind:
+                return False
+            if height_ratio is None or height_ratio >= self.UPRIGHT_HEIGHT_FRACTION:
+                return True
+            if elapsed >= unwind * self.UNWIND_TIMEOUT_FACTOR:
+                self.unwind_timed_out = True
+                return True
+            return False  # still getting up; do not hand back yet
+        return elapsed >= (sp.duration_s or 0.0)
+
+    def current(self, t: float, height_ratio: float | None = None):
+        """(session, action_scale, command_override or None) for this tick.
+        `height_ratio` is trunk height over nominal standing height, used only
+        to decide when a stand-up has actually finished."""
+        if self.active is not None and self._expired(t, height_ratio):
+            self.active, self.unwinding = None, False
+        if self.active is None:
+            return self.policies.locomotion_session, LOCOMOTION_ACTION_SCALE, None
+        sp = self.active
+        return sp.session, sp.action_scale, self._command_override(sp, t)
+
+    def _command_override(self, sp, t: float):
+        """The FULL 13-slot command block this skill wants, or None to leave
+        the show's own command in place.
+
+        Everything outside the skill's own encoded slots is zero, including
+        head_pose and body_pose. That is a correction to this baker's first
+        reading, which passed the show's authored head/body commands through
+        on the grounds that the observation needs all 13 values anyway.
+        Measured consequence: shows/octet's `reed` sat down at a pitch of
+        -1.09 rad (62 deg reclined) instead of the -0.03 the same policy
+        produces from a zeroed command, and alpha_sitstand.onnx cannot stand
+        back up from that posture -- the duck held the recline through its
+        whole unwind and then toppled the moment alpha_walking.onnx took
+        over. A skill policy's command contract is what manifest.json states
+        for it; feeding it anything else is handing it values it was never
+        trained on."""
+        enc = sp.command.get("encoding")
+        if enc == "posture_flag":
+            flag = float(sp.command.get("sit", 1.0)) if self.seated else float(sp.command.get("stand", 0.0))
+            cmd = np.zeros(observation.COMMAND_LEN, dtype=np.float32)
+            cmd[0] = flag
+            return cmd
+        if enc == "phase":
+            # Inference 1: two slots + a period + an end phase is a cyclic
+            # encoding. phase sweeps 0 -> end_phase across the clip in real
+            # time, which is exactly what duration_s == period_s * end_phase
+            # says (2.8 == 4.0 * 0.7 here; 3.5 == 5.0 * 0.7 for roller_crouch).
+            period = float(sp.command.get("period_s", 1.0)) or 1.0
+            end_phase = float(sp.command.get("end_phase", 1.0))
+            phase = min((t - self.started_t) / period, end_phase)
+            ang = 2.0 * math.pi * phase
+            cmd = np.zeros(observation.COMMAND_LEN, dtype=np.float32)
+            cmd[0], cmd[1] = math.cos(ang), math.sin(ang)
+            return cmd
+        # No manifest command at all: an entirely zero command block, which
+        # is the `idle` value alpha_sitstand's own entry names for that state.
+        return np.zeros(observation.COMMAND_LEN, dtype=np.float32)
 
 
 _SKILL_POLICY_HINT = {
@@ -193,6 +309,7 @@ def simulate_role(
     fallen_logged = False
     prev_action = np.zeros(policyset.ACTION_LEN, dtype=np.float32)
     prev_event_t = -1e-9
+    skill_driver = _SkillDriver(policies)
     frozen_mode = None   # the non-walk mode currently being held, or None while simulating
     any_frozen = False   # did any window get held? -> role still reported in unsimulated_roles
 
@@ -205,14 +322,25 @@ def simulate_role(
 
         for e in sampler.events_between(prev_event_t, t):
             if e.do is not None:
-                hint = _SKILL_POLICY_HINT.get(e.do, "no policy entry found in manifest.json")
-                log.append(RoleBakeLogEntry(
-                    role=role, t=e.t, kind="skill_unsimulated", detail=(
-                        f"'{e.do}' event not driven by physics in this v1 baker -- the base "
-                        f"locomotion policy keeps running through it unchanged. Would need {hint}. "
-                        f"See docs/bake-format.md \"What isn't simulated\"."
-                    ),
-                ))
+                driven = skill_driver.trigger(e.do, t)
+                if driven is None:
+                    hint = _SKILL_POLICY_HINT.get(e.do, "no policy entry found in manifest.json")
+                    log.append(RoleBakeLogEntry(
+                        role=role, t=e.t, kind="skill_unsimulated", detail=(
+                            f"'{e.do}' event not driven by physics -- the base locomotion "
+                            f"policy keeps running through it unchanged. Would need {hint}. "
+                            f"See docs/bake-format.md \"What isn't simulated\"."
+                        ),
+                    ))
+                else:
+                    log.append(RoleBakeLogEntry(
+                        role=role, t=e.t, kind="skill_driven", detail=(
+                            f"'{e.do}' driven by {driven.file} ({driven.kind}) against the "
+                            f"walk-mode model. See docs/bake-format.md \"Skills: four of "
+                            f"five now driven\" for the plant approximation and the three "
+                            f"command-encoding inferences this relies on."
+                        ),
+                    ))
         prev_event_t = t
 
         quat = np.array(data.sensordata[
@@ -241,7 +369,17 @@ def simulate_role(
         # track straight through, exactly like the kinematic path.
         mouth_open[k] = sample.mouth.open if sample.mouth is not None else 0.0
 
-        if not fallen_logged:
+        # A duck that is deliberately sitting is low and pitched, which is
+        # exactly what the fall heuristic looks for -- baking the showcase
+        # reported `reed` as having fallen 0.96 s after its sit_toggle, at a
+        # trunk height of 0.041 m against a 0.042 m threshold. That is a duck
+        # sitting down, correctly. Fall detection is a heuristic about
+        # UNINTENDED collapse, so it does not apply while a scripted posture
+        # policy is deliberately putting the duck on the floor.
+        posture_held = skill_driver.seated or (
+            skill_driver.active is not None and skill_driver.active.kind == "scripted"
+        )
+        if not fallen_logged and not posture_held:
             fell = (data.qpos[2] < duck.nominal_height * FALL_HEIGHT_FRACTION) or \
                    (abs(roll) > FALL_TILT_RAD) or (abs(pitch) > FALL_TILT_RAD)
             if fell:
@@ -284,9 +422,16 @@ def simulate_role(
             continue
         frozen_mode = None
 
+        # Which policy owns this tick -- alpha_walking, or a skill's own.
+        session, action_scale, cmd_override = skill_driver.current(
+            t, height_ratio=data.qpos[2] / duck.nominal_height)
         obs = observation.build_observation(duck, data, prev_action, sample.locomotion, sample.head, sample.pose)
-        action = policyset.run_locomotion_policy(policies, obs)
-        q_target = duck.stand_joint_qpos + action.astype(np.float64) * LOCOMOTION_ACTION_SCALE
+        if cmd_override is not None:
+            # The whole 13-slot command block, not just twist -- see
+            # _SkillDriver._command_override for the measurement behind that.
+            obs[observation.PROPRIO_LEN:] = cmd_override
+        action = policyset.run_session(session, obs)
+        q_target = duck.stand_joint_qpos + action.astype(np.float64) * action_scale
         # The policy's target *angle* updates once per control tick (50 Hz)
         # -- same as before BAM. What changes is what turns that angle into
         # torque: controller.update() now recomputes BAM's firmware

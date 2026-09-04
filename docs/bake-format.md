@@ -348,6 +348,52 @@ show no effect, for the reason given above.
 | Joint ordering: does MuJoCo's `qpos[7:21]` really follow the `<actuator>` block order the observation assumes? | **Confirmed identical.** The MJCF's joint tree order and actuator order are the same 14-name sequence, so `qpos`/`qvel` slices land in the policy's `joint_names` order |
 | Home pose: is the MJCF `STAND` keyframe the same vector as the ONNX's own `default_joint_pos` (used both for `joint_pos_delta` and as the action offset)? | **Confirmed identical** to 3 decimal places on all 14 joints |
 
+## Skills: three of five now driven (2026-09-04)
+
+The v1 baker drove no `do` skill at all: it kept `alpha_walking.onnx` running through every skill window and logged `skill_unsimulated`. Measured on a real bake, a `kick_left` moved the knee by 0.007 rad and the trunk not at all -- so "some skills do not play back" was really "no skill plays back, ever, in either preview".
+
+Three of the five authorable skills are now driven by their own policy, and the reasons the other two are not were measured rather than assumed. `manifest.json` specifies each one's command encoding, and all nine policies share the same `obs[1,61] -> action[1,14]` contract, so only the ONNX session, the command block and `action_scale` change; the observation builder is unchanged.
+
+| skill | policy | `kind` | duration | command encoding |
+|---|---|---|---|---|
+| `kick_left` / `kick_right` | `ball_kick_left.onnx` / `ball_kick_right.onnx` | episodic | 0.5 s | none in the manifest |
+| `roulade` | `roulade.onnx` | episodic | 1.0 s | **not driven.** It executes correctly -- the duck launches (trunk z 0.117 to 0.188) and rotates a clean 180 deg -- but after its stated 1.0 s it is still inverted, and the manifest marks it `chain: true` without naming what it chains into. Handing an upside-down duck back to `alpha_walking.onnx` corrupts the whole rest of the bake, which is worse than not simulating it. Logged `skill_unsimulated` until the recovery half of the chain is known. |
+| `sit_toggle` | `alpha_sitstand.onnx` | scripted | ramp 2.0 s / unwind 1.0 s | `posture_flag`: `twist.vx` = 1.0 sit, 0.0 stand |
+| `ground_pick` | `alpha_ground_pick.onnx` | episodic | 2.8 s | `phase` over `twist.vx,twist.vy`, `period_s` 4.0, `end_phase` 0.7 |
+| `mode: "roller"` | `roller.onnx` / `roller_crouch.onnx` | — | — | **still not driven** — a structurally different machine (passive wheel joints, no leg policy) whose MJCF this baker does not load. Unchanged: frozen for the window, logged `mode_unsimulated`. |
+
+### The three inferences, named
+
+Everything above is read from `manifest.json` except these, which are this baker's reading and are flagged in the code at the point each is used:
+
+1. **`phase` means a 2-slot cyclic encoding**, i.e. `twist.vx = cos(2*pi*phase)`, `twist.vy = sin(2*pi*phase)`, with `phase` sweeping 0 to `end_phase` across the clip. The manifest names two slots, a period and an end phase but not the function. Supporting evidence rather than assertion: `duration_s` is exactly `period_s * end_phase` (2.8 = 4.0 * 0.7) for `ground_pick`, and again for `roller_crouch` (3.5 = 5.0 * 0.7), which is what a phase sweep at real time would produce and what an arbitrary pair of numbers would not.
+2. **Episodic policies with no manifest command get an idle twist** (`[0,0,0]`, the value `alpha_sitstand`'s own entry names as `idle`) while the authored `head` and `body_pose` commands pass through unchanged. Zeroing the head instead would be an equally arbitrary guess, and the observation needs all 13 values either way.
+3. **`sit_toggle` holds.** Sitting is a state, not an impulse: after a sit toggle `alpha_sitstand.onnx` keeps driving with the flag at 1.0 until a later toggle sets it to 0.0, after which control returns to `alpha_walking.onnx` once `unwind_s` elapses. The manifest gives `ramp_s`/`unwind_s` but never says what runs between two toggles. `shows/octet`'s `reed` role is exactly the awkward case -- two `sit_toggle` events 2.0 s apart against a 2.0 s ramp -- and under this reading the second toggle simply begins the unwind from wherever the ramp had reached.
+
+### The plant: scene_walk.xml was the wrong model, and skills are how we found out
+
+`SCENE_FILENAME` moved back to `scene.xml` (`robot_groundcontact.xml`). The earlier switch to `scene_walk.xml` was justified by measuring that it changed nothing: net travel was bit-identical at every tested speed. That measurement was right; the conclusion drawn from it was too broad. Walking only ever uses foot-ground contact, so of course the two models agree.
+
+Counted off the compiled models: `scene.xml` has **12** collidable geoms, `scene_walk.xml` has **6**, and the six missing ones include `hip_l`, `hip_l_2` and `jaw_soft`. A duck on its feet never touches them. A duck sitting rests on its hips.
+
+Driving `alpha_sitstand.onnx` against `scene_walk.xml` therefore let the hips pass through the floor: the trunk sank to z = -0.036 m, below the floor plane, and the duck rolled 178 deg onto its back. That happened for a nonzero command in *any* twist slot, including slots the manifest never mentions, which is what ruled out a slot-identification mistake and pointed at the collision model instead. Against `scene.xml` the same policy sits cleanly at z = 0.0595, pitch -0.03.
+
+Walking is unaffected by the change, as the original measurement predicted: re-baking `shows/octet`, the roles with no skill events are byte-identical between the two models.
+
+### Two hand-off rules the manifest does not state
+
+Both were forced by measurement, and both are this baker's own:
+
+**A skill policy gets a clean command block.** Everything outside the skill's own encoded slots is zero, head_pose and body_pose included. The first reading passed the show's authored head/body commands through, on the grounds that the observation needs all 13 values anyway. Measured consequence: `octet`'s `reed` sat at a pitch of -1.09 rad (62 deg reclined) instead of the -0.03 the same policy produces from a zeroed command, and `alpha_sitstand.onnx` cannot stand up from that posture -- it held the recline through the entire unwind and toppled the moment walking resumed. A skill policy's command contract is what `manifest.json` states for it.
+
+**A stand-up hands back when the duck is standing, not when the clock says so.** `unwind_s` is a nominal duration, not a guarantee about physics. Handing back at exactly 1.0 s left `reed` mid-transition at 0.068 m of its 0.120 m nominal, and `alpha_walking.onnx` put it on the floor within 0.3 s. The hand-off now additionally requires the trunk to be back above 90% of nominal height, with a hard cap of 3x `unwind_s` so a stand-up that never completes cannot hold the policy forever.
+
+**Fall detection is posture-aware.** A deliberate sit is low and pitched, which is exactly what the fall heuristic looks for -- it fired 0.96 s into the first sit at a trunk height of 0.041 m against a 0.042 m threshold. Fall detection is a heuristic about *unintended* collapse, so it is suppressed while a scripted posture policy is deliberately putting the duck on the floor.
+
+### Boundaries are discontinuities, and stay honest
+
+Handing control between `alpha_walking.onnx` and a skill policy carries the physics state across untouched (`prev_action` included), which is what a real robot does too. Nothing is blended or eased: a skill that ends with the duck mid-crouch resumes walking from mid-crouch. Where that looks abrupt it is reporting something real about the hand-off, not hiding it.
+
 ## What isn't simulated
 
 Per the project brief: *"a skill you cannot drive faithfully should be recorded in the bake log as unsimulated rather than faked."* This v1 baker drives ordinary locomotion + head + body-pose faithfully (to the fidelity gaps named above) and **does not** drive any of the five `do` skills or roller mode. Nothing pretends to; the base locomotion policy keeps running unmodified through a skill event, and every occurrence is logged (`log[].kind == "skill_unsimulated"`, one entry per event, with the specific policy file and command encoding — now resolvable from `manifest.json` — that a future version would need):

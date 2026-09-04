@@ -119,7 +119,33 @@ assert abs(1.0 / CONTROL_HZ - PHYSICS_TIMESTEP * CONTROL_DECIMATION) < 1e-12
 # gets a matching collision copy, not the curated self-collision subset
 # training used) that `docs/bake-parts.md` confirms directly "is not on the
 # needed list" for a bake driver.
-SCENE_FILENAME = "scene_walk.xml"
+# scene.xml (-> robot_groundcontact.xml), the full ground-contact legged
+# model. Changed back from scene_walk.xml on 2026-09-04, with evidence that
+# the earlier switch lacked.
+#
+# The switch TO scene_walk.xml was made because it is the model
+# alpha_walking.onnx trained against, and was justified by measuring that it
+# made no difference: net travel was bit-identical at every tested speed.
+# That measurement was correct and the conclusion drawn from it was too
+# broad. Walking only ever uses foot-ground contact, so of course the two
+# agree; the variants were then treated as interchangeable in general.
+#
+# They are not. Counted directly off the compiled models, scene.xml has 12
+# collidable geoms and scene_walk.xml has 6 -- and the six missing ones
+# include hip_l, hip_l_2 and jaw_soft. A duck standing on its feet never
+# touches them. A duck SITTING rests on its hips. Driving
+# alpha_sitstand.onnx against scene_walk.xml therefore let the hips pass
+# straight through the floor: measured, the trunk sank to z = -0.036 m
+# (below the floor plane) and the duck rolled 178 deg onto its back, every
+# time, for a command in ANY twist slot -- which is what ruled out a
+# slot-identification mistake and pointed here instead. roulade.onnx failed
+# the same way for the same reason.
+#
+# scene.xml is also what the skill policies trained against
+# (docs/bake-format.md), and what editor/duck-mesh.js already builds its
+# render skeleton from, so this makes the baker, the renderer and the
+# policies agree on one model.
+SCENE_FILENAME = "scene.xml"
 
 # The exported scene's own STAND keyframe (docs/bake-parts.md §3.6 and this
 # file's own read of scene_allcollisions.xml's <keyframe> block) is the only
