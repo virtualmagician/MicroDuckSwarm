@@ -1281,6 +1281,55 @@ void main() {
 }
 `;
 
+/** Half of the intent-path ribbon's width, metres. 2 cm reads as a line from
+ *  the house camera and as a ribbon from Top, and stays narrower than a foot. */
+export const PATH_RIBBON_HALF_WIDTH_M = 0.01;
+
+/**
+ * A flat ribbon on the floor along a show-space path, as TRIANGLE_STRIP
+ * vertices in this file's vertex layout: position xyz then brightness, 16
+ * bytes per vertex, two vertices per point. WebGL draws LINE_STRIP one pixel
+ * wide on every display, which made the intent path a hairline; a strip has
+ * a width in metres and scales with the camera like everything else.
+ *
+ * Points are show space ({x forward, y left}); the ribbon is laid at height
+ * `y` in render space (+X left, +Z forward). A duplicate consecutive point
+ * reuses the previous direction rather than producing a zero-length normal,
+ * and fewer than two distinct points yield nothing to draw.
+ */
+export function ribbonVertices(points, halfWidth = PATH_RIBBON_HALF_WIDTH_M, y = 0.002, brightness = 0.5) {
+  const n = points ? points.length : 0;
+  if (n < 2) return new Float32Array(0);
+  const data = new Float32Array(n * 2 * 4);
+  let dx = 0, dy = 0; // show-space direction of the last non-degenerate segment
+  let any = false;
+  for (let i = 0; i < n; i++) {
+    const p = points[i];
+    const q = i + 1 < n ? points[i + 1] : null;
+    if (q) {
+      const ex = (q.x || 0) - (p.x || 0), ey = (q.y || 0) - (p.y || 0);
+      const len = Math.hypot(ex, ey);
+      if (len > 1e-9) { dx = ex / len; dy = ey / len; any = true; }
+    }
+    if (!any) {
+      // No direction yet (leading duplicates): look ahead for the first one.
+      for (let j = i + 1; j < n && !any; j++) {
+        const ex = (points[j].x || 0) - (p.x || 0), ey = (points[j].y || 0) - (p.y || 0);
+        const len = Math.hypot(ex, ey);
+        if (len > 1e-9) { dx = ex / len; dy = ey / len; any = true; }
+      }
+      if (!any) return new Float32Array(0); // every point is the same point
+    }
+    // Perpendicular in show space, then the show->render axis map (y, h, x).
+    const nx = -dy * halfWidth, ny = dx * halfWidth;
+    const px = p.x || 0, py = p.y || 0;
+    const o = i * 8;
+    data[o + 0] = py + ny; data[o + 1] = y; data[o + 2] = px + nx; data[o + 3] = brightness;
+    data[o + 4] = py - ny; data[o + 5] = y; data[o + 6] = px - nx; data[o + 7] = brightness;
+  }
+  return data;
+}
+
 // ---------------------------------------------------------------------------
 // StageRenderer — pose in, pixels out. Owns the GL context and every mesh/
 // shader above; renders on demand (draw()), never runs a permanent rAF
@@ -1457,9 +1506,16 @@ export class StageRenderer {
   /// grey underneath the simulated trails so the physics reads as the subject
   /// and the plan as the reference. Same point shape as setTrails; pass {} or
   /// null to clear.
-  setGhostTrails(trails) {
+  /**
+   * The intent-path layer (docs/viewer.md "Intent curves, and the drift
+   * diff"). `style` is 'intent' (no bake: each role's own colour, the only
+   * path there is) or 'reference' (a bake is loaded: neutral grey under the
+   * simulated trail, so the diff is legible).
+   */
+  setGhostTrails(trails, { style = 'reference' } = {}) {
     const gl = this.gl;
     this._ghosts = trails || {};
+    this._ghostStyle = style === 'intent' ? 'intent' : 'reference';
     const keys = new Set(Object.keys(this._ghosts));
     for (const [role, buf] of this._ghostBuffers) {
       if (!keys.has(role)) { gl.deleteBuffer(buf.vbo); this._ghostBuffers.delete(role); }
@@ -1469,19 +1525,15 @@ export class StageRenderer {
       let buf = this._ghostBuffers.get(role);
       if (this._contextLost) { if (buf) buf.count = n; continue; }
       if (!buf) { buf = { vbo: gl.createBuffer(), capacity: 0, count: 0 }; this._ghostBuffers.set(role, buf); }
-      buf.count = n;
-      if (n === 0) continue;
-      const data = new Float32Array(n * 4);
-      for (let i = 0; i < n; i++) {
-        data[i * 4 + 0] = points[i].y || 0;
-        data[i * 4 + 1] = 0.002;  // just under the real trail, so it never z-fights
-        data[i * 4 + 2] = points[i].x || 0;
-        // Flat, dim brightness: this is a reference line, not a motion trail,
-        // so it must not compete with the fade that encodes recency.
-        data[i * 4 + 3] = 0.5;
-      }
+      // A ribbon: two strip vertices per path point, just under the real
+      // trail so it never z-fights, at a flat dim brightness because this is
+      // a plan, not a motion trail, and must not compete with the fade that
+      // encodes recency.
+      const data = ribbonVertices(points, PATH_RIBBON_HALF_WIDTH_M, 0.002, 0.5);
+      buf.count = data.length / 4; // vertices, two per point
+      if (buf.count === 0) continue;
       gl.bindBuffer(gl.ARRAY_BUFFER, buf.vbo);
-      if (n > buf.capacity) { gl.bufferData(gl.ARRAY_BUFFER, data, gl.DYNAMIC_DRAW); buf.capacity = n; }
+      if (buf.count > buf.capacity) { gl.bufferData(gl.ARRAY_BUFFER, data, gl.DYNAMIC_DRAW); buf.capacity = buf.count; }
       else { gl.bufferSubData(gl.ARRAY_BUFFER, 0, data); }
     }
     return this;
@@ -1731,12 +1783,20 @@ export class StageRenderer {
     gl.enable(gl.BLEND);
     gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
     gl.depthMask(false);
-    // One neutral grey for every role. Colouring these per role would make
-    // eight intended paths compete with eight actual ones; the diff is only
-    // legible if the reference recedes.
-    gl.uniform3f(uniforms.uColor, 0.45, 0.47, 0.52);
-    for (const buf of this._ghostBuffers.values()) {
+    for (const [role, buf] of this._ghostBuffers.entries()) {
       if (buf.count === 0) continue;
+      if (this._ghostStyle === 'intent') {
+        // No bake: this is the only path there is, so it wears the role's
+        // colour, slightly dimmed so it still reads as a plan under the trail.
+        const cast = this._castByRole.get(role);
+        const c = colorToRgb((cast && cast.color) || '#cccccc');
+        gl.uniform3f(uniforms.uColor, c[0] * 0.85, c[1] * 0.85, c[2] * 0.85);
+      } else {
+        // A bake is loaded: one neutral grey for every role. Colouring these
+        // per role would make eight intended paths compete with eight actual
+        // ones; the diff is only legible if the reference recedes.
+        gl.uniform3f(uniforms.uColor, 0.45, 0.47, 0.52);
+      }
       gl.bindBuffer(gl.ARRAY_BUFFER, buf.vbo);
       gl.enableVertexAttribArray(attribs.aPosition);
       gl.vertexAttribPointer(attribs.aPosition, 3, gl.FLOAT, false, 16, 0);
@@ -1744,7 +1804,7 @@ export class StageRenderer {
         gl.enableVertexAttribArray(attribs.aBrightness);
         gl.vertexAttribPointer(attribs.aBrightness, 1, gl.FLOAT, false, 16, 12);
       }
-      gl.drawArrays(gl.LINE_STRIP, 0, buf.count);
+      gl.drawArrays(gl.TRIANGLE_STRIP, 0, buf.count);
     }
   }
 

@@ -2357,7 +2357,9 @@ function paintDrift(cache) {
     if (!path || viewer.neutralRoles.has(role)) continue;
     ghosts[role] = dv.fullRolePath(path, 2);
   }
-  viewer.renderer.setGhostTrails(ghosts);
+  // No bake: the ribbon is the only path, in the role's colour. With one it
+  // is the reference under the simulated trail, in grey (docs/viewer.md).
+  viewer.renderer.setGhostTrails(ghosts, { style: cache ? 'reference' : 'intent' });
   if (!cache) return;   // no bake: intent curves only, nothing to diff
 
   const host = $('viewer-drift');

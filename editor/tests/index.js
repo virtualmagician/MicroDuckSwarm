@@ -29,3 +29,4 @@ import './asset-probe.test.mjs';
 import './create-preview.test.mjs';
 import './setlist.test.mjs';
 import './pan.test.mjs';
+import './ribbon.test.mjs';
