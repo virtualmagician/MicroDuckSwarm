@@ -2587,8 +2587,25 @@ function loadShowText(text, fileName, path = null) {
     status(`opened ${fileName}: ${roles().length} roles, ${duration()} s, ${errs ? `${errs} validation errors` : 'valid'}`, errs ? 'error' : 'ok');
     return true;
   } catch (err) {
-    status(`cannot open ${fileName}: ${err.message}`, 'error');
-    return false;
+    // Only a genuine format problem is the FILE's fault. This try wraps
+    // setShow() and therefore the whole render pipeline, so anything else
+    // thrown here is an editor bug -- and reporting it as "cannot open
+    // <file>" sends the reader to inspect a file that is perfectly fine.
+    // That is not hypothetical: when a cached duckshow-core.js was paired
+    // with fresh HTML, the resulting TypeError would have been reported as a
+    // bad show file, and boot() would then have overwritten even that with
+    // "is the path relative to the served root?".
+    if (err instanceof core.DuckShowFormatError || err instanceof SyntaxError) {
+      status(`cannot open ${fileName}: ${err.message}`, 'error');
+      return false;
+    }
+    console.error('loadShowText: render failed after parsing', fileName, err);
+    status(`${fileName} parsed, but the editor failed to display it: ${err && err.message ? err.message : err}. `
+         + 'This is an editor fault, not a problem with the file. If you have just pulled changes, '
+         + 'hard-reload (⇧⌘R) to clear cached scripts.', 'error');
+    // Rethrow so boot()'s .catch() sees a real editor fault rather than
+    // silently continuing to the next fallback and blaming the path.
+    throw err;
   }
 }
 
@@ -2597,8 +2614,18 @@ $('open-file').onchange = async (e) => {
   const file = e.target.files[0];
   if (!file) return;
   if (state.dirty && !confirm('Discard unsaved changes?')) { e.target.value = ''; return; }
-  loadShowText(await file.text(), file.name);
-  e.target.value = '';
+  // try/finally, not try/catch-and-swallow: a rejected read (or a rethrown
+  // editor fault from loadShowText) in an async handler is discarded by the
+  // browser with nothing on screen, AND the input keeps its value, so picking
+  // the SAME file again fires no change event and looks like a dead button.
+  try {
+    loadShowText(await file.text(), file.name);
+  } catch (err) {
+    console.error('Open… failed', err);
+    status(`could not read ${file.name}: ${err && err.message ? err.message : err}`, 'error');
+  } finally {
+    e.target.value = '';
+  }
 };
 
 // Feature A (docs/viewer.md "Create Preview") — open a baked pose cache
@@ -2606,8 +2633,16 @@ $('open-file').onchange = async (e) => {
 $('btn-bake-open').onclick = () => $('bake-file').click();
 $('bake-file').onchange = async (e) => {
   const file = e.target.files[0];
-  if (file) await loadBakeCache(file);
-  e.target.value = '';
+  // Same rule as Open…: an unguarded rejection here is silent, and the input
+  // would keep its value so re-picking the same cache did nothing.
+  try {
+    if (file) await loadBakeCache(file);
+  } catch (err) {
+    console.error('Play Baked… failed', err);
+    status(`could not read ${file ? file.name : 'that cache'}: ${err && err.message ? err.message : err}`, 'error');
+  } finally {
+    e.target.value = '';
+  }
 };
 $('btn-bake-exit').onclick = () => exitBakeMode();
 
@@ -2696,7 +2731,12 @@ window.addEventListener('drop', async (e) => {
   if (!file) return;
   if (file.type.startsWith('audio/')) { const dt = new DataTransfer(); dt.items.add(file); $('audio-file').files = dt.files; $('audio-file').dispatchEvent(new Event('change')); return; }
   if (state.dirty && !confirm('Discard unsaved changes?')) return;
-  loadShowText(await file.text(), file.name);
+  try {
+    loadShowText(await file.text(), file.name);
+  } catch (err) {
+    console.error('drop failed', err);
+    status(`could not read ${file.name}: ${err && err.message ? err.message : err}`, 'error');
+  }
 });
 window.addEventListener('beforeunload', (e) => { if (state.dirty) { e.preventDefault(); e.returnValue = ''; } });
 

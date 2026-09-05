@@ -15,10 +15,17 @@ A single-file timeline editor for `.duckshow.json` choreographies (spec: `docs/a
 **Served (recommended — this is what makes "Load demo" work):**
 
 ```sh
-cd <repo root>
-python3 -m http.server 8000
-# then open http://localhost:8000/editor/duckshow-editor.html
+./scripts/edit.sh                     # serves the repo and opens the editor
+./scripts/edit.sh shows/octet         # ...with a piece already loaded
 ```
+
+That runs `scripts/editor_server.py`, which is what **Create Preview** talks
+to. It also serves everything `no-store`, which matters more than it sounds:
+the editor is a set of separately-fetched ES modules with no bundler and no
+content hashes in their URLs, so a server that allows caching can pair a fresh
+`duckshow-editor.html` with a stale `duckshow-core.js` and break the editor
+with no visible cause. A plain `python3 -m http.server 8000` still renders the
+page, but you lose Create Preview and take that risk on.
 
 The page fetches `../shows/demo/demo.duckshow.json` on startup and via the **Load demo** button.
 

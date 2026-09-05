@@ -34,6 +34,52 @@ def _issues_by_message_substr(issues, substr):
     return [i for i in issues if substr in i.message]
 
 
+SHOWS_DIR = Path(__file__).resolve().parent.parent.parent / "shows"
+
+
+class ShippedShowsValidateCleanTest(unittest.TestCase):
+    """Every show this repo ships must validate clean, not just demo.
+
+    Only demo was gated, and only for errors. shows/octet and shows/showcase
+    were covered by nothing at all -- every locomotion value in octet was
+    rewritten during the speed-limit change and no test would have caught a
+    mistake. Warnings count too here: a shipped show carrying a warning is
+    either a real authoring problem or a validator rule that needs revisiting,
+    and either way it should not sit there unnoticed.
+    """
+
+    def _shipped_shows(self) -> list[Path]:
+        # shows/fixtures/ is deliberately excluded: several fixtures are
+        # invalid on purpose, which is their whole job.
+        found = sorted(
+            p for p in SHOWS_DIR.rglob("*.duckshow.json")
+            if p.relative_to(SHOWS_DIR).parts[0] != "fixtures"
+        )
+        self.assertTrue(found, "no shipped shows found -- this test would be vacuous")
+        return found
+
+    def test_every_shipped_show_has_no_errors(self) -> None:
+        for path in self._shipped_shows():
+            with self.subTest(show=path.name):
+                issues = validate(load_show(path))
+                errors = [i for i in issues if i.severity == "error"]
+                self.assertEqual(errors, [], f"{path.name}: {[i.message for i in errors]}")
+
+    def test_every_shipped_show_has_no_warnings(self) -> None:
+        for path in self._shipped_shows():
+            with self.subTest(show=path.name):
+                issues = validate(load_show(path))
+                warnings = [i for i in issues if i.severity == "warning"]
+                self.assertEqual(warnings, [], f"{path.name}: {[i.message for i in warnings]}")
+
+    def test_the_three_named_shows_are_actually_covered(self) -> None:
+        """Guards the discovery above: if a show is renamed or moved out of
+        shows/, this fails rather than silently testing less."""
+        names = {p.name for p in self._shipped_shows()}
+        for expected in ("demo.duckshow.json", "octet.duckshow.json", "showcase.duckshow.json"):
+            self.assertIn(expected, names)
+
+
 class DemoShowValidatesCleanTest(unittest.TestCase):
     def test_demo_show_has_no_errors(self) -> None:
         show = load_show(DEMO_SHOW_PATH)
