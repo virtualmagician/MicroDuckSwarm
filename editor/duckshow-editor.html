@@ -67,6 +67,11 @@
   #topbar .brand small { color: var(--fg3); font-weight: 400; margin-left: 4px; }
   #file-name { color: var(--fg2); font-family: var(--mono); }
   #file-name.dirty::after { content: " •"; color: var(--warn); }
+  /* #topbar is flex-wrap (below) and already carries four buttons plus six
+     .field inputs. A long set filename in this label must not be able to push
+     a field row onto a second line: that steals height from the 1fr #main
+     track and shifts the splitter bounds reflowSplit() re-derives. */
+  #btn-setlist { max-width: 14em; overflow: hidden; text-overflow: ellipsis; }
   #save-note { color: var(--fg3); }
   #time { font-family: var(--mono); font-size: 14px; min-width: 9.5em; }
   #time small { color: var(--fg3); font-size: 11px; }
@@ -288,6 +293,7 @@
 
 <header id="topbar">
   <span class="brand">duckshow editor <small>duckshow/1</small></span>
+  <button id="btn-setlist" disabled title="Setlist editor unavailable — the editor scripts have not loaded">Setlist editor ↗</button>
   <button id="btn-new" title="New empty show">New</button>
   <button id="btn-open" title="Open a .duckshow.json file (⌘O)">Open…</button>
   <button id="btn-save" class="primary" title="Save (⌘S)">Save</button>
@@ -393,7 +399,7 @@
 <footer id="status">
   <span class="msg" id="status-msg"></span>
   <span class="summary" id="status-summary"></span>
-  <span class="hint"><kbd>space</kbd> play · <kbd>⌘Z</kbd> undo · <kbd>I</kbd> interp · <kbd>⌫</kbd> delete · <kbd>←→↑↓</kbd> nudge · <kbd>⇧</kbd>-drag time only · <kbd>⌥</kbd>-drag value only</span>
+  <span class="hint"><kbd>space</kbd> play · <kbd>⌘Z</kbd> undo · <kbd>I</kbd> interp · <kbd>⌫</kbd> delete · <kbd>←→↑↓</kbd> nudge · <kbd>⇧</kbd>-drag time only · <kbd>⌥</kbd>-drag value only · <kbd>⌥L</kbd> setlist</span>
 </footer>
 
 <script>
@@ -2989,6 +2995,95 @@ window.addEventListener('drop', async (e) => {
 window.addEventListener('beforeunload', (e) => { if (state.dirty) { e.preventDefault(); e.returnValue = ''; } });
 
 // ---------------------------------------------------------------------------
+// Switching views (docs/setlist-format.md "Switching between the two editors")
+// ---------------------------------------------------------------------------
+// The show editor and the setlist editor are two pages, and switching is two
+// tabs on purpose. Neither page has a document model: nothing outside `state`
+// is serialised, there is no autosave, and navigating this tab away would take
+// the undo stack, the decoded audio, an open bake cache and the poll loop for
+// any in-flight bake with it. So the switcher opens a tab. It never navigates
+// this one, and never navigates one that is already showing a page.
+//
+// Reuse is deliberately limited to the handle our own window.open returned.
+// Looking a tab up by window.name was the first design and it is wrong here:
+// every tab opened by double-clicking a setlist block is also a show editor,
+// so the name would have several claimants and the lookup would land on an
+// arbitrary one, then report success while showing a different show. A handle
+// we opened ourselves has exactly one meaning.
+//
+// Kept close to the same block in setlist.html on purpose. Factoring it into a
+// shared module would add a third separately-fetched file with no content hash
+// and no MODULE_API assert, which is the stale-cache failure the assert at the
+// top of this file exists to police.
+let setlistTab = null;
+
+function openOtherView(url, existing) {
+  // A handle to a tab we opened that is still around: focus it rather than
+  // stacking another copy. `.closed` on a same-origin tab we opened is safe to
+  // read; a browser that disagrees throws and we open a fresh one.
+  try {
+    if (existing && !existing.closed) { existing.focus(); return { how: 'focused', tab: existing }; }
+  } catch (_) { /* fall through and open a new tab */ }
+  const tab = window.open(url, '_blank');
+  // Deliberately no window.name assignment. See the note above: naming this
+  // tab would make every double-clicked block a claimant for the same name.
+  if (!tab) return { how: 'blocked', tab: null };
+  try { tab.focus(); } catch (_) {}
+  return { how: 'opened', tab };
+}
+
+/** ?from= — the setlist that opened this tab, when one did. Shape-checked
+ *  because it becomes a URL a tab gets navigated to: an absolute URL is
+ *  refused outright, and the /shows/setlists/ prefix is required because that
+ *  is the only directory GET /api/setlists lists and the only one
+ *  POST /api/save-setlist accepts. Anything else reads as "no origin". */
+function normalizeSetlistPath(raw) {
+  if (typeof raw !== 'string') return null;
+  const trimmed = raw.trim();
+  if (!trimmed || /^[a-z][a-z0-9+.-]*:/i.test(trimmed)) return null;
+  const path = trimmed.startsWith('/') ? trimmed : `/${trimmed}`;
+  if (!path.startsWith('/shows/setlists/')) return null;
+  if (!path.endsWith('.duckset.json')) return null;
+  return path;
+}
+
+// Navigation context, not show content: fixed for the life of this tab, which
+// is why it is a module-scoped const rather than a field in `state`. New /
+// Open… / Load demo do not clear it, because the way back to the set that sent
+// you here is still true after the document in this tab has been replaced.
+const originSetlist = normalizeSetlistPath(new URLSearchParams(location.search).get('from'));
+
+function goToSetlist() {
+  // A drag holds the pre-edit document in state.drag, and endDrag() is the
+  // only thing that pushes it onto the undo stack. Switching mid-drag would
+  // strand it, so the gesture wins.
+  if (state.drag) return;
+  const url = originSetlist
+    ? `./setlist.html?set=${encodeURIComponent(originSetlist)}`
+    : './setlist.html';
+  const r = openOtherView(url, setlistTab);
+  setlistTab = r.tab;
+  if (r.how === 'focused') status('switched to the setlist tab');
+  else if (r.how === 'opened') status(originSetlist ? `opened ${originSetlist} in a new tab` : 'opened the setlist editor in a new tab');
+  else status('the browser blocked the new tab. Allow pop-ups for this page and click again.', 'error');
+}
+
+if (originSetlist) {
+  // The filename, not the set's meta.name: reading the name would mean
+  // importing duckset-core.js into this page and bumping MODULE_API in both
+  // pages and in the core, a change to the stale-cache contract bought for a
+  // nicer label. The setlist's own picker labels itself with the filename too.
+  // The noun stays in front of it so the control still reads as a view switch
+  // rather than as a breadcrumb or a second browser Back button.
+  $('btn-setlist').textContent = `Setlist: ${originSetlist.split('/').pop().replace(/\.duckset\.json$/, '')} ↗`;
+}
+$('btn-setlist').title = originSetlist
+  ? `Open ${originSetlist} in its own tab (⌥L)`
+  : 'Open the setlist editor in its own tab (⌥L)';
+$('btn-setlist').disabled = false;
+$('btn-setlist').onclick = goToSetlist;
+
+// ---------------------------------------------------------------------------
 // Keyboard
 // ---------------------------------------------------------------------------
 window.addEventListener('keydown', (e) => {
@@ -3010,6 +3105,10 @@ window.addEventListener('keydown', (e) => {
   // this must never collide with it.
   if (e.altKey && (e.code === 'KeyS' || e.key.toLowerCase() === 's')) { e.preventDefault(); toggleSoloSelectedRole(); return; }
   if (e.altKey && (e.code === 'KeyP' || e.key.toLowerCase() === 'p')) { e.preventDefault(); setSetupMode(!setup.on); return; }
+  // Switch to the setlist editor (see the switching-views block above). ⌥L was
+  // free: ⌥S and ⌥P are the only other Alt bindings and plain 'l' is unbound
+  // in the switch below. e.code before e.key for the macOS reason above ⌥S.
+  if (e.altKey && (e.code === 'KeyL' || e.key.toLowerCase() === 'l')) { e.preventDefault(); goToSetlist(); return; }
   const g = grid();
   const stepT = state.snap && g.length ? (core.beatPeriod(Number(musicMeta().bpm)) / state.subdivision) : FRAME;
   switch (e.key) {

@@ -121,7 +121,52 @@ Warnings (run anyway, say so):
 - an entry whose cast differs from the previous entry's, since the operator is
   about to be surprised by which ducks are needed
 
-## Why this is painful in a browser, and the path to a native app
+## Switching between the two editors
+
+The show editor and the setlist editor are two static sibling pages under
+`editor/`. A button in each topbar opens the other, and the contract between
+them is three URL parameters. Anything that changes one of them changes both
+pages together.
+
+* `duckshow-editor.html?show=<repo path>` opens that show. It is also what
+  makes `POST /api/save` write back in place instead of downloading a copy.
+* `setlist.html?set=<repo path>` opens that setlist.
+* `duckshow-editor.html?from=<setlist repo path>` names the setlist that opened
+  the tab. The show editor uses it for the button's label and destination and
+  for nothing else. It is refused unless it is under `/shows/setlists/` and
+  ends `.duckset.json`, since that is the only directory `GET /api/setlists`
+  lists and the only one `POST /api/save-setlist` accepts. A set outside it
+  would open and then fail Save with a 400.
+
+**Switching always opens a tab. It never navigates the tab you clicked in, and
+it never navigates a tab that is already showing a page.** Neither page has a
+document model: nothing outside its `state` object is serialised, there is no
+autosave, and navigating away would take the undo stack, the decoded audio, an
+open bake cache and the poll loop for any in-flight bake with it. So the
+switcher opens a new tab, or brings forward the one it opened earlier if that
+tab is still around. Each page keeps the handle its own `window.open` returned,
+which is why this works only within one server origin. `scripts/edit.sh` picks
+a free port per run, so two editors launched from two terminals are on two
+origins and cannot see each other. That is the floor, and the status line says
+which of the two things happened on every click.
+
+**A switch never lands you on a document you did not ask for.** The setlist's
+button refuses when the set has no entries, rather than opening a show editor
+with no `?show=`: that path loads the demo show *with a writable repo path*
+(`loadDemo` passes `DEMO_SHOW_PATH`), so one Save would rewrite
+`shows/demo/demo.duckshow.json` for a user who thought they had a blank
+document.
+
+`⌥L` switches views from the keyboard in both pages. It is inert while a
+timeline drag is live, because `endDrag` is the only thing that pushes the
+pre-drag document onto the undo stack.
+
+Both buttons ship `disabled` in the markup and are enabled by the script that
+wires them. A page whose modules failed to load, which is what happens on
+`file://` and on a `MODULE_API` mismatch, therefore shows a visibly disabled
+button instead of a live-looking one that does nothing.
+
+## Why this is painful in a browser
 
 A browser cannot reliably write a file back. Chrome's File System Access API
 works, but the handle does not survive a reload, and a show opened via `?show=`
@@ -129,10 +174,19 @@ never had one to begin with. That is why `POST /api/save` exists in
 `scripts/editor_server.py`: writing through the local server is the only route
 that works in every browser and survives a reload.
 
-A setlist makes the friction worse rather than adding a new kind of it. It
-references many files, opening an entry is a new tab, and coming back reloads
-the setlist from disk, losing an unsaved reorder. Every one of those follows
-from the editor being a page rather than a document.
+A setlist references many files, so moving between a set and the shows in it
+is a normal part of the work. Two tabs handle that without either page being
+unloaded, so an unsaved reorder and an unsaved cue both survive a switch. What
+neither page gets from a browser is a document model: no undo across a reload,
+no autosave, no file handle that survives relaunch, and no way for one tab to
+know that the other is holding unsaved edits to a show it is drawing a block
+for. The setlist refetches `GET /api/shows` whenever its tab is brought
+forward, so a saved change to a show's duration or cast reaches the block that
+draws it, but an unsaved one cannot.
+
+**The native app is parked.** What follows records what a document model would
+buy and is still true. It is not being built. The two-tab switcher above is the
+answer being maintained.
 
 **What a native macOS app buys.** A real document model: open / save / save-as
 through the system panel, security-scoped bookmarks that survive relaunch,

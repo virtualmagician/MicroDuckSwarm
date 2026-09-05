@@ -105,6 +105,7 @@
 
 <div id="topbar">
   <span class="brand">duckset<small>setlist</small></span>
+  <button id="btn-show-editor" disabled title="Show editor unavailable — the editor scripts have not loaded">Show editor ↗</button>
   <span id="file-name">(new set)</span>
   <span class="sep"></span>
   <label>name <input id="set-name" type="text" placeholder="opening set"></label>
@@ -120,7 +121,7 @@
   <button id="save" class="primary">Save</button>
   <button id="download">Download</button>
   <span class="sep"></span>
-  <span id="hint">Drag blocks to reorder. Double-click a block to open it in the editor.</span>
+  <span id="hint">Drag blocks to reorder. Double-click a block to open it in the show editor. <kbd>⌥L</kbd> switches views.</span>
 </div>
 
 <div id="main">
@@ -438,7 +439,8 @@ $('strip').addEventListener('dblclick', (e) => {
   // A new tab, deliberately: the setlist keeps its unsaved state, which
   // navigating away would lose. docs/setlist-format.md says why this is a
   // symptom rather than a design.
-  window.open(`./duckshow-editor.html?show=${encodeURIComponent(entry.show)}`, '_blank');
+  window.open(`./duckshow-editor.html?show=${encodeURIComponent(entry.show)}`
+    + (state.path ? `&from=${encodeURIComponent(state.path)}` : ''), '_blank');
 });
 
 // -- toolbar ---------------------------------------------------------------
@@ -522,8 +524,110 @@ $('save').addEventListener('click', async () => {
 });
 
 window.addEventListener('beforeunload', (e) => {
-  if (state.dirty) e.preventDefault();
+  // e.returnValue as well as preventDefault(): some browsers still gate the
+  // leave-site dialog on the legacy property, and this page has no undo stack
+  // to fall back on. Matches duckshow-editor.html. This is not what guards a
+  // view switch: the switcher never unloads this page.
+  if (state.dirty) { e.preventDefault(); e.returnValue = ''; }
 });
+
+// ---------------------------------------------------------------------------
+// Switching views (docs/setlist-format.md "Switching between the two editors")
+// ---------------------------------------------------------------------------
+// Read the same block in duckshow-editor.html for why it works this way. The
+// short version: switching opens a tab, never navigates one that is already
+// showing a page, and reuses only the handle our own window.open returned.
+let showTab = null;
+
+function openOtherView(url, existing) {
+  try {
+    if (existing && !existing.closed) { existing.focus(); return { how: 'focused', tab: existing }; }
+  } catch (_) { /* fall through and open a new tab */ }
+  const tab = window.open(url, '_blank');
+  if (!tab) return { how: 'blocked', tab: null };
+  try { tab.focus(); } catch (_) {}
+  return { how: 'opened', tab };
+}
+
+function goToShowEditor() {
+  // An empty set is refused rather than opened. Without ?show= the show editor
+  // falls through to loadDemo(), which passes DEMO_SHOW_PATH, so the tab would
+  // hold shows/demo/demo.duckshow.json wired for in-place overwrite. One Save
+  // from someone who thought they had a blank document would rewrite the
+  // repo's demo. Say what to do instead.
+  const first = state.doc.entries[0]?.show;
+  if (!first) {
+    setStatus('this set has no shows yet. Pick one from "add show…", then double-click its block to edit it.', 'error');
+    return;
+  }
+  // The set's first entry: a set is ordered and entry 1 is the opener.
+  // Reaching any other entry is what double-clicking a block is for.
+  const url = `./duckshow-editor.html?show=${encodeURIComponent(first)}`
+    + (state.path ? `&from=${encodeURIComponent(state.path)}` : '');
+  const r = openOtherView(url, showTab);
+  showTab = r.tab;
+  if (r.how === 'focused') setStatus('switched to the show editor tab');
+  else if (r.how === 'opened') setStatus(`opened ${first} in a new tab`);
+  else setStatus('the browser blocked the new tab. Allow pop-ups for this page and click again.', 'error');
+}
+
+$('btn-show-editor').title = 'Open the first show in this set in its own tab (⌥L)';
+$('btn-show-editor').disabled = false;
+$('btn-show-editor').onclick = goToShowEditor;
+
+window.addEventListener('keydown', (e) => {
+  // This page has never had a keydown handler, so the typing guard is new here
+  // rather than inherited: #set-name and both pickers can hold focus and ⌥L
+  // must not fire while a set name is being typed. e.code before e.key,
+  // because Option remaps e.key on macOS layouts.
+  const tag = document.activeElement?.tagName;
+  if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') return;
+  if (e.altKey && (e.code === 'KeyL' || e.key.toLowerCase() === 'l')) { e.preventDefault(); goToShowEditor(); }
+});
+
+// The index is fetched once at boot, and this tab is now expected to live for
+// a whole rehearsal while shows are edited and saved in the other one. Without
+// this, every block's width, length, cast line and the runtime total stay
+// frozen at whatever disk said when the tab opened, and the cast-change
+// warnings go with them. Refetch whenever the tab comes forward.
+//
+// Deliberately NOT loadIndex(): that one is boot's version, and on any failure
+// it empties the index, clears serverSave and writes an error over whatever
+// the status line was saying. A background refetch must not disable Save or
+// blank the strip because one request lost a race with a server restart. On
+// failure here the last good index simply stays.
+let refreshing = false;
+
+async function refreshIndexIfChanged() {
+  // Bound to two events that overlap, so this is also the debounce.
+  if (refreshing || !state.serverSave || dragId !== null) return;
+  refreshing = true;
+  try {
+    const res = await fetch('/api/shows', { cache: 'no-store' });
+    if (!res.ok) return;
+    const shows = (await res.json()).shows;
+    if (!Array.isArray(shows)) return;
+    const next = {};
+    for (const show of shows) next[show.path] = show;
+    // Only touch the DOM when something a block draws actually moved, so a
+    // refresh does not reset the add-show picker for nothing.
+    if (JSON.stringify(next) === JSON.stringify(state.index)) return;
+    state.index = next;
+    render();
+  } catch (_) {
+    // Keep the last good index.
+  } finally {
+    refreshing = false;
+  }
+}
+
+// Both events, because neither is sufficient alone. visibilitychange covers a
+// tab switch inside one window; it does not fire when the browser window
+// itself regains focus from another application, which is what happens when
+// the switcher calls focus() on a tab in a background window. The window focus
+// event covers that and misses the first case in some browsers.
+document.addEventListener('visibilitychange', () => { if (!document.hidden) refreshIndexIfChanged(); });
+window.addEventListener('focus', refreshIndexIfChanged);
 
 // -- boot ------------------------------------------------------------------
 
