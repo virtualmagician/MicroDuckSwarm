@@ -23,6 +23,8 @@ swarmctl serve --roster roster.json --shows-dir shows/ [--osc-port 53300] [--mas
 | `/duckswarm/play` | optional `f` lead seconds (default 1.5) | Arm at now + lead. Requires a loaded show; otherwise `/duckswarm/error "no show loaded"`. |
 | `/duckswarm/go` | — | StageWizard-style single GO: `play` with the default lead. |
 | `/duckswarm/seek` | `f` show-time seconds | Seek (allowed while loaded, armed, or playing). |
+| `/duckswarm/pause` | — | Freeze the show where it is; every duck holds its pose with locomotion commanded to zero. Refused unless playing. |
+| `/duckswarm/resume` | — | Continue from exactly where `pause` stopped. Refused unless paused. A second `/duckswarm/resume` while already playing is a no-op, not a restart. |
 | `/duckswarm/stop` | — | Graceful stop. |
 | `/duckswarm/panic` | — | Panic fan-out. Always executed, never refused, from any state. |
 | `/duckswarm/ping` | — | Subscribe the sender to status feedback (see below) for 5 s; re-ping to renew — identical contract to `/stagewand/ping`. |
@@ -38,7 +40,7 @@ Sent to every address that pinged within the last 5 s, at **2 Hz** while armed/p
 
 | Address | Args |
 |---|---|
-| `/duckswarm/status/transport` | `s` `stopped` \| `armed` \| `playing` |
+| `/duckswarm/status/transport` | `s` `stopped` \| `armed` \| `playing` \| `paused` |
 | `/duckswarm/status/show` | `s` show-id or `""` |
 | `/duckswarm/status/show_time` | `f` seconds (0.0 when stopped) |
 | `/duckswarm/status/summary` | `i` roster size, `i` ducks reporting, `i` ducks lost |

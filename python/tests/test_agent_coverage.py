@@ -112,7 +112,7 @@ class SeekCoverageTest(_AgentTestBase):
         acks = self.master.wait_for_ack(seek_id)
         self.assertTrue(acks)
         self.assertFalse(acks[0]["ok"])
-        self.assertIn("not armed or playing", acks[0]["error"])
+        self.assertIn("not armed, playing or paused", acks[0]["error"])
         self.assertEqual(self.agent.state, "loaded")
 
     def test_seek_reapplies_latest_mode_event_and_skips_when_none_applies(self) -> None:

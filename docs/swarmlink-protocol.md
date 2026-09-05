@@ -23,7 +23,7 @@ Agent stamps arrival `t3`, computes `offset = ((t1−t0)+(t2−t3))/2`, `rtt = (
 ## 2 · Transport state (master → each agent, unicast, 5 Hz)
 
 ```
-{"v":1, "type":"state", "seq": 421, "show": "<show-id>", "transport": "stopped"|"armed"|"playing",
+{"v":1, "type":"state", "seq": 421, "show": "<show-id>", "transport": "stopped"|"armed"|"playing"|"paused",
  "show_time": 12.48, "master_time": <master_ns>}
 ```
 
@@ -32,7 +32,7 @@ Loss-tolerant by design (the next one comes in 200 ms); `seq` lets agents ignore
 ## 3 · Commands (master → agent, unicast, repeated, ACKed)
 
 ```
-{"v":1, "type":"cmd", "cmd_id":"<uuid>", "cmd":"load"|"play"|"stop"|"seek"|"panic", ...}
+{"v":1, "type":"cmd", "cmd_id":"<uuid>", "cmd":"load"|"play"|"stop"|"seek"|"pause"|"resume"|"panic", ...}
 agent → master: {"v":1, "type":"ack", "duck":"duck-01", "cmd_id":"<uuid>", "ok": true, "error": null}
 ```
 
@@ -44,7 +44,38 @@ Master sends each command up to 5× at 100 ms intervals until ACKed; agents dedu
 | `play` | `"show": id, "at_master_time": <ns>, "from_show_time": 0.0` | Schedule start at local time `at_master_time − offset` → ARMED, then PLAYING. If the start is already > 0.25 s past on arrival: join in progress only if < 2 s late (seek to the correct point); otherwise stay put and report `missed_start`. |
 | `seek` | `"show_time": 45.0, "at_master_time": <ns>` | Jump the local show clock (re-applying the latest `mode` event ≤ target). |
 | `stop` | — | End playback gracefully: zero locomotion, `robot.stop`, → LOADED. |
+| `pause` | `"at_master_time": <ns>` | Freeze the show clock at the instant given, holding show-time where it was. Keeps ticking at 50 Hz with locomotion commanded to **zero** (never silence — see below), so head/pose/mouth hold their frozen values. → PAUSED. |
+| `resume` | `"at_master_time": <ns>` | Un-freeze at the instant given: re-anchor the show clock so show-time continues from exactly where it stopped. → PLAYING. |
 | `panic` | — | Highest priority, any state: `robot.stop`, neutral head/pose, → IDLE. Never NACKed. |
+
+### Pause and resume
+
+An operator pause is the transport half of the timeline control track
+(`docs/control-track.md`); authored hold points will trigger the same
+mechanism locally rather than a second one. Three rules make it survivable on
+a stage:
+
+**Both commands are parked, not validated on arrival.** `pause` and `resume`
+carry `at_master_time` and are applied by the tick loop at that instant, the
+way `seek` already is. A command that arrives before the duck is in the state
+it names is *not* NACKed — NACKing would be fatal, because both reference
+masters break their retry loop on any ACK, NACK included, so one early NACK
+would strand one duck forever.
+
+**Resume is idempotent by state, not just by `cmd_id`.** A resume for a duck
+that is already playing is ACKed and does nothing. `cmd_id` dedup only covers
+retries of one command; two distinct GO presses are two `cmd_id`s, and without
+the state check the second would re-anchor the clock to a different epoch and
+split the cast. The same holds for a second `pause`.
+
+**A pause commands zero, it never goes silent.** Emitting no `robot.move`
+would leave the duck coasting on its last velocity until `robotd`'s 500 ms
+deadman caught it. The deadman is a safety net for a lost link, not the
+mechanism choreography stops a duck with.
+
+`seek` while paused re-targets the frozen position and stays paused, so
+scrubbing during a hold behaves the way an operator expects. `stop`, `panic`
+and `load` all clear the pause outright.
 
 Show files are distributed out-of-band before the show (rsync/scp in v1; the `load` hash check is what makes that safe).
 
@@ -78,7 +109,7 @@ show that is actually about to play, never a stale verdict.
 ## 4 · Telemetry (agent → master, unicast, 1 Hz; 5 Hz while PLAYING)
 
 ```
-{"v":1, "type":"telemetry", "duck":"duck-01", "seq": 88, "state":"idle"|"loaded"|"armed"|"playing"|"degraded"|"fault",
+{"v":1, "type":"telemetry", "duck":"duck-01", "seq": 88, "state":"idle"|"loaded"|"armed"|"playing"|"paused"|"degraded"|"fault",
  "show": "<id or null>", "show_time": 12.5, "clock_offset_ms": 1.8, "clock_rtt_ms": 4.2,
  "policies_ok": true, "battery_pct": null, "rssi_dbm": null, "last_error": null}
 ```
@@ -89,6 +120,10 @@ show that is actually about to play, never a stale verdict.
 
 ```
 IDLE ──load──▶ LOADED ──play──▶ ARMED ──(start time)──▶ PLAYING ──(end/stop)──▶ LOADED
+                                                         │  ▲
+                                                    pause│  │resume
+                                                         ▼  │
+                                                        PAUSED
   ▲                                                        │
   └───────────────────────── panic (from any state) ◀──────┘
 PLAYING with sync lost ▶ keep playing local copy, state="degraded", resync when beacons return.

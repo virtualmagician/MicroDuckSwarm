@@ -207,6 +207,15 @@ class DuckAgent:
         # seek received while PLAYING: (at_master_ns, target show_time),
         # applied by the tick loop once the instant arrives.
         self._pending_seek: Optional[tuple[int, float]] = None
+        # Operator pause (docs/swarmlink-protocol.md "Pause and resume").
+        # _paused_show_time freezes the clock; _pending_pause/_pending_resume
+        # are parked instants the tick loop applies, exactly like _pending_seek
+        # -- never validated on arrival, because both reference masters break
+        # their retry loop on any ACK including a NACK, so one early NACK would
+        # strand one duck for the rest of the show.
+        self._paused_show_time: Optional[float] = None
+        self._pending_pause: Optional[int] = None
+        self._pending_resume: Optional[int] = None
         # the running show clock
         self._play_epoch_local_ns: Optional[int] = None
         self._play_epoch_show_time: float = 0.0
@@ -319,6 +328,8 @@ class DuckAgent:
 
     def _current_show_time(self, now_ns: Optional[int] = None) -> float:
         now_ns = now_ns if now_ns is not None else time.monotonic_ns()
+        if self._paused_show_time is not None:
+            return self._paused_show_time
         if self._play_epoch_local_ns is None:
             # ARMED: `_arm` parks this at the scheduled from_show_time.
             return self._play_epoch_show_time
@@ -328,7 +339,7 @@ class DuckAgent:
     def build_telemetry(self, now_ns: Optional[int] = None) -> dict[str, Any]:
         now_ns = now_ns if now_ns is not None else time.monotonic_ns()
         show_time = 0.0
-        if self.state in ("armed", "playing"):
+        if self.state in ("armed", "playing", "paused"):
             show_time = self._current_show_time(now_ns)
         self._telemetry_seq += 1
         return {
@@ -541,6 +552,8 @@ class DuckAgent:
             "load": self._handle_load,
             "play": self._handle_play,
             "seek": self._handle_seek,
+            "pause": self._handle_pause,
+            "resume": self._handle_resume,
             "stop": self._handle_stop,
             "panic": self._handle_panic,
         }
@@ -684,6 +697,12 @@ class DuckAgent:
     def _cancel_scheduled(self) -> None:
         self._scheduled_at_master_ns = None
         self._pending_seek = None
+        # A pause must never outlive the thing it was pausing: stop, panic and
+        # load all come through here, and a duck left frozen after one of them
+        # is a duck that cannot be recovered without a reload.
+        self._paused_show_time = None
+        self._pending_pause = None
+        self._pending_resume = None
 
     def _arm(self, at_master_ns: int, from_show_time: float) -> None:
         self.state = "armed"
@@ -703,6 +722,13 @@ class DuckAgent:
         """
         self._scheduled_at_master_ns = None
         self._pending_seek = None
+        # A resume goes through here, and so does any fresh play/seek: in every
+        # case the clock is being re-anchored, so a frozen position must not
+        # survive it (the control-track review's "seek out of a hold strands
+        # the duck" failure).
+        self._paused_show_time = None
+        self._pending_pause = None
+        self._pending_resume = None
         self._play_epoch_local_ns = epoch_local_ns
         self._play_epoch_show_time = show_time
         # Open-left event window (sampler.events_between is (t0, t1]):
@@ -804,16 +830,50 @@ class DuckAgent:
                 return False, "duck is in fault state; reload required"
             if not self.robotd.connected:
                 return False, "robotd not connected"
-            if self.state not in ("armed", "playing"):
-                return False, "cannot seek: not armed or playing"
+            if self.state not in ("armed", "playing", "paused"):
+                return False, "cannot seek: not armed, playing or paused"
             if self.clock.sample_count() == 0:
                 return False, "no time sync yet"
             if self.state == "armed":
                 self._arm(int(at_master_time), float(show_time))
             else:
+                # PLAYING or PAUSED both park it; _play_tick applies it at the
+                # instant, and while paused it moves the frozen point rather
+                # than starting this duck performing alone.
                 # Keep performing until the seek instant, then jump
                 # (_play_tick); the duck never coasts on a stale velocity.
                 self._pending_seek = (int(at_master_time), float(show_time))
+            self.last_error = None
+        return True, None
+
+    def _handle_pause(self, fields: dict[str, Any]) -> tuple[bool, Optional[str]]:
+        at_master_time = fields.get("at_master_time")
+        if at_master_time is None:
+            return False, "pause command missing at_master_time"
+        with self._playback_lock:
+            if self.state == "fault":
+                return False, "duck is in fault state; reload required"
+            if self._paused_show_time is not None or self._pending_pause is not None:
+                return True, None  # already pausing/paused: idempotent by state
+            if self.state != "playing":
+                return False, "cannot pause: not playing"
+            self._pending_pause = int(at_master_time)
+            self.last_error = None
+        return True, None
+
+    def _handle_resume(self, fields: dict[str, Any]) -> tuple[bool, Optional[str]]:
+        at_master_time = fields.get("at_master_time")
+        if at_master_time is None:
+            return False, "resume command missing at_master_time"
+        with self._playback_lock:
+            if self.state == "fault":
+                return False, "duck is in fault state; reload required"
+            # Idempotent by STATE, not just by cmd_id: two distinct GO presses
+            # are two cmd_ids, and re-anchoring on the second would move this
+            # duck's epoch away from the rest of the cast.
+            if self._paused_show_time is None and self._pending_pause is None:
+                return True, None
+            self._pending_resume = int(at_master_time)
             self.last_error = None
         return True, None
 
@@ -828,12 +888,12 @@ class DuckAgent:
             # it, and if the puppet was driving locomotion in IDLE/LOADED
             # that motion is stopped exactly like a playing show's.
             self._puppet.mute()
-            if self.state in ("armed", "playing") or self._puppet_move_applied:
+            if self.state in ("armed", "playing", "paused") or self._puppet_move_applied:
                 err = self._send_stop_sequence()
                 if err is not None:
                     self._fault_locked(f"stop failed: {err}")
                     error = self.last_error
-                elif self.state in ("armed", "playing"):
+                elif self.state in ("armed", "playing", "paused"):
                     self.state = "loaded" if self.show is not None else "idle"
             self._play_epoch_local_ns = None
             self._play_epoch_show_time = 0.0
@@ -1039,7 +1099,10 @@ class DuckAgent:
                 )
                 if self.state == "armed":
                     self._maybe_start_from_armed(now_ns)
-                if self.state == "playing":
+                if self.state in ("playing", "paused"):
+                    # PAUSED still ticks. The frame is frozen and locomotion is
+                    # commanded to zero, but going silent would leave the duck
+                    # coasting until robotd's 500 ms deadman caught it.
                     events, end_of_show = self._play_tick(now_ns)
                 else:
                     self._puppet_tick(now_ns)
@@ -1141,12 +1204,44 @@ class DuckAgent:
         """
         assert self.sampler is not None
 
+        if self._pending_pause is not None:
+            target_local_ns = self.clock.local_time_for_master(self._pending_pause)
+            if now_ns >= target_local_ns:
+                # Freeze at the instant the master named, not at "now", so
+                # every duck stops at the same show-time.
+                self._paused_show_time = self._current_show_time(target_local_ns)
+                self._pending_pause = None
+                self.state = "paused"
+
+        if self._pending_resume is not None:
+            target_local_ns = self.clock.local_time_for_master(self._pending_resume)
+            if now_ns >= target_local_ns:
+                resume_from = self._paused_show_time
+                self._pending_resume = None
+                if resume_from is not None:
+                    # _start_playing_now, not _begin_playback: the latter adds
+                    # lateness to the target show-time and re-seeds the event
+                    # window past it, which on a resume would silently skip
+                    # every event in the gap. Anchoring at the scheduled
+                    # instant makes the clock identical on every duck.
+                    self._start_playing_now(resume_from, target_local_ns)
+                    if self.state != "playing":
+                        return [], False  # setMode at the resume point faulted us
+
         if self._pending_seek is not None:
             at_master_ns, target_show_time = self._pending_seek
             target_local_ns = self.clock.local_time_for_master(at_master_ns)
             if now_ns >= target_local_ns:
                 self._pending_seek = None
-                self._begin_playback(target_show_time, target_local_ns, now_ns)
+                if self._paused_show_time is not None:
+                    # Scrubbing during a hold: move the frozen position, stay
+                    # frozen. Falling through to _begin_playback would clear
+                    # the pause and start the duck performing alone.
+                    self._paused_show_time = float(target_show_time)
+                    self._last_processed_show_time = math.nextafter(float(target_show_time), -math.inf)
+                    self._apply_mode_for_show_time(float(target_show_time))
+                else:
+                    self._begin_playback(target_show_time, target_local_ns, now_ns)
                 if self.state != "playing":
                     return [], False  # setMode at the seek point faulted us
 
@@ -1155,7 +1250,7 @@ class DuckAgent:
 
         frame = self.sampler.at(show_time)
         servo = self.sampler.servo_at(show_time)
-        locomotion_frozen = servo is not None and servo.mode == "hold"
+        locomotion_frozen = (servo is not None and servo.mode == "hold") or self._paused_show_time is not None
 
         # Nudge layer (module docstring): puppet move adds to the timeline's
         # locomotion, puppet head/pose/mouth replace the timeline's while
