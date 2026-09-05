@@ -564,6 +564,16 @@ public extension Show {
     func validate() -> ValidationReport {
         var report = ValidationReport()
 
+        // Parity with validator.py:_check_meta_duration. A missing duration
+        // cannot reach here (Meta.duration is non-optional, so the decode
+        // fails first), but zero, negative and non-finite all can, and the
+        // sampler's end-of-show safety -- zero locomotion, robot.stop -- then
+        // either never runs or runs on the first tick.
+        if !meta.duration.isFinite || meta.duration <= 0 {
+            report.errors.append(ValidationIssue(role: nil, track: "meta", t: nil,
+                message: "meta.duration=\(meta.duration) must be a finite number > 0"))
+        }
+
         let castRoles = Set(cast.map(\.role))
         // Parity with `validator.py:validate` — a cast role with no tracks
         // entry at all is an ERROR (docs/duckshow-format.md: "every role in
@@ -579,7 +589,14 @@ public extension Show {
                 message: "track entry has no matching cast role"))
         }
 
-        for (role, roleTracks) in tracks {
+        // Iterate the CAST, in order, exactly as validator.py does. Walking
+        // `tracks` instead validated orphan track entries the canonical
+        // validator never looks at (so the skill-occupancy warning fired only
+        // here), and a Swift Dictionary has no stable order, so issue order
+        // differed run to run.
+        for member in cast {
+            guard let roleTracks = tracks[member.role] else { continue }
+            let role = member.role
             validateLocomotion(roleTracks.locomotion, role: role, into: &report)
             validateHead(roleTracks.head, role: role, into: &report)
             validatePose(roleTracks.pose, role: role, into: &report)
@@ -589,6 +606,8 @@ public extension Show {
             validateModeValue(roleTracks.events, role: role, into: &report)
             validateModeOverlap(roleTracks.events, locomotion: roleTracks.locomotion, role: role, into: &report)
             validateSkillOccupancyOverlap(roleTracks.events, role: role, into: &report)
+            validateEventFields(roleTracks.events, role: role, into: &report)
+            validateServo(roleTracks.servo, role: role, into: &report)
         }
 
         return report
@@ -686,12 +705,73 @@ public extension Show {
     /// `_EPS` in python/duckshow/validator.py.
     private var epsilon: Double { 1e-9 }
 
+    /// Parity with `validator.py:_check_servo`. The servo track is reserved
+    /// in v1, but a file can carry it today and the diagnostics are cheap: a
+    /// zero or negative window is silently never entered, and a mode other
+    /// than "hold" has no effect on a v1 agent -- a warning, not an error,
+    /// because the file is legal. This was never called at all here, so the
+    /// whole track went uninspected while Python and the editor checked it.
+    private func validateServo(_ entries: [ServoWindow], role: String, into report: inout ValidationReport) {
+        for e in entries {
+            if !e.t.isFinite {
+                report.errors.append(ValidationIssue(role: role, track: "servo", t: e.t,
+                    message: "t=\(e.t) is not a finite number"))
+            } else if e.t < 0 {
+                report.errors.append(ValidationIssue(role: role, track: "servo", t: e.t,
+                    message: "servo t=\(e.t) must be >= 0"))
+            }
+            if let duration = e.duration {
+                if !duration.isFinite {
+                    report.errors.append(ValidationIssue(role: role, track: "servo", t: e.t,
+                        message: "duration=\(duration) is not a finite number"))
+                } else if duration <= 0 {
+                    report.errors.append(ValidationIssue(role: role, track: "servo", t: e.t,
+                        message: "servo duration=\(duration) must be > 0"))
+                }
+            }
+            if e.mode != "hold" {
+                report.warnings.append(ValidationIssue(role: role, track: "servo", t: e.t,
+                    message: "servo mode '\(e.mode)' is not honored by v1 agents (only 'hold' has any effect)"))
+            }
+        }
+    }
+
+    /// Parity with `validator.py:_check_event_fields`. Had no Swift
+    /// equivalent, so a negative or non-finite event time passed silently.
+    private func validateEventFields(_ events: [Event], role: String, into report: inout ValidationReport) {
+        for e in events {
+            if !e.t.isFinite {
+                report.errors.append(ValidationIssue(role: role, track: "events", t: e.t,
+                    message: "t=\(e.t) is not a finite number"))
+            } else if e.t < 0 {
+                report.errors.append(ValidationIssue(role: role, track: "events", t: e.t,
+                    message: "event t=\(e.t) must be >= 0"))
+            }
+            // `hold` lives on the sound case rather than on Event itself.
+            if case .sound(_, let hold) = e.action, let hold, !hold.isFinite {
+                report.errors.append(ValidationIssue(role: role, track: "events", t: e.t,
+                    message: "hold=\(hold) is not a finite number"))
+            }
+        }
+    }
+
     private func checkSorted<T>(
         _ keyframes: [T], role: String, track: String, t: (T) -> Double, into report: inout ValidationReport
     ) {
         var previous: Double?
         for kf in keyframes {
             let value = t(kf)
+            // Parity with validator.py:_check_sorted_unique. A keyframe time
+            // that is negative or not a number is not a point on any
+            // timeline; this was silently accepted here while Python and the
+            // editor both rejected it.
+            if !value.isFinite {
+                report.errors.append(ValidationIssue(role: role, track: track, t: value,
+                    message: "t=\(value) is not a finite number"))
+            } else if value < 0 {
+                report.errors.append(ValidationIssue(role: role, track: track, t: value,
+                    message: "\(track) keyframe t=\(value) must be >= 0"))
+            }
             if let previous {
                 if value == previous {
                     report.errors.append(ValidationIssue(role: role, track: track, t: value,

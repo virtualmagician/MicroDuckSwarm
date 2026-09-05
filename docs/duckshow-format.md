@@ -62,6 +62,8 @@ Five curve tracks and one event track, all optional:
 
 ### Event track (`events`)
 
+Event `t` must be finite and `>= 0`, and a `hold` (sound events) must be finite when present. Same rule and same reason as the curve tracks: a negative or non-finite time is not a point on any timeline.
+
 Point events, exactly one action key per entry:
 
 | Key | Value | Maps to |
@@ -111,6 +113,8 @@ Durations live in `python/duckshow/limits.py`'s `SKILL_DURATIONS_S` / `GROUND_PI
 ### Servo track (`servo`) — reserved in v1
 
 Declared in the spec so files can carry it, but v1 agents only honor `{"mode": "hold"}` (freeze locomotion, keep pose/head). Future modes: `laser_homing`, `color_homing` (`"target": "<beacon-id>"`), `follow_marker`. During a servo window, the servo controller owns `locomotion`/`head`; curve tracks resume when the window ends.
+
+**Validated even though it is reserved**, because a file can carry the track today and the diagnostics are cheap: `t` must be finite and `>= 0`, and a `duration`, when present, must be finite and `> 0` (a zero or negative window is silently never entered). Any `mode` other than `"hold"` is a **warning**, not an error, in the same words the format uses here: the file is legal, but the mode has no effect on a v1 agent, and finding that out on show night is the failure this prevents. A `servo` entry with no `duration` extends until the next entry, or forever.
 
 ## Custom .onnx policies (`requires.policies`)
 
