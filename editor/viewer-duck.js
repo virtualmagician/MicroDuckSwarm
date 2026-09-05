@@ -326,8 +326,16 @@ export function computeDuckPose(rootModel, pose, walkState) {
 
   const bodyLocal = mat4Chain(
     mat4FromTranslation([0, STAND_HEIGHT_M + BODY_HY + (pose.bodyZ || 0) + walk.bob, 0]),
-    mat4FromZRotation((pose.bodyRoll || 0) + walk.rock),
+    // Order matters and was inverted. mat4Chain(A, B) applies B first, so
+    // listing roll before pitch made PITCH act first, while
+    // tools/bake/bakelib/sim.py decomposes the trunk quaternion as extrinsic
+    // Z-Y-X -- R = Rz(yaw)*Ry(pitch)*Rx(roll), i.e. ROLL first. Baking and
+    // replaying a duck that was both rolled and pitched therefore did not
+    // reproduce the orientation the physics actually had. Second-order for
+    // the small deltas-from-upright the format defines, but the two halves
+    // should agree exactly rather than nearly.
     mat4FromXRotation(REST_LEAN + (pose.bodyPitch || 0)),
+    mat4FromZRotation((pose.bodyRoll || 0) + walk.rock),
   );
   const body = mat4Chain(rootModel, bodyLocal);
 

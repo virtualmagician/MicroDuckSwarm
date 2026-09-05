@@ -363,8 +363,16 @@ export function drawRealDuck(gl, litProgram, real, rootModel, pose, walkState, r
 
   const bodyLocal = mat4Chain(
     mat4FromTranslation([0, NOMINAL_TRUNK_Z + (pose.bodyZ || 0), 0]),
-    mat4FromZRotation(pose.bodyRoll || 0),
+    // Order matters and was inverted. mat4Chain(A, B) applies B first, so
+    // listing roll before pitch made PITCH act first, while
+    // tools/bake/bakelib/sim.py decomposes the trunk quaternion as extrinsic
+    // Z-Y-X -- R = Rz(yaw)*Ry(pitch)*Rx(roll), i.e. ROLL first. Baking and
+    // replaying a duck that was both rolled and pitched therefore did not
+    // reproduce the orientation the physics actually had. Second-order for
+    // the small deltas-from-upright the format defines, but the two halves
+    // should agree exactly rather than nearly.
     mat4FromXRotation(pose.bodyPitch || 0),
+    mat4FromZRotation(pose.bodyRoll || 0),
   );
   const realRoot = mat4Chain(rootModel, bodyLocal, MJCF_TO_RENDER);
 
