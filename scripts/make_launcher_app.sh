@@ -40,8 +40,19 @@ CONTENTS="$APP/Contents"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
+# The real MicroDuck, cut out by scripts/launcher/render-duck.html from the
+# meshes, when that render has been made on this machine (it is gitignored:
+# a derivative of Pollen's CC BY-SA-NC assets); the emoji stands in otherwise.
+# The Swift script reports which of the two it actually drew, so that line is
+# the one that says it, after the fact, rather than a guess made here before.
+DUCK_PNG="$REPO/scripts/launcher/duck.png"
 echo "rendering icon..."
-swift "$REPO/scripts/launcher/make_icon.swift" "$WORK/icon-1024.png" >/dev/null
+if [ -f "$DUCK_PNG" ]; then
+  swift "$REPO/scripts/launcher/make_icon.swift" "$WORK/icon-1024.png" "$DUCK_PNG"
+else
+  swift "$REPO/scripts/launcher/make_icon.swift" "$WORK/icon-1024.png"
+  echo "  (no scripts/launcher/duck.png; see scripts/launcher/render-duck.html for the real one)"
+fi
 
 # .iconset: every size macOS asks for, at 1x and 2x, from the one 1024 render.
 ICONSET="$WORK/AppIcon.iconset"

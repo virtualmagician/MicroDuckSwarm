@@ -40,3 +40,8 @@ roster.json
 
 # Built launcher app (scripts/make_launcher_app.sh): build output, not source.
 /dist/
+
+# A render of Pollen's MicroDuck meshes for the launcher icon, made locally by
+# scripts/launcher/render-duck.html. A CC BY-SA-NC derivative, so it stays out
+# of this MIT repo; without it the build uses the emoji stand-in.
+scripts/launcher/duck.png

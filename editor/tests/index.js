@@ -27,3 +27,5 @@ import './stl-parser.test.mjs';
 import './bake-cache.test.mjs';
 import './asset-probe.test.mjs';
 import './create-preview.test.mjs';
+import './setlist.test.mjs';
+import './pan.test.mjs';

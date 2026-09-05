@@ -358,15 +358,24 @@ export function mat4Perspective(fovY, aspect, near, far) {
 }
 
 /** Standard view matrix: eye/center/up (each a vec3) -> world-to-camera. */
-export function mat4LookAt(eye, center, up) {
-  let z = vec3Normalize(vec3Sub(eye, center)); // camera looks down -z
-  let x = vec3Cross(up, z);
-  const xlen = vec3Length(x);
-  if (xlen < 1e-8) {
-    // up is parallel to the view direction: fall back to a stable axis.
-    x = Math.abs(z[1]) < 0.999 ? vec3Cross([0, 1, 0], z) : vec3Cross([1, 0, 0], z);
+/**
+ * The camera's right vector for a view direction and an up hint, with the
+ * one rule for a degenerate pair (up parallel to the view): fall back to
+ * world y, or to world x when looking straight along y. Shared by
+ * mat4LookAt and panCamera so a pan moves along the axes the view matrix
+ * actually uses, in the degenerate case as in every other.
+ */
+export function cameraRightVector(forward, up) {
+  let right = vec3Cross(forward, up);
+  if (vec3Length(right) < 1e-8) {
+    right = vec3Cross(forward, Math.abs(forward[1]) < 0.999 ? [0, 1, 0] : [1, 0, 0]);
   }
-  x = vec3Normalize(x);
+  return vec3Normalize(right);
+}
+
+export function mat4LookAt(eye, center, up) {
+  const z = vec3Normalize(vec3Sub(eye, center)); // camera looks down -z
+  const x = cameraRightVector(vec3Negate(z), up);
   const y = vec3Cross(z, x);
 
   const out = new Float32Array(16);
@@ -898,6 +907,40 @@ export function dollyCamera(cam, factor, distanceRange = [1.2, 14]) {
   return { ...cam, distance: clamp(cam.distance * factor, distanceRange[0], distanceRange[1]) };
 }
 
+/**
+ * Pan-with-right-drag: slide the target across the view plane so the scene
+ * follows the pointer. dxPx/dyPx are pixels of pointer travel; the scale is
+ * world units per pixel at the target's depth, from the vertical field of
+ * view and the viewport height, so a pan covers the same screen distance at
+ * any zoom. Two clamps keep a runaway pan from losing the stage: the target
+ * stays within `reach` metres of the stage centre horizontally, and the EYE
+ * stays above the floor and the target below 3 m. Clamping the eye rather
+ * than the target matters in the low presets: the house camera's up vector
+ * leans 15 degrees toward the viewer, so an upward drag lowers the target,
+ * and a floor clamp on the target itself stopped that drag after 30 px while
+ * the eye still had most of a metre of headroom.
+ */
+export function panCamera(cam, dxPx, dyPx, viewportHeightPx, reach = 12) {
+  const eye = cameraEyePosition(cam);
+  const forward = vec3Normalize(vec3Sub(cam.target, eye));
+  // cameraRightVector carries the degenerate rule (elevation 90 with
+  // up=[0,1,0]), the same one the view matrix uses. The editor never gets
+  // there (orbit clamps at 89 degrees, the top preset carries its own up),
+  // but a pure function must not hand back NaN for a legal camera.
+  const right = cameraRightVector(forward, cam.up || [0, 1, 0]);
+  const up = vec3Normalize(vec3Cross(right, forward));
+  const perPx = (2 * cam.distance * Math.tan(cam.fovY / 2)) / Math.max(1, viewportHeightPx);
+  const moved = vec3Add(cam.target, vec3Add(vec3Scale(right, -dxPx * perPx), vec3Scale(up, dyPx * perPx)));
+  const r = Math.hypot(moved[0], moved[2]);
+  const k = r > reach ? reach / r : 1;
+  const eyeAboveTarget = cam.distance * Math.sin(cam.elevation);
+  const lowestTarget = PAN_MIN_EYE_HEIGHT_M - eyeAboveTarget;
+  return { ...cam, target: [moved[0] * k, clamp(moved[1], lowestTarget, 3), moved[2] * k] };
+}
+
+/** The lowest the eye may pan to, in metres above the floor. */
+export const PAN_MIN_EYE_HEIGHT_M = 0.05;
+
 // ---------------------------------------------------------------------------
 // GL helpers (shader compile/link, mesh upload). Only reached at call
 // time, never at module scope, so importing this file never touches GL.
@@ -1268,8 +1311,13 @@ export function mapPoseToWorld(pose) {
 export class StageRenderer {
   constructor(canvas, opts = {}) {
     this.canvas = canvas;
+    // opts.transparent: ducks only, on a transparent clear, with no ground,
+    // marks, trails or shadows. Not a stage view: it is what
+    // scripts/launcher/render-duck.html uses to cut a duck out for the app
+    // icon, and nothing in the editor sets it.
+    this._transparent = !!opts.transparent;
     const gl = canvas.getContext('webgl2', {
-      antialias: true, alpha: false, depth: true, ...opts.contextAttributes,
+      antialias: true, alpha: this._transparent, depth: true, ...opts.contextAttributes,
     });
     if (!gl) throw new Error('WebGL2 is not available on this canvas');
     this.gl = gl;
@@ -1618,14 +1666,17 @@ export class StageRenderer {
     // shader's own radial falloff fades the floor to this same colour
     // before it reaches the disc's edge — so the boundary is never a
     // visible seam, light-grey room fading into light-grey background.
-    gl.clearColor(GROUND_EDGE_COLOR[0], GROUND_EDGE_COLOR[1], GROUND_EDGE_COLOR[2], 1);
+    if (this._transparent) gl.clearColor(0, 0, 0, 0);
+    else gl.clearColor(GROUND_EDGE_COLOR[0], GROUND_EDGE_COLOR[1], GROUND_EDGE_COLOR[2], 1);
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
 
-    this._drawGround(viewProj, eye);
-    this._drawMarks(viewProj);
-    this._drawGhostTrails(viewProj);
-    this._drawTrails(viewProj);
-    this._drawShadows(viewProj, poses);
+    if (!this._transparent) {
+      this._drawGround(viewProj, eye);
+      this._drawMarks(viewProj);
+      this._drawGhostTrails(viewProj);
+      this._drawTrails(viewProj);
+      this._drawShadows(viewProj, poses);
+    }
     this._drawDucks(viewProj, eye, poses, dt);
   }
 

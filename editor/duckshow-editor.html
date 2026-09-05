@@ -157,7 +157,7 @@
      it (the width #side doesn't claim). */
   #stage-section { flex: 1 1 auto; min-width: 320px; display: flex; flex-direction: column; min-height: 0; background: var(--bg2); }
   #viewer-wrap { position: relative; flex: 1; min-height: 120px; overflow: hidden; }
-  #stage { width: 100%; height: 100%; display: block; cursor: grab; }
+  #stage { width: 100%; height: 100%; display: block; cursor: grab; touch-action: none; }
   #stage:active { cursor: grabbing; }
   #viewer-badge {
     position: absolute; left: 8px; bottom: 8px; padding: 2px 7px; border-radius: 3px;
@@ -339,7 +339,7 @@
 <main id="main">
   <div id="workspace">
     <section id="stage-section">
-      <h2>stage <span class="count" style="font-weight:400">1 house · 2 ¾ · 3 top · drag orbit · scroll dolly · drag mark in top view</span><button id="btn-viewer-names" class="toggle" aria-pressed="false" title="Show/hide each duck's role name above its head (remembered in this browser)">names</button><button id="btn-drift" class="toggle" aria-pressed="false" title="Paths: draw each role's whole dead-reckoned path (the intent curve the locomotion track describes), not just the trailing few seconds. With a bake loaded it sits under the simulated path and the separation is reported per role — the drift diff (docs/viewer.md).">paths</button><button id="btn-setup" class="toggle" aria-pressed="false" title="Setup mode (⌥P): place the cast. Switches to Top view and opens the marks table — docs/authoring.md &quot;Setup mode&quot;">setup</button><button id="btn-create-preview" title="Create Preview unavailable — checking…" disabled>Create Preview</button><button id="btn-bake-open" title="Load a baked pose cache (a .duckbake.json from tools/bake) and play it back in place of the kinematic preview — docs/viewer.md &quot;Create Preview&quot;">Play Baked…</button><button id="btn-bake-exit" class="hidden" title="Back to the live kinematic preview">Kinematic ↩</button></h2>
+      <h2>stage <span class="count" style="font-weight:400">1 house · 2 ¾ · 3 top · drag orbit · right-drag pan · scroll dolly · drag mark in top view</span><button id="btn-viewer-names" class="toggle" aria-pressed="false" title="Show/hide each duck's role name above its head (remembered in this browser)">names</button><button id="btn-drift" class="toggle" aria-pressed="false" title="Paths: draw each role's whole dead-reckoned path (the intent curve the locomotion track describes), not just the trailing few seconds. With a bake loaded it sits under the simulated path and the separation is reported per role — the drift diff (docs/viewer.md).">paths</button><button id="btn-setup" class="toggle" aria-pressed="false" title="Setup mode (⌥P): place the cast. Switches to Top view and opens the marks table — docs/authoring.md &quot;Setup mode&quot;">setup</button><button id="btn-create-preview" title="Create Preview unavailable — checking…" disabled>Create Preview</button><button id="btn-bake-open" title="Load a baked pose cache (a .duckbake.json from tools/bake) and play it back in place of the kinematic preview — docs/viewer.md &quot;Create Preview&quot;">Play Baked…</button><button id="btn-bake-exit" class="hidden" title="Back to the live kinematic preview">Kinematic ↩</button></h2>
       <div id="viewer-wrap">
         <canvas id="stage"></canvas>
         <div id="viewer-role-labels"></div>
@@ -413,7 +413,7 @@
 import * as core from './duckshow-core.js';
 import * as dv from './duckshow-viewer.js';
 import {
-  StageRenderer, CAMERA_PRESETS, orbitCamera, dollyCamera,
+  StageRenderer, CAMERA_PRESETS, orbitCamera, panCamera, dollyCamera,
   mat4Multiply, mat4TransformPoint, cameraViewMatrix, cameraProjectionMatrix, mapPoseToWorld,
   mixCamera, cameraEase, CAMERA_TRANSITION_MS,
 } from './viewer-gl.js';
@@ -2576,9 +2576,18 @@ function resizeViewer() {
   paintViewer();
 }
 
-// -- input: orbit-drag (any preset), scroll-dolly (any preset), mark-drag (Top view only) --
+// -- input: orbit-drag (any preset), pan with the right button (any preset), scroll-dolly (any preset), mark-drag (Top view only) --
+// The right button is a drag here, so the context menu must not open on
+// release: it would land on top of the stage after every pan.
+stageC.addEventListener('contextmenu', (ev) => { if (viewer.renderer) ev.preventDefault(); });
 stageC.addEventListener('pointerdown', (ev) => {
-  if (!viewer.renderer || ev.button !== 0) return;
+  if (!viewer.renderer) return;
+  if (ev.button === 2) {
+    viewer.dragging = { type: 'pan', lastX: ev.clientX, lastY: ev.clientY };
+    capture(stageC, ev);
+    return;
+  }
+  if (ev.button !== 0) return;
   const r = stageC.getBoundingClientRect();
   const px = ev.clientX - r.left, py = ev.clientY - r.top;
   if (viewer.presetName === 'top') {
@@ -2636,11 +2645,17 @@ stageC.addEventListener('pointermove', (ev) => {
     }
     return;
   }
-  if (viewerCameraLabelRAF != null) { cancelAnimationFrame(viewerCameraLabelRAF); viewerCameraLabelRAF = null; } // manual orbit takes over from any in-flight preset ease
+  if (viewerCameraLabelRAF != null) { cancelAnimationFrame(viewerCameraLabelRAF); viewerCameraLabelRAF = null; } // manual orbit or pan takes over from any in-flight preset ease
   const dx = ev.clientX - d.lastX, dy = ev.clientY - d.lastY;
   d.lastX = ev.clientX; d.lastY = ev.clientY;
-  viewer.camera = orbitCamera(viewer.camera, -dx * VIEWER_ORBIT_SPEED, dy * VIEWER_ORBIT_SPEED);
-  viewer.presetName = null; // manual orbit no longer matches a named preset
+  viewer.camera = d.type === 'pan'
+    ? panCamera(viewer.camera, dx, dy, stageC.clientHeight)
+    : orbitCamera(viewer.camera, -dx * VIEWER_ORBIT_SPEED, dy * VIEWER_ORBIT_SPEED);
+  // An orbit no longer matches a named preset. A pan does: it moves only the
+  // target, and the preset name is what gates mark dragging in Top view, so
+  // clearing it here would switch that off for the exact gesture setup mode
+  // uses to reach a mark at the edge of the panel.
+  if (d.type !== 'pan') viewer.presetName = null;
   viewer.renderer.setCamera(viewer.camera);
   paintEventLabels(viewer.lastLabels || []); // reproject at the new angle; poses/trails are unchanged so draw() isn't needed
   updateRoleLabelPositions();
@@ -2663,7 +2678,9 @@ stageC.addEventListener('wheel', (ev) => {
   ev.preventDefault();
   if (viewerCameraLabelRAF != null) { cancelAnimationFrame(viewerCameraLabelRAF); viewerCameraLabelRAF = null; } // manual dolly takes over from any in-flight preset ease
   viewer.camera = dollyCamera(viewer.camera, Math.exp(ev.deltaY * VIEWER_DOLLY_SPEED));
-  viewer.presetName = null;
+  // A dolly keeps the orientation too, so it keeps the preset name for the
+  // same reason a pan does (see pointermove): zooming in on the Top view
+  // used to switch mark dragging off until 3 was pressed again.
   viewer.renderer.setCamera(viewer.camera);
   paintEventLabels(viewer.lastLabels || []);
   updateRoleLabelPositions();

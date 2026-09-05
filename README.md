@@ -22,7 +22,7 @@ Serves the checkout, opens the editor with the eight-duck piece loaded, and stop
 | | |
 |---|---|
 | `space` | play / pause |
-| `1` `2` `3` | house, three-quarter and top cameras; drag to orbit, scroll to dolly |
+| `1` `2` `3` | house, three-quarter and top cameras; drag to orbit, right-drag to pan, scroll to dolly |
 | `setup` button, or `⌥P` | place the cast: numeric x/y/heading per role, and line/arc/grid formations |
 | `S` / `M` on a lane, `⌥S` | solo and mute for rehearsal (session state, never written to the file) |
 | **Create Preview** | bake the loaded show through MuJoCo and play the result back |
@@ -236,6 +236,6 @@ Requires `assets/microduck/`, which you supply yourself (see below). Format in [
 
 This repository contains **no Pollen Robotics files**. MicroDuck's meshes, MJCF model and hardware design files are licensed CC BY-SA-NC and are not redistributed here.
 
-The duck in the viewer is our own geometry, built from primitives, and it is what a fresh clone renders. If you supply Pollen's assets in a gitignored `assets/microduck/` (the way an emulator does not ship a BIOS, see [`docs/bake-parts.md`](docs/bake-parts.md) §2), the viewer uses the real robot meshes instead and the physics bake becomes available. Absent, both fall back silently and everything still works.
+The duck in the viewer is our own geometry, built from primitives, and it is what a fresh clone renders. The screenshots under `docs/images` were rendered from Pollen's meshes; they are CC BY-SA-NC derivatives (attribution: Pollen Robotics) and are not part of this repository's MIT grant. The launcher icon follows the stricter rule: `scripts/launcher/render-duck.html` cuts a MicroDuck out of the real meshes for `scripts/make_launcher_app.sh`, and that render stays on your machine (gitignored), so a fresh clone builds the icon with an emoji stand-in. If you supply Pollen's assets in a gitignored `assets/microduck/` (the way an emulator does not ship a BIOS, see [`docs/bake-parts.md`](docs/bake-parts.md) §2), the viewer uses the real robot meshes instead and the physics bake becomes available. Absent, both fall back silently and everything still works.
 
 MIT, see [LICENSE](LICENSE). MicroDuck is a product of [Pollen Robotics](https://pollen-robotics.com/) and [Hugging Face](https://huggingface.co/pollen-robotics). This is an independent, unaffiliated project.

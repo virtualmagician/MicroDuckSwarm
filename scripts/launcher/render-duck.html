@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>duck icon render</title>
+<style>body{margin:0;background:#888}canvas{display:block;width:1024px;height:1024px}</style>
+</head>
+<body>
+<canvas id="c" width="1024" height="1024"></canvas>
+<script type="module">
+// Cuts one MicroDuck out on transparency for the app icon, from the real
+// meshes under assets/microduck/ (user-supplied, CC BY-SA-NC, never
+// committed). Serve the repo with scripts/edit.sh and open
+// /scripts/launcher/render-duck.html; renderDuck() returns a PNG data URL.
+// Save it as scripts/launcher/duck.png, which is gitignored: a render of the
+// meshes is a CC BY-SA-NC derivative and stays out of this MIT repository.
+// scripts/make_launcher_app.sh uses it when present and the emoji otherwise.
+import { StageRenderer, DEG2RAD } from '../../editor/viewer-gl.js';
+import { loadRealDuckAssets } from '../../editor/duck-mesh.js';
+
+const canvas = document.getElementById('c');
+const renderer = new StageRenderer(canvas, { transparent: true });
+const real = await loadRealDuckAssets(renderer.gl, { baseUrl: '/assets/microduck/mjcf' });
+if (!real) throw new Error('assets/microduck/ not found or incomplete');
+renderer.setRealDuckAssets(real);
+renderer.setCast([{ role: 'lead', color: '#e8dfc8' }]);
+
+const BASE = { target: [0, 0.13, 0], azimuth: 38 * DEG2RAD, elevation: 12 * DEG2RAD, distance: 0.62, fovY: 34 * DEG2RAD, up: [0, 1, 0] };
+const POSE = { role: 'lead', x: 0, y: 0, heading: 0, headYaw: -0.3, headPitch: 0.05, headRoll: 0, neckPitch: 0, bodyZ: 0, bodyRoll: 0, bodyPitch: 0, mouthOpen: 0, walkPhase: 0, resting: true };
+
+window.renderDuck = (cam = {}, pose = {}) => {
+  renderer.setCamera({ ...BASE, ...cam });
+  renderer.draw([{ ...POSE, ...pose }]);
+  return canvas.toDataURL('image/png');
+};
+window.duckReady = true;
+</script>
+</body>
+</html>

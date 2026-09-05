@@ -49,7 +49,7 @@ A clean, well-lit workspace — a game-engine viewport or a photographer's cyclo
 
 ## Camera
 
-Orbit with drag, dolly with scroll, always aimed at the stage centre. Three presets on keys, because the whole point is comparing what different eyes see:
+Orbit with a left drag, dolly with scroll, pan with a right drag. The presets aim at the stage centre; a pan slides that aim across the view plane, in world units per pixel at the target's depth so the scene follows the pointer at any zoom, and pressing a preset key brings the aim back. Three presets on keys, because the whole point is comparing what different eyes see:
 
 - **House** (`1`) — the audience view. Eye height, front and centre, slight downward tilt. This is the default and the one that matters.
 - **Three-quarter** (`2`) — raised and off to one side, for judging depth and spacing.
