@@ -9,6 +9,56 @@ The show-night wire protocol between the **master** (Mac running StageWizard/`sw
 
 Ports: master listens on **UDP 47800**; each agent listens on **UDP 47801**. Every message carries `"v": 1` and `"duck": "<duck-id>"` (agent messages) so one master can serve many agents from one socket.
 
+## 0 · Who the agent will listen to
+
+An agent binds `0.0.0.0` and, by default, adopts as its master the source of
+the first `time_resp`, `state` or `cmd` it receives. **There is no
+authentication on this protocol.** Any host that can reach the agent's port can
+drive the duck: send a `cmd` and it is executed, send a `time_resp` and the
+show clock moves, send a `puppet` frame and the duck moves without the sender
+ever becoming its master. On a venue network shared with anything else, that is
+the whole attack surface.
+
+`--master-host` (`MASTER_HOST` in `/etc/duckswarm/agent.env`) narrows it. When
+set, the agent resolves it once at startup and **drops every inbound datagram
+that did not come from one of those addresses**, before parsing and before
+dispatch, so a foreign `time_resp` cannot poison the clock and a foreign `cmd`
+cannot drive the duck. Unset, the agent behaves as before and learns its master
+from whoever speaks first.
+
+Three properties of the pin, each chosen deliberately:
+
+* **It pins the host, not the port.** `--master-port` is only where the agent
+  sends *before* it has heard from a master; after that it replies to the
+  master's own source port. Both reference masters do send from a fixed port
+  (`SwarmMaster` pins every connection's local endpoint to `masterPort`), so
+  matching it would usually work, and is still not worth doing: the agent's
+  `--master-port` is a separate config value that can disagree with the port
+  the master was actually started on, so matching would strand a duck over a
+  mismatched number. It buys nothing either way, because anything that can
+  occupy the host can send from any port on it.
+* **Anything that does not resolve to an IPv4 address disables the pin rather
+  than the duck.** The agent's socket is `AF_INET`, so every source it can ever
+  see is a dotted quad; resolution is constrained to that family and the result
+  is filtered to it again, so a v6 `MASTER_HOST` cannot produce a pin no
+  datagram can match. A resolver failure, a malformed hostname label (which
+  raises `UnicodeError` from the IDNA codec, not `gaierror`) and a v6-only host
+  all land on the same path: log an error, run unpinned. A duck that refuses
+  every master is worse on a stage than one that accepts any, because "panic
+  always works from any state" is rule 5 and a pin that can brick a cast is not
+  a safety feature.
+* **Resolution happens once, at startup.** A master that changes address
+  mid-show stops being heard. That is the cost of not doing a DNS round trip in
+  front of every command on a network whose DNS may not answer at all. The
+  recovery is to restart the agent, or to unset `MASTER_HOST`.
+* **It is a filter, not an identity check.** Source addresses are forgeable on
+  a network an attacker already sits on, and a pin can still name the wrong
+  host if the configured address is simply wrong. This raises the bar from
+  "anyone who can reach the port" to "anyone who can reach the port and forge
+  the master's address", and it stops there. A shared secret on `cmd` and
+  `puppet` is the real answer. It is named as a gap in `docs/fleet.md` and has
+  not been designed.
+
 ## 1 · Time sync (agent-initiated, NTP-style)
 
 Every 2 s (500 ms while ARMED), each agent runs an exchange:

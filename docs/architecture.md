@@ -33,7 +33,7 @@ Master↔agent clock sync well under 10 ms on a dedicated AP (min-RTT NTP-style 
 
 ## Custom policies
 
-`.duckshow` files declare required `.onnx` policies by hash (`requires.policies`); SwarmLink provisions them at load-in (push file, patch `robotd.toml`, restart `robotd` — never mid-show), agents verify hashes at LOAD, and timeline `mode` events switch gaits at runtime via `robot.setMode`.
+`.duckshow` files declare required `.onnx` policies by hash (`requires.policies`). Provisioning them is a pre-show step, never mid-show: `deploy/push_policy.sh` pushes the file, patches `robotd.toml` and restarts `robotd`, over ssh, one duck at a time (`docs/provisioning.md`). SwarmLink contains no ssh and does none of this. Agents verify hashes at LOAD and report `policies_ok`, and timeline `mode` events switch gaits at runtime via `robot.setMode`.
 
 ## The app
 

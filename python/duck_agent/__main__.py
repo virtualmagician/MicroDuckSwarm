@@ -48,12 +48,16 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument("--shows-dir", required=True, type=Path, help="Directory .duckshow.json files are loaded from.")
     p.add_argument("--listen-port", type=int, default=DEFAULT_AGENT_PORT, help=f"UDP port to bind (default {DEFAULT_AGENT_PORT}).")
-    p.add_argument("--master-port", type=int, default=DEFAULT_MASTER_PORT, help=f"Master's UDP port, used with --master-host (default {DEFAULT_MASTER_PORT}).")
+    p.add_argument("--master-port", type=int, default=DEFAULT_MASTER_PORT, help=f"Port this agent SENDS to before it has learned one, used with --master-host (default {DEFAULT_MASTER_PORT}). Not a filter: --master-host pins the host only.")
     p.add_argument(
         "--master-host",
         default=None,
         help="Master's host/IP. Optional: if omitted, the master's address is learned from the "
-        "source address of its first packet to this agent.",
+        "source address of its first packet to this agent, which means ANY host that can reach "
+        "this port can drive this duck. When set, datagrams from any other host are dropped "
+        "before parsing (swarmlink-protocol.md #0). Pins the host, not the port. A name that "
+        "does not resolve at startup logs an error and leaves the agent unpinned rather than "
+        "deaf.",
     )
     p.add_argument("-v", "--verbose", action="store_true", help="Debug logging.")
     return p

@@ -159,6 +159,57 @@ _ZERO_MOVE = {"vx": 0.0, "vy": 0.0, "vyaw": 0.0}
 
 _ROBOTD_FAILURES = (RobotdError, RobotdDisconnected, RobotdTimeout)
 
+#: Distinct foreign source addresses remembered for log suppression before the
+#: window restarts. See _from_master.
+_FOREIGN_LOG_CAP = 64
+
+
+def _resolve_master_ips(master_host: str, duck_id: str) -> Optional[frozenset[str]]:
+    """Every IPv4 address `master_host` resolves to, or None to run unpinned.
+
+    None disables the pin rather than the duck, and says so loudly. A name that
+    will not resolve at boot (a venue DNS that is not up yet, a typo in
+    agent.env) must not leave a cast that refuses every master: "panic always
+    works from any state" is a hard rule, and a pin that can brick eight ducks
+    is not a safety feature. See swarmlink-protocol.md #0.
+
+    **AF_INET, deliberately.** The agent's socket is AF_INET bound to 0.0.0.0,
+    so every `recvfrom` source is a v4 dotted quad. An unconstrained
+    getaddrinfo would happily return `::1` for a v6 MASTER_HOST, producing a
+    pin that no datagram can ever match: the duck would ignore everything
+    including panic, while the startup log claimed success. Resolving in the
+    family the socket can actually receive on turns that into the
+    already-handled "does not resolve" case, which fails open.
+    """
+    try:
+        infos = socket.getaddrinfo(master_host, None, family=socket.AF_INET, proto=socket.IPPROTO_UDP)
+    except (socket.gaierror, UnicodeError) as exc:
+        # UnicodeError, not just gaierror: the IDNA codec raises
+        # UnicodeError (a ValueError, NOT an OSError) for a malformed label,
+        # such as the empty label in "duck..local" or a label over 63
+        # characters. Uncaught it would escape this constructor and crash-loop
+        # the agent under systemd, turning a config typo into a duck that
+        # never starts.
+        logger.error(
+            "%s: --master-host %r does not resolve to an IPv4 address (%s); "
+            "accepting any source, as if unset",
+            duck_id, master_host, exc,
+        )
+        return None
+    # family= is asked for AND checked. The invariant that matters is local to
+    # this function ("never build a pin the AF_INET socket cannot match"), so
+    # it is enforced here rather than delegated to getaddrinfo honouring the
+    # hint. Costs one comparison and removes a whole class of surprise.
+    ips = frozenset(info[4][0] for info in infos if info[0] == socket.AF_INET)
+    if not ips:
+        logger.error(
+            "%s: --master-host %r resolved to no IPv4 address; accepting any source, as if unset",
+            duck_id, master_host,
+        )
+        return None
+    logger.info("%s: pinned to master %s (%s)", duck_id, master_host, ", ".join(sorted(ips)))
+    return ips
+
 
 def _sha256_file(path: Path) -> str:
     h = hashlib.sha256()
@@ -186,6 +237,21 @@ class DuckAgent:
             (master_host, master_port) if master_host else None
         )
         self.master_addr: Optional[tuple[str, int]] = self._configured_master_addr
+        # swarmlink-protocol.md #0. The set of source IPs this agent will
+        # accept datagrams from, or None for "learn from whoever speaks
+        # first", which is the default and was the only behaviour before.
+        # Resolved once, here, rather than per datagram: a getaddrinfo call in
+        # the receive path would be a DNS round trip in front of every command
+        # on a network whose DNS may not answer at all.
+        self._allowed_master_ips: Optional[frozenset[str]] = (
+            _resolve_master_ips(master_host, self.duck_id) if master_host else None
+        )
+        # Foreign sources already logged, so a flood is one line per source
+        # rather than one line per packet filling a journal that lives on zram.
+        # Bounded, because the set is keyed by attacker-chosen source address:
+        # unbounded, a spoofed flood would trade a log flood for unbounded
+        # memory growth on a duck, which is a worse failure.
+        self._logged_foreign: set[str] = set()
 
         self.robotd = RobotdClient(robotd_target, on_state_change=self._on_robotd_state_change)
 
@@ -465,6 +531,8 @@ class DuckAgent:
                 continue
             except OSError:
                 break
+            if not self._from_master(addr):
+                continue
             try:
                 msg = json.loads(data.decode("utf-8"))
             except (UnicodeDecodeError, json.JSONDecodeError):
@@ -484,6 +552,37 @@ class DuckAgent:
                 # unknown type: dropped silently (swarmlink-protocol.md #3)
             except Exception:  # noqa: BLE001 -- no datagram may kill the only cmd reader (module docstring)
                 logger.exception("%s: dropping %r datagram from %s that raised", self.duck_id, mtype, addr)
+
+    def _from_master(self, addr: tuple[str, int]) -> bool:
+        """swarmlink-protocol.md #0: with --master-host set, drop anything that
+        did not come from it, before parsing and before dispatch.
+
+        Host only, never the port: --master-port is the port we *send* to, and
+        a master's source port legitimately varies (SwarmMaster pins its
+        connections to masterPort, which is often ephemeral). Matching on it
+        would strand a duck for no security gain.
+        """
+        if self._allowed_master_ips is None:
+            return True
+        source = addr[0]
+        if source in self._allowed_master_ips:
+            return True
+        if source not in self._logged_foreign:
+            if len(self._logged_foreign) >= _FOREIGN_LOG_CAP:
+                # Start a fresh window rather than growing without bound. One
+                # extra line every _FOREIGN_LOG_CAP distinct sources is a far
+                # smaller cost than an unbounded set fed by spoofed addresses.
+                self._logged_foreign.clear()
+                logger.warning(
+                    "%s: more than %d distinct foreign sources; restarting per-source suppression",
+                    self.duck_id, _FOREIGN_LOG_CAP,
+                )
+            self._logged_foreign.add(source)
+            logger.warning(
+                "%s: dropping datagrams from %s: --master-host pins this agent to %s",
+                self.duck_id, source, ", ".join(sorted(self._allowed_master_ips)),
+            )
+        return False
 
     def _on_puppet_msg(self, msg: dict[str, Any]) -> None:
         """docs/swarmlink-protocol.md #6. Parse + clamp, then offer to the

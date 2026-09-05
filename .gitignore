@@ -25,3 +25,15 @@ assets/microduck/
 # button / tools/bake (docs/viewer.md, docs/bake-format.md) -- build
 # output, not authored content, so never under shows/ and never committed.
 /bakes/
+
+# Fleet and roster files: a list of duck addresses on a venue network, which
+# is exactly the venue data CLAUDE.md rule 6 keeps out of a public repo. They
+# live outside the checkout (docs/fleet.md): --fleet, then $DUCKSWARM_FLEET,
+# then ~/.duckswarm/fleet.json. These patterns are the backstop for the copy
+# someone drops in here anyway; python/tests/test_repo_hygiene.py is the gate.
+fleet.json
+*.fleet.json
+roster.json
+*.roster.json
+/fleet/
+!fleet.example.json

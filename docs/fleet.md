@@ -1,7 +1,8 @@
 # The fleet: enrolment, naming, identification and deployment
 
-**Status: designed, not built (2026-09-05). Nothing in this document exists as
-code yet.** It is the plan for five questions that `deploy/` and
+**Status: phase 0 built, the rest designed only (2026-09-05).** Phase 0 is the
+doc corrections, the repo-hygiene gate and the master pin; everything else here
+is a plan. It answers five questions that `deploy/` and
 `docs/provisioning.md` answer only partly:
 
 1. how a `.duckshow` and a `.duckset` reach the robots
@@ -46,13 +47,15 @@ address the roster calls `duck-02` reports healthy as `duck-02`, the two
 masters disagree about the same fleet, and nothing detects it until a show
 looks wrong.
 
-**`--master-host` does not pin anything.** `_configured_master_addr` is read
-exactly once, to seed `master_addr` (`agent.py:188`), and
-`_set_master_addr` then overwrites it unconditionally from any inbound
-packet's source. Combined with the agent binding `0.0.0.0` and commands
-carrying no authentication, any host on the venue network can become the
-master. This is the one item here that should be fixed before anything new
-sends commands to a duck.
+**~~`--master-host` does not pin anything.~~ Fixed in phase 0.**
+`_configured_master_addr` was read exactly once, to seed `master_addr`, and
+`_set_master_addr` then overwrote it unconditionally from any inbound packet's
+source. Combined with the agent binding `0.0.0.0` and commands carrying no
+authentication, any host on the venue network could become the master.
+`_recv_loop` now drops datagrams from any source outside the pin, before
+parsing and before dispatch. See `swarmlink-protocol.md` section 0 and
+`python/tests/test_agent_master_pin.py`. It is a filter, not authentication: a
+shared secret on `cmd` and `puppet` remains undesigned, and is the real answer.
 
 **The master's belief that a duck is loaded never expires.**
 `lastLoadOutcomes` is written only by `load()` and read only by
@@ -68,10 +71,13 @@ gate that exists to prevent a cast split waves it through.
 checks neither uniqueness nor coverage, and `octet`'s eight role names are not
 positional, so nothing catches it.
 
-**Two docs describe a component that does not exist.**
-`docs/duckshow-format.md:140` says SwarmLink pushes the `.onnx` to each duck,
-patches `robotd.toml` and restarts `robotd`. `deploy/push_policy.sh` does that,
-one host at a time, over ssh. SwarmLink contains no ssh at all.
+**~~Two docs describe a component that does not exist.~~ Fixed in phase 0.**
+`docs/duckshow-format.md` and `docs/architecture.md` both said SwarmLink pushes
+the `.onnx` to each duck, patches `robotd.toml` and restarts `robotd`.
+`deploy/push_policy.sh` does that, one host at a time, over ssh. SwarmLink
+contains no ssh at all. Both sentences now say so, and
+`docs/provisioning.md`'s on-duck prerequisites gained `rsync` and `sha256sum`,
+which every deploy has always needed and which were never listed.
 
 ## 1. The fleet file (questions 2, 3 and 5)
 
@@ -292,7 +298,7 @@ Everything below is buildable against the mock duck unless marked otherwise.
 
 | # | Step | Why it stands alone |
 |---|---|---|
-| 0 | Doc corrections, `.gitignore` and the repo-hygiene test. Make `--master-host` actually pin. | Stops two docs lying, makes rule 6 enforced by the gate, closes the "any host is the master" hole. |
+| 0 | **Done.** Doc corrections, `.gitignore`, `python/tests/test_repo_hygiene.py`, and `--master-host` actually pinning. | Stopped two docs lying, made rule 6 enforced by the gate rather than by memory, and closed the "any host is the master" hole. |
 | 1 | `docs/fleet.md` schema and `python/tools/fleet.py` | The roster stops being an undocumented hand-edited file with no home, no validation and no tool. |
 | 2 | SwarmLink roster: optional `port` and `role`, the per-show `cast` map, `label` and `active` carried through | `demo` casts 2 roles, `octet` 8, `showcase` 1, so a setlist mixing them cannot run today at all. |
 | 3 | `identify` end to end, doc first | You can find out which bird is which, which nothing in the stack can do today. |

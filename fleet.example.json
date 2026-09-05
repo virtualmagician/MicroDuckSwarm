@@ -1,0 +1,28 @@
+[
+  {
+    "id": "duck-01",
+    "host": "192.0.2.11",
+    "port": 47801,
+    "role": "lead",
+    "label": "red band",
+    "active": true
+  },
+  {
+    "id": "duck-02",
+    "host": "192.0.2.12",
+    "port": 47801,
+    "role": "wing",
+    "label": "blue band",
+    "notes": "spare battery lives with this one",
+    "active": true
+  },
+  {
+    "id": "duck-03",
+    "host": "192.0.2.13",
+    "port": 47801,
+    "role": "wing",
+    "cast": { "octet": "echo", "demo": null },
+    "label": "green band",
+    "active": false
+  }
+]

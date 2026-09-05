@@ -125,7 +125,7 @@ Two distinct mechanisms here, and they must not be conflated (docs/robotd-api.md
 
 Mode isn't only cosmetic: it also picks which policy a `ground_pick` event runs and for how long — see "Skill durations and occupancy" above.
 
-Shows that need a non-stock policy declare it so SwarmLink can provision it and duck-agent can verify it landed:
+Shows that need a non-stock policy declare it by hash, so `deploy/push_policy.sh` can install it pre-show and duck-agent can verify it landed:
 
 ```json
 "requires": {
@@ -137,7 +137,7 @@ Shows that need a non-stock policy declare it so SwarmLink can provision it and 
 ```
 
 - `name` is a **human label only**, for logs and error messages — it is never sent to robotd. `slot` is the field that matters: it is the fixed policy slot this `.onnx` occupies once installed.
-- Provisioning is a **pre-show step**, never mid-show: SwarmLink pushes the `.onnx` to each cast duck, points `slot` at it in `robotd.toml`, and restarts `robotd` during load-in. The duck-agent verifies each required policy's `sha256` at LOAD and reports `policies_ok` in telemetry; preflight blocks the show otherwise.
+- Provisioning is a **pre-show step**, never mid-show: `deploy/push_policy.sh` pushes the `.onnx` to one duck, points `slot` at it in `robotd.toml` and restarts `robotd`, over ssh (`docs/provisioning.md`). SwarmLink contains no ssh and does none of this. `docs/fleet.md` keeps policies per-host on that script and adds a deploy gate that refuses to activate a show on a duck whose declared policies are not installed; it is designed, not built. The duck-agent verifies each required policy's `sha256` at LOAD and reports `policies_ok` in telemetry; `play` refuses over a failed load.
 - Once installed, the custom gait plays through the *ordinary* `mode` event mechanism above — a `{"mode": "walk"}` (or `"roller"`) event, exactly like a show with no custom policies at all. A policy's `name` never appears on the wire; there is no "reference the declared mode" step, because there is no declared mode to reference.
 - Mode-switch constraints (standing still, switch latency) are a hardware question tracked for M1; the validator warns if a `mode` event overlaps nonzero locomotion within ±0.5 s.
 

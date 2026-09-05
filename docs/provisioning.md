@@ -323,10 +323,19 @@ has to reason about, the more likely it is to work correctly under pressure.
   scripts (Python only to parse `roster.json` — stdlib `json`, nothing
   installed). Each script checks for what it needs and fails with a clear
   message rather than a mid-script surprise.
-- `python3` on the duck itself, for `push_policy.sh`'s `robot.health` poll.
-  `duck-agent` already requires it to run at all, so this isn't an extra
-  ask — but it is, like the sudo requirement above, unconfirmed against a
-  real image.
+- On the duck itself: `python3`, `rsync` and `sha256sum`. `python3` is for
+  `push_policy.sh`'s `robot.health` poll and `duck-agent` already requires
+  it to run at all, so that one is not an extra ask. The other two are:
+  every push runs `rsync` on the remote end (`--rsync-path='sudo rsync'`
+  in `deploy/lib/common.sh`), and `deploy_shows.sh` verifies each pushed
+  file by running `sha256sum` over ssh. Neither was listed here before,
+  and both are hard dependencies: without them a deploy fails on the duck
+  rather than on the Mac. Like the sudo requirement above, all three are
+  unconfirmed against a real image.
+- Also assumed present and unconfirmed: `readlink`, `tee`, `systemctl`, and
+  `ln -sfn` behaving as GNU coreutils do. `provision_duck.sh` already uses all
+  four, and the bundle flip designed in `docs/fleet.md` would lean on
+  `ln -sfn` harder.
 
 ## What's untested
 
