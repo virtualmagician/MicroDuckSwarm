@@ -2412,7 +2412,11 @@ function renderViewerLegend() {
   legend.replaceChildren(...roles().map((role) => {
     const info = viewer.palette.get(role);
     const span = document.createElement('span');
-    span.innerHTML = `<i style="background:${info ? info.hex : roleColor(role)}"></i>${role}`;
+    // Not innerHTML: a role name comes from the show file, and a file a
+    // hostile page can open via ?show= would otherwise run script here.
+    const swatch = document.createElement('i');
+    swatch.style.background = info ? info.hex : roleColor(role);
+    span.replaceChildren(swatch, role);
     span.style.fontWeight = state.viewerSelectedRole === role ? '700' : '400';
     span.style.opacity = viewer.neutralRoles.has(role) ? '0.45' : '1';
     span.title = 'click to highlight this duck in the stage viewer';

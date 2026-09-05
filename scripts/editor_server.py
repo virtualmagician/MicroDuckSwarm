@@ -37,6 +37,28 @@ deliberately narrowly:
   - Binds 127.0.0.1 ONLY. Never 0.0.0.0. This is not a command-line flag
     on purpose -- there is nothing for a caller of this script to get
     wrong. It must never be reachable from another machine on the network.
+  - Loopback is not the same as "only the editor can talk to it". Any web
+    page open in the same browser can send a request to 127.0.0.1:PORT, and
+    a POST whose Content-Type is text/plain is a CORS "simple request" that
+    needs no preflight, so the browser delivers it and only hides the reply.
+    Before this check, a page on any origin could overwrite any show under
+    shows/, create any setlist, or start a baker subprocess, silently and
+    with no click. Every request now has to look like it came from this
+    server's own pages, and anything else gets 403 before any route runs:
+      Host must be 127.0.0.1:PORT or localhost:PORT, on every method, so a
+        DNS-rebound hostname is served nothing, not even the static tree.
+      For POST: Sec-Fetch-Site, when a browser sends it, must be same-origin
+        (same-site is refused too: another port on localhost is a different
+        origin and the same site); Origin, when present, must be this
+        server's own origin; and Content-Type must be application/json,
+        which both editor pages send and which is not a simple request
+        type, so a cross-origin sender is forced into a preflight this
+        server answers with 501.
+    This is a filter on request shape, not authentication. It stops a
+    hostile page from driving the API through a victim's browser; it does
+    not stop a process on this machine from talking to the port directly,
+    and does not need to. A script calling the API must send
+    -H 'Content-Type: application/json' (curl's -d default is form-encoded).
   - An HTTP caller can influence WHAT gets baked, and nothing else. Two
     forms are accepted:
       "show": a repo-relative path. resolve_show_path() below resolves it
@@ -460,7 +482,44 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         self._json(status, {"error": message})
 
     # -- routing ---------------------------------------------------------
+    # -- request-shape checks (module docstring, SECURITY) -----------------
+    def _served_origins(self) -> set[str]:
+        port = self.server.server_address[1]
+        return {f"http://127.0.0.1:{port}", f"http://localhost:{port}"}
+
+    def _host_is_local(self) -> bool:
+        host = (self.headers.get("Host") or "").strip().lower()
+        port = self.server.server_address[1]
+        return host in {f"127.0.0.1:{port}", f"localhost:{port}"}
+
+    def _refuse_unless_local(self) -> bool:
+        """Host check for every method. False means a 403 was already sent."""
+        if self._host_is_local():
+            return True
+        self._json_error(403, "this server answers only to 127.0.0.1 or localhost on its own port")
+        return False
+
+    def _refuse_unless_same_origin_post(self) -> bool:
+        """The three POST-only checks. False means a 403 was already sent."""
+        if not self._refuse_unless_local():
+            return False
+        fetch_site = (self.headers.get("Sec-Fetch-Site") or "").strip().lower()
+        if fetch_site and fetch_site not in ("same-origin", "none"):
+            self._json_error(403, f"cross-origin requests are refused (Sec-Fetch-Site: {fetch_site})")
+            return False
+        origin = (self.headers.get("Origin") or "").strip().lower()
+        if origin and origin not in self._served_origins():
+            self._json_error(403, "cross-origin requests are refused (Origin does not match this server)")
+            return False
+        content_type = (self.headers.get("Content-Type") or "").split(";", 1)[0].strip().lower()
+        if content_type != "application/json":
+            self._json_error(403, "POST bodies must be sent as Content-Type: application/json")
+            return False
+        return True
+
     def do_GET(self) -> None:  # noqa: N802 -- http.server's naming convention
+        if not self._refuse_unless_local():
+            return
         path = urllib.parse.urlsplit(self.path).path
         if path == "/api/capabilities":
             return self._json(200, get_capabilities())
@@ -479,6 +538,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         return super().do_GET()
 
     def do_POST(self) -> None:  # noqa: N802
+        if not self._refuse_unless_same_origin_post():
+            return
         path = urllib.parse.urlsplit(self.path).path
         if path == "/api/bake":
             return self._handle_post_bake()

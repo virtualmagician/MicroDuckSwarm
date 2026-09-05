@@ -224,6 +224,119 @@ class ShowIndexEndpoint(unittest.TestCase):
         self.assertEqual([s for s in shows if "/fixtures/" in s["path"]], [])
 
 
+def raw_request(method: str, path: str, body: bytes = b"", headers: dict | None = None) -> tuple[int, bytes]:
+    """One request with exactly the headers given, against a real Handler.
+
+    http.client adds its own Host unless one is supplied, which is what lets
+    the Host tests below say what a DNS-rebound browser would say.
+    """
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), editor_server.Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        port = server.server_address[1]
+        sent = dict(headers or {})
+        sent = {k: v.replace("{port}", str(port)) for k, v in sent.items()}
+        conn = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+        conn.request(method, path, body=body, headers=sent)
+        res = conn.getresponse()
+        data = res.read()
+        conn.close()
+        return res.status, data
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+class CrossOriginRequestsAreRefused(unittest.TestCase):
+    """Loopback is not "only the editor". Any page open in the same browser
+    can POST to 127.0.0.1:PORT, and a text/plain body is a CORS simple request
+    that the browser delivers without a preflight. A verifier reproduced
+    exactly that against a live server: a page on https://evil.example
+    overwrote a show and created a setlist, silently, with no click.
+
+    These pin the request-shape filter that closes it. It is a filter, not
+    authentication, and these tests say which shapes it lets through as well
+    as which it stops, because the editor's own saves must keep working.
+    """
+
+    SHOW = "/shows/demo/demo.duckshow.json"
+
+    def setUp(self) -> None:
+        self.path = REPO_ROOT / "shows" / "demo" / "demo.duckshow.json"
+        self.original = self.path.read_text(encoding="utf-8")
+        self.addCleanup(lambda: self.path.write_text(self.original, encoding="utf-8"))
+        doc = json.loads(self.original)
+        doc["meta"]["name"] = "AFTER-CSRF"
+        self.body = json.dumps({"show": self.SHOW, "show_text": json.dumps(doc)}).encode("utf-8")
+
+    def _unchanged(self) -> None:
+        self.assertEqual(self.path.read_text(encoding="utf-8"), self.original, "the file was written")
+
+    def test_a_simple_request_from_another_origin_is_refused(self) -> None:
+        # The exact shape fetch(url, {mode: 'no-cors', body: string}) produces.
+        status, _ = raw_request("POST", "/api/save", self.body, {
+            "Origin": "https://evil.example", "Sec-Fetch-Site": "cross-site",
+            "Content-Type": "text/plain;charset=UTF-8"})
+        self.assertEqual(status, 403)
+        self._unchanged()
+
+    def test_a_text_plain_body_is_refused_even_with_no_origin_header(self) -> None:
+        # An auto-submitted <form enctype=text/plain> is a navigation, not a
+        # fetch, and older browsers send neither Origin nor Sec-Fetch-Site.
+        # The Content-Type rule is what catches it.
+        status, _ = raw_request("POST", "/api/save", self.body, {"Content-Type": "text/plain"})
+        self.assertEqual(status, 403)
+        self._unchanged()
+
+    def test_another_port_on_localhost_is_a_different_origin(self) -> None:
+        status, _ = raw_request("POST", "/api/save", self.body, {
+            "Origin": "http://localhost:9999", "Sec-Fetch-Site": "same-site",
+            "Content-Type": "application/json"})
+        self.assertEqual(status, 403)
+        self._unchanged()
+
+    def test_the_editors_own_save_still_works(self) -> None:
+        # What duckshow-editor.html and setlist.html actually send.
+        status, data = raw_request("POST", "/api/save", self.body, {
+            "Origin": "http://127.0.0.1:{port}", "Sec-Fetch-Site": "same-origin",
+            "Content-Type": "application/json"})
+        self.assertEqual(status, 200, data)
+        self.assertIn("AFTER-CSRF", self.path.read_text(encoding="utf-8"))
+
+    def test_localhost_is_this_servers_origin_too(self) -> None:
+        # scripts/edit.sh opens http://localhost:PORT, so the browser says so.
+        status, data = raw_request("POST", "/api/save", self.body, {
+            "Host": "localhost:{port}", "Origin": "http://localhost:{port}",
+            "Content-Type": "application/json"})
+        self.assertEqual(status, 200, data)
+
+    def test_a_script_with_json_content_type_and_no_browser_headers_works(self) -> None:
+        # curl -H 'Content-Type: application/json': no Origin, no Sec-Fetch-Site.
+        status, data = raw_request("POST", "/api/save", self.body, {"Content-Type": "application/json"})
+        self.assertEqual(status, 200, data)
+
+    def test_a_rebound_hostname_is_served_nothing(self) -> None:
+        # DNS rebinding: a name the attacker controls resolves to 127.0.0.1,
+        # so the browser considers the request same-origin. Host is the one
+        # thing that still says where the browser thinks it is.
+        for method, path in [("GET", "/api/capabilities"), ("GET", "/editor/duckshow-core.js"), ("POST", "/api/save")]:
+            with self.subTest(method=method, path=path):
+                status, _ = raw_request(method, path, self.body if method == "POST" else b"", {
+                    "Host": "evil.example:{port}", "Content-Type": "application/json"})
+                self.assertEqual(status, 403)
+        self._unchanged()
+
+    def test_a_preflight_is_not_answered(self) -> None:
+        # application/json is not a simple type, so a cross-origin sender is
+        # forced into OPTIONS first. Pinning that this server does not grant it.
+        status, _ = raw_request("OPTIONS", "/api/save", b"", {
+            "Origin": "https://evil.example", "Access-Control-Request-Method": "POST"})
+        self.assertNotEqual(status, 200)
+        self.assertNotEqual(status, 204)
+
+
 class ServedRequest:
     """One request against a real editor_server.Handler on an ephemeral port."""
 
