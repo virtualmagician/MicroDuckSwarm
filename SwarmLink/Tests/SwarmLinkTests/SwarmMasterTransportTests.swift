@@ -41,6 +41,102 @@ final class SwarmMasterTransportTests: XCTestCase {
         await duck.stop()
     }
 
+    // MARK: pause / resume
+    //
+    // docs/swarmlink-protocol.md "Pause and resume". The transport half of the
+    // control track, so these rules are the ones authored hold points inherit.
+
+    func testPauseFreezesTheMasterClockAndResumeContinues() async throws {
+        let (master, duck, show, roster) = try await rig()
+        _ = try await master.load(show: show, roster: roster)
+        _ = try await master.play(at: 0)
+        _ = await waitForTransport(master, .playing)
+        try await Task.sleep(nanoseconds: 200_000_000)
+
+        _ = await master.pause()
+        let transportAfterPause = await master.currentTransport
+        XCTAssertEqual(transportAfterPause, .paused)
+        let frozen = await master.currentShowTime()
+        try await Task.sleep(nanoseconds: 300_000_000)
+        let stillFrozen = await master.currentShowTime()
+        XCTAssertEqual(frozen ?? -1, stillFrozen ?? -2, accuracy: 1e-6,
+                       "the master clock advanced while paused")
+
+        _ = await master.resume()
+        let transportAfterResume = await master.currentTransport
+        XCTAssertEqual(transportAfterResume, .playing)
+        try await Task.sleep(nanoseconds: 150_000_000)
+        let after = await master.currentShowTime() ?? 0
+        XCTAssertGreaterThan(after, frozen ?? 0)
+        XCTAssertLessThan(after, (frozen ?? 0) + 0.3, "resume jumped past the wall time held")
+        await duck.stop()
+    }
+
+    func testPauseKeepsTheStateStreamRunning() async throws {
+        // publishStateTick's transport guard tears the 5 Hz loop down for any
+        // value it does not name, and it is an == comparison the compiler will
+        // not flag. Freezing the show must not also stop the only stream
+        // telling the operator the cast is holding.
+        let (master, duck, show, roster) = try await rig()
+        _ = try await master.load(show: show, roster: roster)
+        _ = try await master.play(at: 0)
+        _ = await waitForTransport(master, .playing)
+        _ = await master.pause()
+
+        let states = await duck.waitForStates(count: 3, timeoutMs: 2000)
+        XCTAssertGreaterThanOrEqual(states.count, 3, "state stream stopped while paused")
+        XCTAssertTrue(states.suffix(2).allSatisfy { $0.transport == .paused },
+                      "state messages must report the paused transport")
+        await duck.stop()
+    }
+
+    func testPauseAndResumeFanOutToTheDucks() async throws {
+        let (master, duck, show, roster) = try await rig()
+        _ = try await master.load(show: show, roster: roster)
+        _ = try await master.play(at: 0)
+        _ = await waitForTransport(master, .playing)
+
+        _ = await master.pause()
+        let pauses = await duck.waitForCommands(named: "pause")
+        XCTAssertFalse(pauses.isEmpty, "pause must reach the ducks")
+        _ = await master.resume()
+        let resumes = await duck.waitForCommands(named: "resume")
+        XCTAssertFalse(resumes.isEmpty, "resume must reach the ducks")
+        await duck.stop()
+    }
+
+    func testResumeWhileAlreadyPlayingIsANoOp() async throws {
+        // Two GO presses are two commands; the second must not re-anchor the
+        // epoch and move this master away from the cast.
+        let (master, duck, show, roster) = try await rig()
+        _ = try await master.load(show: show, roster: roster)
+        _ = try await master.play(at: 0)
+        _ = await waitForTransport(master, .playing)
+
+        let outcomes = await master.resume()
+        XCTAssertTrue(outcomes.isEmpty, "resume while playing must refuse, not re-anchor")
+        let resumes = await duck.commands(named: "resume")
+        XCTAssertTrue(resumes.isEmpty, "a refused resume must not reach any duck")
+        await duck.stop()
+    }
+
+    func testStopFromPausedClearsTheFrozenClock() async throws {
+        // A paused position that survives stop pins showTime() forever after.
+        let (master, duck, show, roster) = try await rig()
+        _ = try await master.load(show: show, roster: roster)
+        _ = try await master.play(at: 0)
+        _ = await waitForTransport(master, .playing)
+        try await Task.sleep(nanoseconds: 150_000_000)
+        _ = await master.pause()
+        _ = await master.stop()
+
+        let transport = await master.currentTransport
+        XCTAssertEqual(transport, .stopped)
+        let showTime = await master.currentShowTime()
+        XCTAssertNil(showTime, "a frozen show-time must not outlive the transport it belonged to")
+        await duck.stop()
+    }
+
     // MARK: play must not run over a failed load
     //
     // docs/swarmlink-protocol.md "The master must not play over a failed

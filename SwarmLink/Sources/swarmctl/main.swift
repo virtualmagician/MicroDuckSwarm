@@ -47,6 +47,7 @@ func printUsage() {
 
     COMMANDS:
       load <show.duckshow.json>              verify + pre-load the show on every roster duck
+      pause | resume                         freeze the running show where it is, and continue it
       play <show.duckshow.json> [--lead-ms] [--allow-failed-loads]
                                              load, play, then monitor telemetry until Ctrl+C (panic).
                                              play refuses if any duck did not load the show;
@@ -480,6 +481,14 @@ struct SwarmCtl {
             await connect()
             let ok = report("seek", await master.seek(to: showTime))
             exit(ok ? 0 : 1)
+
+        case "pause":
+            report("pause", await master.pause())
+            exit(0)
+
+        case "resume":
+            report("resume", await master.resume())
+            exit(0)
 
         case "stop":
             await connect()

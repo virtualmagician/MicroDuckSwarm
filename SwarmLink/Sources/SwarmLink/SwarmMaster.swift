@@ -481,8 +481,46 @@ public actor SwarmMaster {
             armedFromShowTime = nil
             transport = .playing
             startStateLoopIfNeeded()
+        case .paused:
+            // Scrub the frozen point and stay frozen, exactly as the agent
+            // does. Falling through to .playing here would silently un-pause
+            // the cast from the master's side only.
+            playGeneration += 1
+            clock.pause(atShowTime: showTime)
+            startStateLoopIfNeeded()
         }
         return await fanOut(.seek(showTime: showTime, atMasterTime: now))
+    }
+
+    /// Freezes the show where it is: every duck holds its pose with
+    /// locomotion commanded to zero, and the master clock stops advancing.
+    /// Refused unless playing. Idempotent — a second `pause()` while already
+    /// paused is a no-op rather than a re-freeze at a new position.
+    @discardableResult
+    public func pause() async -> [DuckID: CommandStatus] {
+        guard transport == .playing, let showTime = clock.showTime() else { return [:] }
+        _ = issueCommand()
+        let now = MasterClock.nowNanoseconds()
+        playGeneration += 1
+        clock.pause(atShowTime: showTime)
+        transport = .paused
+        startStateLoopIfNeeded()
+        return await fanOut(.pause(atMasterTime: now))
+    }
+
+    /// Continues from exactly where `pause()` stopped. Refused unless paused,
+    /// which is what makes a second GO a no-op instead of a re-anchor that
+    /// would move this master's epoch away from the cast.
+    @discardableResult
+    public func resume() async -> [DuckID: CommandStatus] {
+        guard transport == .paused else { return [:] }
+        _ = issueCommand()
+        let now = MasterClock.nowNanoseconds()
+        playGeneration += 1
+        clock.resume(atMasterTimeNs: now)
+        transport = .playing
+        startStateLoopIfNeeded()
+        return await fanOut(.resume(atMasterTime: now))
     }
 
     /// Graceful stop: fans out `stop` and reports each duck's ACK outcome.
@@ -964,7 +1002,14 @@ public actor SwarmMaster {
     /// docs/swarmlink-protocol.md §5, and a `stop` after a `seek` past the
     /// end would only race them).
     private func publishStateTick() -> Bool {
-        guard !Task.isCancelled, transport == .armed || transport == .playing else { return false }
+        // .paused belongs here: freezing the show must not also stop the 5 Hz
+        // state stream, which is the only thing telling the operator the cast
+        // is holding and where. This guard returning false is what tears the
+        // loop down, and it is an == comparison the compiler will not flag
+        // when a transport case is added.
+        guard !Task.isCancelled,
+              transport == .armed || transport == .playing || transport == .paused
+        else { return false }
         if transport == .playing, let show, let showTime = clock.showTime(), showTime >= show.meta.duration {
             haltTransport()
             return false

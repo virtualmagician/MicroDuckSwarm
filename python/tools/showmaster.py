@@ -167,7 +167,10 @@ class SwarmMaster:
         self._lost_ducks: set[str] = set()
 
         # Transport state
-        self.transport = "stopped"  # "stopped" | "armed" | "playing"
+        self.transport = "stopped"  # "stopped" | "armed" | "playing" | "paused"
+        # Frozen show-time while paused (docs/swarmlink-protocol.md
+        # "Pause and resume"); None whenever the transport is not paused.
+        self.paused_show_time: Optional[float] = None
         self.current_show_id: Optional[str] = None
         self.play_epoch_ns: Optional[int] = None
         self.from_show_time: float = 0.0
@@ -334,6 +337,8 @@ class SwarmMaster:
     # -- 5 Hz transport state broadcast (unconditional, incl. "stopped") --
 
     def _current_show_time(self) -> float:
+        if self.paused_show_time is not None:
+            return self.paused_show_time
         if self.transport == "playing" and self.play_epoch_ns is not None:
             now_ns = time.monotonic_ns()
             elapsed_s = max(0.0, (now_ns - self.play_epoch_ns) / 1e9)
@@ -524,12 +529,44 @@ class SwarmMaster:
             self.transport = "armed"
         return results
 
+    def pause(self, lead_ms: int = DEFAULT_LEAD_MS) -> dict[str, bool]:
+        """Freeze the show where it is. Refused unless playing; idempotent."""
+        if self.transport != "playing" or self.paused_show_time is not None:
+            return {}
+        duck_ids = self.target_ducks()
+        at_master_time = time.monotonic_ns() + int(lead_ms * 1_000_000)
+        frozen = self._current_show_time()
+        results = self.send_command(duck_ids, "pause", {"at_master_time": at_master_time})
+        if all(results.values()):
+            self.paused_show_time = frozen
+            self.transport = "paused"
+        return results
+
+    def resume(self, lead_ms: int = DEFAULT_LEAD_MS) -> dict[str, bool]:
+        """Continue from exactly where pause() stopped. Refused unless paused,
+        which is what makes a second GO a no-op rather than a re-anchor that
+        would move this master's epoch away from the cast."""
+        if self.paused_show_time is None:
+            return {}
+        duck_ids = self.target_ducks()
+        at_master_time = time.monotonic_ns() + int(lead_ms * 1_000_000)
+        results = self.send_command(duck_ids, "resume", {"at_master_time": at_master_time})
+        if all(results.values()):
+            self.from_show_time = self.paused_show_time
+            self.play_epoch_ns = at_master_time
+            self.paused_show_time = None
+            self.transport = "playing"
+        return results
+
     def stop(self) -> dict[str, bool]:
         duck_ids = self.target_ducks()
         results = self.send_command(duck_ids, "stop", {})
         if all(results.values()):
             self.transport = "stopped"
             self.play_epoch_ns = None
+            # A frozen position must never outlive the transport it belonged
+            # to, or _current_show_time reports it forever after.
+            self.paused_show_time = None
         return results
 
     def panic(self) -> dict[str, bool]:
@@ -538,6 +575,7 @@ class SwarmMaster:
         duck_ids = sorted(self.roster.keys())
         results = self.send_command(duck_ids, "panic", {})
         self.transport = "stopped"
+        self.paused_show_time = None
         self.play_epoch_ns = None
         return results
 
@@ -590,6 +628,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_seek = sub.add_parser("seek", help="Seek the currently-loaded show to a given show_time.")
     p_seek.add_argument("show_time", type=float)
 
+    sub.add_parser("pause", help="Freeze the running show where it is.")
+    sub.add_parser("resume", help="Continue a paused show from where it stopped.")
     sub.add_parser("stop", help="Stop playback gracefully.")
     sub.add_parser("panic", help="Panic-stop the whole roster immediately.")
     sub.add_parser("monitor", help="Print telemetry and answer time syncs until interrupted.")
@@ -653,6 +693,16 @@ def main(argv: Optional[list[str]] = None) -> int:
         if args.command == "seek":
             results = master.seek(args.show_time, lead_ms=args.lead_ms)
             _print_ack_report("seek", results)
+            return 0 if all(results.values()) else 1
+
+        if args.command in ("pause", "resume"):
+            results = master.pause() if args.command == "pause" else master.resume()
+            if not results:
+                # Refused by state, not by any duck: an empty result would
+                # otherwise read as "every duck ACKed" to _print_ack_report.
+                print(f"[{args.command}] refused: transport is {master.transport}")
+                return 1
+            _print_ack_report(args.command, results)
             return 0 if all(results.values()) else 1
 
         if args.command == "stop":

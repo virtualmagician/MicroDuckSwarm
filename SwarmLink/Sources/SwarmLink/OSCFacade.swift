@@ -527,6 +527,14 @@ public actor OSCFacade {
             logCommand(message, from: sender)
             Task { await self.performSeek(to: showTime, sender: sender) }
 
+        case "/duckswarm/pause":
+            logCommand(message, from: sender)
+            Task { await self.performPause(sender: sender) }
+
+        case "/duckswarm/resume":
+            logCommand(message, from: sender)
+            Task { await self.performResume(sender: sender) }
+
         case "/duckswarm/stop":
             logCommand(message, from: sender)
             Task { await self.performStop(sender: sender) }
@@ -619,6 +627,28 @@ public actor OSCFacade {
         guard admitArmingCommand(from: sender) else { return }
         let outcomes = await master.seek(to: showTime)
         await pushFeedback(command: "seek", outcomes: outcomes, sender: sender)
+    }
+
+    private func performPause(sender: NWConnection) async {
+        guard admitArmingCommand(from: sender) else { return }
+        let outcomes = await master.pause()
+        // An empty result means the master refused (not playing). Say so
+        // rather than reporting a successful pause of nothing.
+        guard !outcomes.isEmpty else {
+            reply(error: "cannot pause: not playing", to: sender)
+            return
+        }
+        await pushFeedback(command: "pause", outcomes: outcomes, sender: sender)
+    }
+
+    private func performResume(sender: NWConnection) async {
+        guard admitArmingCommand(from: sender) else { return }
+        let outcomes = await master.resume()
+        guard !outcomes.isEmpty else {
+            reply(error: "cannot resume: not paused", to: sender)
+            return
+        }
+        await pushFeedback(command: "resume", outcomes: outcomes, sender: sender)
     }
 
     private func performStop(sender: NWConnection) async {

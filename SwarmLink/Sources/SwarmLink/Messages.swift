@@ -13,6 +13,10 @@ public enum Transport: String, Codable, Sendable, Equatable {
     case stopped
     case armed
     case playing
+    /// Frozen mid-show by an operator pause. The show clock is not advancing,
+    /// but every duck is still ticking and still being commanded (locomotion
+    /// at zero) -- see docs/swarmlink-protocol.md "Pause and resume".
+    case paused
 }
 
 /// Agent-reported state, as carried in `telemetry`. See §4 and §5.
@@ -177,6 +181,10 @@ public struct CommandMessage: Sendable, Equatable {
         case play(show: String, atMasterTime: Int64, fromShowTime: Double)
         /// `"show_time": 45.0, "at_master_time": <ns>`
         case seek(showTime: Double, atMasterTime: Int64)
+        /// `"at_master_time": <ns>` -- freeze the show clock at that instant.
+        case pause(atMasterTime: Int64)
+        /// `"at_master_time": <ns>` -- continue from where `pause` stopped.
+        case resume(atMasterTime: Int64)
         case stop
         case panic
 
@@ -185,6 +193,8 @@ public struct CommandMessage: Sendable, Equatable {
             case .load: return "load"
             case .play: return "play"
             case .seek: return "seek"
+            case .pause: return "pause"
+            case .resume: return "resume"
             case .stop: return "stop"
             case .panic: return "panic"
             }
@@ -232,6 +242,10 @@ extension CommandMessage: Codable {
                 showTime: try c.decode(Double.self, forKey: .showTime),
                 atMasterTime: try c.decode(Int64.self, forKey: .atMasterTime)
             )
+        case "pause":
+            payload = .pause(atMasterTime: try c.decode(Int64.self, forKey: .atMasterTime))
+        case "resume":
+            payload = .resume(atMasterTime: try c.decode(Int64.self, forKey: .atMasterTime))
         case "stop":
             payload = .stop
         case "panic":
@@ -258,6 +272,8 @@ extension CommandMessage: Codable {
             try c.encode(fromShowTime, forKey: .fromShowTime)
         case .seek(let showTime, let atMasterTime):
             try c.encode(showTime, forKey: .showTime)
+            try c.encode(atMasterTime, forKey: .atMasterTime)
+        case .pause(let atMasterTime), .resume(let atMasterTime):
             try c.encode(atMasterTime, forKey: .atMasterTime)
         case .stop, .panic:
             break

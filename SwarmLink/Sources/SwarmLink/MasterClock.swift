@@ -32,6 +32,8 @@ public struct PlayEpoch: Sendable, Equatable {
 /// keeps this type trivially `Sendable` and easy to unit test in isolation.
 public struct MasterClock: Sendable, Equatable {
     public private(set) var epoch: PlayEpoch?
+    /// Set while frozen by an operator pause; `showTime` reports it verbatim.
+    private var pausedShowTime: Double?
 
     public init(epoch: PlayEpoch? = nil) {
         self.epoch = epoch
@@ -57,14 +59,35 @@ public struct MasterClock: Sendable, Equatable {
         epoch = PlayEpoch(masterTimeNs: atMasterTimeNs, showTimeAtEpoch: showTime)
     }
 
+    /// Freezes show-time at `showTime`. `showTime(now:)` reports that value
+    /// for as long as the freeze lasts, whatever the wall clock does.
+    public mutating func pause(atShowTime showTime: Double) {
+        pausedShowTime = showTime
+    }
+
+    /// Un-freezes, re-anchoring the epoch so show-time continues from exactly
+    /// where `pause(atShowTime:)` stopped it. No-op if not paused, so a second
+    /// resume cannot move the epoch (the two-GO-presses case).
+    public mutating func resume(atMasterTimeNs: Int64) {
+        guard let held = pausedShowTime else { return }
+        pausedShowTime = nil
+        epoch = PlayEpoch(masterTimeNs: atMasterTimeNs, showTimeAtEpoch: held)
+    }
+
+    public var isPaused: Bool { pausedShowTime != nil }
+
     /// Clears the epoch (stopped/panicked — no show-time is being tracked).
+    /// Clears a freeze too: a paused position must never outlive the transport
+    /// it belonged to, or `showTime()` keeps reporting it forever after.
     public mutating func stop() {
         epoch = nil
+        pausedShowTime = nil
     }
 
     /// Show-time at `now` (defaults to the current instant), or `nil` if no
     /// epoch has been established (stopped).
     public func showTime(now: Int64 = MasterClock.nowNanoseconds()) -> Double? {
-        epoch?.showTime(atMasterTimeNs: now)
+        if let pausedShowTime { return pausedShowTime }
+        return epoch?.showTime(atMasterTimeNs: now)
     }
 }
