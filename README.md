@@ -58,6 +58,10 @@ The floor is measured: 1 m major lines, 10 cm minor divisions, tinted axes throu
 
 ![Top-down view showing the eight-duck formation and start marks](docs/images/viewer-top.png)
 
+![Top view with the drift diff on: long grey dead-reckoned paths running well past each duck, short coloured simulated trails at the ducks themselves](docs/images/viewer-drift.png)
+
+With a bake loaded, the `drift` toggle draws the **intended** path (dead-reckoned from the `locomotion` track) in grey underneath the **actual** simulated one. Above, the grey lines run far past the ducks: at t=14 s the choreography asked `lead` to travel 42.8 cm from its mark and the physics delivered 12.4 cm. The readout gives that separation per role, at the playhead and at its worst anywhere in the show.
+
 Top view is for formations and marks. Drag a duck's start ring and it persists into the show file. `shows/octet` is 64 seconds at 120 bpm for eight ducks: a unison opening, eight solo turns, and a unison finale.
 
 ## Prior art and influences
@@ -99,7 +103,6 @@ Not built yet, and what unblocks each item.
 | **Rust port of the agent tick loop** | Only if the RK3566 cannot hold 40 Hz in Python. The `robotd` deadman is 500 ms, so a stalled tick loop zeroes velocity. |
 | **DuckSwarm.app:** SwiftUI shell around SwarmLink, editor in a WKWebView, recorder, preflight dashboard | Real telemetry. The dashboard shows battery, RSSI, clock offset and heartbeat age; the thresholds are unknown until measured. |
 | **Servo cues:** laser homing, colour-beacon homing, marker following | Camera access for our agent alongside `mediad`, which owns it for WebRTC. Untested. |
-| **Intended-versus-actual drift diff:** planned and simulated paths drawn together | Nothing. Both paths are on disk in comparable coordinates. |
 | **`roulade`** in the bake | It executes, but after its stated 1.0 s the duck is still inverted, and `manifest.json` marks it `chain: true` without naming what it chains into. Asked upstream. The other three skills are driven. |
 | **Roller mode** in the bake | **Parked until hardware.** Needs a second MJCF (`robot_groundcontact_rollers.xml`) and `roller.onnx` loaded alongside the legged model, for a mode no current show uses for more than a few seconds. |
 | **Timeline control track:** *authored* hold cues in the show file | The operator pause/resume it builds on is done. What remains is hold entry from the file, which has to answer how a late-joining duck avoids skipping a hold, and how a held duck is recovered once the master's clock passes the end of the show. Sensor triggers need a duck sensor surface `robotd` does not expose. [`docs/control-track.md`](docs/control-track.md) |

@@ -122,6 +122,14 @@ See `docs/bake-parts.md` for the full parts list, exact asset-setup commands, an
 
 The path form (`{"show": "/shows/…"}`) still works and is what a script would use. Baking a document the browser only holds in memory is why the size cap on the request body is 4 MB rather than the 1 MB a path needs.
 
+**Intended versus actual: the drift diff.** With a bake loaded, the `drift` toggle draws each role's *dead-reckoned* path underneath its *simulated* one. The dead reckoning is what the choreography asked for, integrated from the `locomotion` track. The bake is what the policies actually did. Where they separate is where the show will not do what the timeline says.
+
+The two are drawn differently on purpose: the actual path keeps the role's colour, and the intended one is a single muted grey underneath it, so the physics reads as the subject and the plan as the reference. A per-role readout gives the separation at the playhead and the worst separation anywhere in the show, because the moment that matters is usually not the moment you happen to be scrubbing.
+
+This is the diff the whole bake exists to produce, and it is worth being blunt about what it measures: **a large drift is not automatically a bug in the show.** It can equally be the plant under-tracking (the baker's duck reaches about 0.154 m/s on a 0.40 m/s command), or a commanded speed below the policy's stand/walk gate, where the intended path advances and the actual one does not move at all. The readout tells you where to look, not what is wrong.
+
+`driftSeries()` in `editor/duckshow-viewer.js` is a pure function over two position sequences, so the arithmetic is unit-tested without a browser or a cache.
+
 **Which policy is running, named on the stage.** A readout bottom-right of the viewer lists the ONNX policy driving each duck at the playhead, grouped by policy (`×N` once a group is bigger than three roles). It is the only surface that can name most of them: `docs/duckshow-format.md`'s own mapping table lists `alpha_walking.onnx` / `roller.onnx` as *implicit in `locomotion`*, so no `.duckshow` event ever spells them and no amount of event-label work reaches them. Scrubbing `shows/showcase` walks through five: `alpha_walking` → `alpha_ground_pick` → `ball_kick_left` → `roller` → `roller_crouch`.
 
 `alpha_stand.onnx` is deliberately never claimed. The manifest marks it perpetual alongside `alpha_walking`, but nothing documents when `robotd` switches between them — `robot.setMode` names only `walk`/`roller`, never a walk/stand distinction. `tools/bake` makes the same simplification and flags it; reporting it here would be a guess presented as a readout.

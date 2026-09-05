@@ -164,12 +164,25 @@
      "implicit in locomotion" per docs/duckshow-format.md, so no event label
      ever spells them. */
   #viewer-policies {
-    position: absolute; right: 8px; bottom: 8px; padding: 2px 7px; border-radius: 3px;
+    padding: 2px 7px; border-radius: 3px;
     background: rgba(0,0,0,0.45); color: #e7e9ee; font-size: 10px; letter-spacing: 0.02em;
-    pointer-events: none; border: 1px solid rgba(255,255,255,0.18); text-align: right;
-    max-width: 46%; line-height: 1.45;
+    border: 1px solid rgba(255,255,255,0.18); text-align: right; line-height: 1.45;
   }
   #viewer-policies:empty { display: none; }
+  /* Drift readout: same card treatment as the policy list, above it. */
+  /* Both readouts stack bottom-right; the policy card's height varies with
+     how many policies are in force, so a fixed offset would overlap. */
+  #viewer-readouts {
+    position: absolute; right: 8px; bottom: 8px; display: flex; flex-direction: column;
+    align-items: flex-end; gap: 4px; max-width: 52%; pointer-events: none;
+  }
+  #viewer-drift {
+    padding: 2px 7px; border-radius: 3px;
+    background: rgba(0,0,0,0.45); color: #e7e9ee; font-size: 10px; letter-spacing: 0.02em;
+    border: 1px solid rgba(255,255,255,0.18); text-align: right; line-height: 1.45;
+  }
+  #viewer-drift b { font-weight: 600; }
+  #viewer-drift i { font-style: normal; opacity: 0.66; }
   #viewer-policies b { font-weight: 600; }
   #viewer-policies i { font-style: normal; opacity: 0.66; }
   #viewer-error { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
@@ -320,13 +333,16 @@
 <main id="main">
   <div id="workspace">
     <section id="stage-section">
-      <h2>stage <span class="count" style="font-weight:400">1 house · 2 ¾ · 3 top · drag orbit · scroll dolly · drag mark in top view</span><button id="btn-viewer-names" class="toggle" aria-pressed="false" title="Show/hide each duck's role name above its head (remembered in this browser)">names</button><button id="btn-setup" class="toggle" aria-pressed="false" title="Setup mode (⌥P): place the cast. Switches to Top view and opens the marks table — docs/authoring.md &quot;Setup mode&quot;">setup</button><button id="btn-create-preview" title="Create Preview unavailable — checking…" disabled>Create Preview</button><button id="btn-bake-open" title="Load a baked pose cache (a .duckbake.json from tools/bake) and play it back in place of the kinematic preview — docs/viewer.md &quot;Create Preview&quot;">Play Baked…</button><button id="btn-bake-exit" class="hidden" title="Back to the live kinematic preview">Kinematic ↩</button></h2>
+      <h2>stage <span class="count" style="font-weight:400">1 house · 2 ¾ · 3 top · drag orbit · scroll dolly · drag mark in top view</span><button id="btn-viewer-names" class="toggle" aria-pressed="false" title="Show/hide each duck's role name above its head (remembered in this browser)">names</button><button id="btn-drift" class="toggle hidden" aria-pressed="false" title="Drift: draw the dead-reckoned path the choreography asked for underneath the simulated one, and report the separation (docs/viewer.md). Only meaningful with a bake loaded.">drift</button><button id="btn-setup" class="toggle" aria-pressed="false" title="Setup mode (⌥P): place the cast. Switches to Top view and opens the marks table — docs/authoring.md &quot;Setup mode&quot;">setup</button><button id="btn-create-preview" title="Create Preview unavailable — checking…" disabled>Create Preview</button><button id="btn-bake-open" title="Load a baked pose cache (a .duckbake.json from tools/bake) and play it back in place of the kinematic preview — docs/viewer.md &quot;Create Preview&quot;">Play Baked…</button><button id="btn-bake-exit" class="hidden" title="Back to the live kinematic preview">Kinematic ↩</button></h2>
       <div id="viewer-wrap">
         <canvas id="stage"></canvas>
         <div id="viewer-role-labels"></div>
         <div id="viewer-labels"></div>
         <div id="viewer-badge">kinematic preview</div>
+        <div id="viewer-readouts">
+        <div id="viewer-drift" class="hidden" title="Separation between the dead-reckoned path and the simulated one: at the playhead, and the worst anywhere in the show."></div>
         <div id="viewer-policies" title="Which ONNX policy is driving each duck at the playhead. alpha_walking/roller are implicit in the tracks and are named nowhere else in the UI — docs/duckshow-format.md 'Policy mapping'."></div>
+        </div>
         <div id="bake-log" class="hidden"></div>
       </div>
       <div id="stage-legend"></div>
@@ -1672,6 +1688,7 @@ async function loadBakeCache(file) {
   }
 
   state.bakeCache = raw;
+  updateDriftAvailability();
   pause();
   const summary = bakeCache.summarize(raw);
   const notes = [];
@@ -1687,6 +1704,7 @@ async function loadBakeCache(file) {
 function exitBakeMode({ quiet = false } = {}) {
   if (!state.bakeCache) return;
   state.bakeCache = null;
+  updateDriftAvailability();
   if (!quiet) status('back to the kinematic preview');
   updateBakeUi();
   renderBakeLogPanel(null);
@@ -1756,6 +1774,7 @@ function paintBakedViewer() {
   paintEventLabels(labels);
   updateRoleLabelPositions();
   renderActivePolicies();
+  paintDrift(cache);
 }
 
 // ---------------------------------------------------------------------------
@@ -1922,6 +1941,7 @@ async function loadBakedCacheFromUrl(url) {
   }
 
   state.bakeCache = raw;
+  updateDriftAvailability();
   updateBakeUi();
   renderBakeLogPanel(raw);
   status(`Create Preview done — ${cp.formatBakeSummary(bakeCache.summarize(raw))}`, 'ok');
@@ -2250,6 +2270,97 @@ function updateRoleLabelPositions() {
  * mapping table). Called from the same paint path the labels use, so it
  * follows scrubbing without a timer of its own.
  */
+// ---------------------------------------------------------------------------
+// Drift diff: intended (dead-reckoned) vs actual (simulated)
+// ---------------------------------------------------------------------------
+// docs/viewer.md "Intended versus actual: the drift diff". Only meaningful
+// with a bake loaded -- without one there is no "actual" to compare against,
+// so the toggle hides itself rather than sitting there doing nothing.
+const drift = { on: false, worst: null };
+
+/** Worst separation per role across the WHOLE show, computed once per bake
+ *  rather than per frame: the moment that matters is rarely the one being
+ *  scrubbed. Samples the dead-reckoned path on the cache's own frame grid so
+ *  index i means the same show time in both (driftSeries pairs by index). */
+function computeWorstDrift(cache) {
+  const out = new Map();
+  if (!cache) return out;
+  const rate = cache.frame_rate || 50;
+  for (const role of cache.roles) {
+    const path = viewer.paths.get(role);
+    const poses = cache.poses[role];
+    if (!path || !poses) continue;
+    const intended = [], actual = [];
+    for (let i = 0; i < poses.x.length; i++) {
+      const t = i / rate;
+      const p = dv.sampleRolePath(path, t);
+      intended.push({ x: p.x, y: p.y });
+      actual.push({ x: poses.x[i], y: poses.y[i] });
+    }
+    out.set(role, dv.driftSeries(intended, actual));
+  }
+  return out;
+}
+
+function setDriftMode(on) {
+  drift.on = Boolean(on) && Boolean(state.bakeCache);
+  $('btn-drift').setAttribute('aria-pressed', String(drift.on));
+  if (drift.on && !drift.worst) drift.worst = computeWorstDrift(state.bakeCache);
+  if (!drift.on && viewer.renderer) viewer.renderer.setGhostTrails({});
+  $('viewer-drift').classList.toggle('hidden', !drift.on);
+  paintViewer();
+}
+
+/** Shows/hides the toggle itself: it is meaningless without a bake. */
+function updateDriftAvailability() {
+  const btn = $('btn-drift');
+  if (!btn) return;
+  const available = Boolean(state.bakeCache);
+  btn.classList.toggle('hidden', !available);
+  if (!available && drift.on) setDriftMode(false);
+  drift.worst = null;  // recomputed against whichever cache is now loaded
+}
+
+/** The intended path as a trail, plus the numeric readout. Called from the
+ *  baked paint path only -- the kinematic path IS the intended one, so there
+ *  is nothing to diff against outside baked playback. */
+function paintDrift(cache) {
+  if (!drift.on || !cache) return;
+  const ghosts = {};
+  for (const role of cache.roles) {
+    const path = viewer.paths.get(role);
+    if (!path || viewer.neutralRoles.has(role)) continue;
+    ghosts[role] = dv.deriveTrail(path, state.playhead, dv.TRAIL_MAX_POINTS, false);
+  }
+  viewer.renderer.setGhostTrails(ghosts);
+
+  const host = $('viewer-drift');
+  const rows = [];
+  for (const role of cache.roles) {
+    const path = viewer.paths.get(role);
+    const pose = bakeCache.poseAtTime(cache, role, state.playhead);
+    if (!path || !pose) continue;
+    const p = dv.sampleRolePath(path, state.playhead);
+    const now = Math.hypot(pose.x - p.x, pose.y - p.y);
+    const worst = drift.worst ? drift.worst.get(role) : null;
+    rows.push({ role, now, worst: worst ? worst.max : null });
+  }
+  rows.sort((a, b) => b.now - a.now);
+  host.replaceChildren(...rows.slice(0, 8).map((r) => {
+    const line = document.createElement('div');
+    const name = document.createElement('b');
+    name.textContent = r.role;
+    const val = document.createElement('i');
+    // Centimetres: a duck is 25 cm tall, so metres to three decimals reads as
+    // noise where "12 cm" is immediately a fraction of a duck.
+    val.textContent = r.worst !== null
+      ? ` ${(r.now * 100).toFixed(0)} cm  (worst ${(r.worst * 100).toFixed(0)})`
+      : ` ${(r.now * 100).toFixed(0)} cm`;
+    line.append(name, val);
+    return line;
+  }));
+}
+
 function renderActivePolicies() {
   const host = $('viewer-policies');
   if (!host) return;
@@ -2410,6 +2521,7 @@ function applyFormation() {
   status(`${kind} formation applied to ${names.length} role${names.length === 1 ? '' : 's'}`, 'ok');
 }
 
+$('btn-drift').onclick = () => setDriftMode(!drift.on);
 $('btn-setup').onclick = () => setSetupMode(!setup.on);
 $('setup-apply').onclick = applyFormation;
 $('setup-kind').onchange = () => {

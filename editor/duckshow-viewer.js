@@ -346,6 +346,35 @@ export const TRAIL_MAX_POINTS = 240;
  * `boost` (the selected role) raises the floor so even the oldest point
  * still reads clearly.
  */
+/**
+ * Separation between an intended path and an actual one, sampled at the same
+ * instants (docs/viewer.md "Intended versus actual: the drift diff").
+ *
+ * `intended` and `actual` are parallel arrays of {x, y} in show-space metres,
+ * index i in one meaning the same show time as index i in the other. Returns
+ * {current, max, maxIndex, count}: `current` is the separation at the LAST
+ * sampled index (the playhead, when the caller samples up to it), `max` and
+ * `maxIndex` the worst anywhere in the sampled range.
+ *
+ * Pure arithmetic on purpose: no cache, no path object, no DOM, so the thing
+ * an author reads off the screen is unit-tested. Extra samples on either side
+ * are ignored rather than guessed at -- comparing a 3200-frame bake against a
+ * path sampled at some other rate would silently pair mismatched instants,
+ * so the shorter length wins and the caller is responsible for sampling both
+ * on the same grid.
+ */
+export function driftSeries(intended, actual) {
+  const n = Math.min(intended ? intended.length : 0, actual ? actual.length : 0);
+  if (n === 0) return { current: 0, max: 0, maxIndex: -1, count: 0 };
+  let max = 0, maxIndex = 0, current = 0;
+  for (let i = 0; i < n; i++) {
+    const d = Math.hypot((actual[i].x || 0) - (intended[i].x || 0), (actual[i].y || 0) - (intended[i].y || 0));
+    if (d > max) { max = d; maxIndex = i; }
+    current = d;
+  }
+  return { current, max, maxIndex, count: n };
+}
+
 export function deriveTrail(path, t, maxPoints = TRAIL_MAX_POINTS, boost = false) {
   const n = path.t.length;
   if (n === 0) return [];

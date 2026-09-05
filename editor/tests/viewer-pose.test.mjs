@@ -11,6 +11,7 @@ import {
   resolveMark, defaultMarkFor,
   deriveTrail,
   deriveEventLabels, DEFAULT_EVENT_LABEL_WINDOW,
+  driftSeries,
   roleColorPalette, PALETTE_SATURATION, PALETTE_LIGHTNESS,
   singleRenameAt, roleColorPaletteContinuous,
   easeInOutCubic, blendCameraStates, easeCamera, cameraPresetState,
@@ -506,5 +507,51 @@ describe('StageViewer', () => {
     viewer.setTime(1); // no-op: nothing to render yet
     assert.equal(frames.length, 0);
     assert.doesNotThrow(() => viewer.dispose());
+  });
+});
+
+// ---------------------------------------------------------------------------
+// driftSeries — intended vs actual separation (docs/viewer.md "the drift diff")
+// ---------------------------------------------------------------------------
+
+describe('driftSeries', () => {
+  test('reports the separation at the last sample and the worst anywhere', () => {
+    const intended = [{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 2, y: 0 }];
+    const actual = [{ x: 0, y: 0 }, { x: 1, y: 0.5 }, { x: 2, y: 0.1 }];
+    const d = driftSeries(intended, actual);
+    assert.ok(Math.abs(d.current - 0.1) < 1e-9, `current ${d.current}`);
+    assert.ok(Math.abs(d.max - 0.5) < 1e-9, `max ${d.max}`);
+    assert.equal(d.maxIndex, 1, 'the worst moment is not the current one');
+    assert.equal(d.count, 3);
+  });
+
+  test('identical paths have zero drift', () => {
+    const p = [{ x: 1, y: 2 }, { x: 3, y: 4 }];
+    assert.deepEqual(driftSeries(p, p), { current: 0, max: 0, maxIndex: 0, count: 2 });
+  });
+
+  test('measures euclidean distance, not per-axis', () => {
+    const d = driftSeries([{ x: 0, y: 0 }], [{ x: 3, y: 4 }]);
+    assert.ok(Math.abs(d.max - 5) < 1e-9, `expected 5, got ${d.max}`);
+  });
+
+  test('the shorter series wins rather than pairing mismatched instants', () => {
+    // A 3200-frame bake against a differently-sampled path would otherwise
+    // compare index i of one against a different show time in the other.
+    const d = driftSeries([{ x: 0, y: 0 }, { x: 9, y: 9 }], [{ x: 0, y: 0 }]);
+    assert.equal(d.count, 1);
+    assert.equal(d.max, 0, 'the unpaired sample must not contribute');
+  });
+
+  test('empty or missing input returns zeros and never throws', () => {
+    assert.deepEqual(driftSeries([], []), { current: 0, max: 0, maxIndex: -1, count: 0 });
+    assert.deepEqual(driftSeries(null, null), { current: 0, max: 0, maxIndex: -1, count: 0 });
+    assert.deepEqual(driftSeries([{ x: 1, y: 1 }], []), { current: 0, max: 0, maxIndex: -1, count: 0 });
+  });
+
+  test('missing coordinates read as zero rather than NaN', () => {
+    const d = driftSeries([{}], [{ x: 1 }]);
+    assert.ok(Number.isFinite(d.max), 'drift must never be NaN');
+    assert.ok(Math.abs(d.max - 1) < 1e-9);
   });
 });

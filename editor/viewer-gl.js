@@ -1279,6 +1279,12 @@ export class StageRenderer {
     this._marks = [];
     this._trails = {};
     this._trailBuffers = new Map();
+    // Second, muted trail layer: the dead-reckoned path the choreography
+    // asked for, drawn under the simulated one (docs/viewer.md "the drift
+    // diff"). Separate buffers rather than more entries in _trails, whose
+    // keys are role names used to look up cast colours.
+    this._ghostBuffers = new Map();
+    this._ghosts = {};
     this._selected = null;
     this._camera = { ...CAMERA_PRESETS.house };
     this._cameraFrom = null;
@@ -1318,6 +1324,7 @@ export class StageRenderer {
       // so the next live setTrails() recreates them instead of trying to
       // bufferSubData into a buffer that no longer exists.
       this._trailBuffers.clear();
+      this._ghostBuffers.clear();
       // The real-duck mesh buffers (if any were loaded) are dead zombie
       // handles too, same reasoning as the trail buffers above — drop
       // the reference so drawing falls back to the primitive duck rather
@@ -1398,6 +1405,40 @@ export class StageRenderer {
    * single call — that was real driver-side buffer-object churn on the
    * "60 fps with ten ducks" / render-on-change path (docs/viewer.md #4).
    */
+  /// The intended (dead-reckoned) path per role, drawn as a single muted
+  /// grey underneath the simulated trails so the physics reads as the subject
+  /// and the plan as the reference. Same point shape as setTrails; pass {} or
+  /// null to clear.
+  setGhostTrails(trails) {
+    const gl = this.gl;
+    this._ghosts = trails || {};
+    const keys = new Set(Object.keys(this._ghosts));
+    for (const [role, buf] of this._ghostBuffers) {
+      if (!keys.has(role)) { gl.deleteBuffer(buf.vbo); this._ghostBuffers.delete(role); }
+    }
+    for (const [role, points] of Object.entries(this._ghosts)) {
+      const n = points ? points.length : 0;
+      let buf = this._ghostBuffers.get(role);
+      if (this._contextLost) { if (buf) buf.count = n; continue; }
+      if (!buf) { buf = { vbo: gl.createBuffer(), capacity: 0, count: 0 }; this._ghostBuffers.set(role, buf); }
+      buf.count = n;
+      if (n === 0) continue;
+      const data = new Float32Array(n * 4);
+      for (let i = 0; i < n; i++) {
+        data[i * 4 + 0] = points[i].y || 0;
+        data[i * 4 + 1] = 0.002;  // just under the real trail, so it never z-fights
+        data[i * 4 + 2] = points[i].x || 0;
+        // Flat, dim brightness: this is a reference line, not a motion trail,
+        // so it must not compete with the fade that encodes recency.
+        data[i * 4 + 3] = 0.5;
+      }
+      gl.bindBuffer(gl.ARRAY_BUFFER, buf.vbo);
+      if (n > buf.capacity) { gl.bufferData(gl.ARRAY_BUFFER, data, gl.DYNAMIC_DRAW); buf.capacity = n; }
+      else { gl.bufferSubData(gl.ARRAY_BUFFER, 0, data); }
+    }
+    return this;
+  }
+
   setTrails(trails) {
     const gl = this.gl;
     this._trails = trails || {};
@@ -1582,6 +1623,7 @@ export class StageRenderer {
 
     this._drawGround(viewProj, eye);
     this._drawMarks(viewProj);
+    this._drawGhostTrails(viewProj);
     this._drawTrails(viewProj);
     this._drawShadows(viewProj, poses);
     this._drawDucks(viewProj, eye, poses, dt);
@@ -1627,6 +1669,32 @@ export class StageRenderer {
     }
     gl.depthMask(true);
     gl.disable(gl.BLEND);
+  }
+
+  _drawGhostTrails(viewProj) {
+    if (this._ghostBuffers.size === 0) return;
+    const gl = this.gl;
+    const { program, uniforms, attribs } = this._line;
+    gl.useProgram(program);
+    gl.uniformMatrix4fv(uniforms.uViewProj, false, viewProj);
+    gl.enable(gl.BLEND);
+    gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+    gl.depthMask(false);
+    // One neutral grey for every role. Colouring these per role would make
+    // eight intended paths compete with eight actual ones; the diff is only
+    // legible if the reference recedes.
+    gl.uniform3f(uniforms.uColor, 0.45, 0.47, 0.52);
+    for (const buf of this._ghostBuffers.values()) {
+      if (buf.count === 0) continue;
+      gl.bindBuffer(gl.ARRAY_BUFFER, buf.vbo);
+      gl.enableVertexAttribArray(attribs.aPosition);
+      gl.vertexAttribPointer(attribs.aPosition, 3, gl.FLOAT, false, 16, 0);
+      if (attribs.aBrightness >= 0) {
+        gl.enableVertexAttribArray(attribs.aBrightness);
+        gl.vertexAttribPointer(attribs.aBrightness, 1, gl.FLOAT, false, 16, 12);
+      }
+      gl.drawArrays(gl.LINE_STRIP, 0, buf.count);
+    }
   }
 
   _drawTrails(viewProj) {
