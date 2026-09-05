@@ -1,0 +1,554 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>duckset setlist</title>
+<style>
+  :root {
+    color-scheme: dark light;
+    --bg: #15171c; --bg2: #1c1f26; --bg3: #242832; --bg4: #2c313c;
+    --line: #333945; --fg: #e7e9ee; --fg2: #9ba3b1; --fg3: #6b7381;
+    --accent: #4da3ff; --sel: #ffd166; --err: #ff5d5d; --warn: #f0b429; --ok: #3ecf8e;
+    --hold: #4da3ff; --loop: #b48ce8; --continue: #3ecf8e;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  }
+  @media (prefers-color-scheme: light) {
+    :root {
+      --bg: #f4f5f7; --bg2: #ffffff; --bg3: #eceef2; --bg4: #e1e4ea;
+      --line: #d3d7de; --fg: #1a1d23; --fg2: #4d5563; --fg3: #7c8493;
+      --accent: #1f6fd6; --sel: #c98a00; --err: #d12f2f; --warn: #b47b00; --ok: #178f5f;
+      --hold: #1f6fd6; --loop: #7a4fc0; --continue: #178f5f;
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    font: 12px/1.35 var(--sans); color: var(--fg); background: var(--bg);
+    display: grid; grid-template-rows: auto auto 1fr auto; grid-template-columns: minmax(0, 1fr);
+    overflow: hidden;
+  }
+  button, input, select {
+    font: inherit; color: var(--fg); background: var(--bg3); border: 1px solid var(--line);
+    border-radius: 4px; padding: 3px 7px; min-height: 24px;
+  }
+  button { cursor: pointer; white-space: nowrap; }
+  button:hover { background: var(--bg4); }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button.danger:hover { border-color: var(--err); color: var(--err); }
+  input:focus, select:focus, button:focus-visible { outline: 2px solid var(--accent); outline-offset: -1px; }
+  label { color: var(--fg2); white-space: nowrap; }
+  .sep { width: 1px; height: 20px; background: var(--line); margin: 0 4px; }
+  .hidden { display: none !important; }
+  kbd { font-family: var(--mono); font-size: 11px; background: var(--bg3); border: 1px solid var(--line); border-radius: 3px; padding: 0 4px; }
+
+  #topbar, #toolbar {
+    display: flex; align-items: center; gap: 6px; padding: 5px 8px; flex-wrap: wrap;
+    background: var(--bg2); border-bottom: 1px solid var(--line);
+  }
+  #topbar .brand { font-weight: 600; letter-spacing: 0.02em; margin-right: 6px; }
+  #topbar .brand small { color: var(--fg3); font-weight: 400; margin-left: 4px; }
+  #file-name { color: var(--fg2); font-family: var(--mono); }
+  #file-name.dirty::after { content: " •"; color: var(--warn); }
+  #set-name { width: 16em; }
+  #runtime { font-family: var(--mono); color: var(--fg2); margin-left: auto; }
+  #runtime b { color: var(--fg); font-weight: 600; }
+
+  #main { overflow: auto; padding: 12px; min-height: 0; }
+
+  /* The strip. Blocks are laid left to right in play order and are as wide as
+     the show is long, so a set reads at a glance the way a timeline does.
+     A show with no duration we could read gets a fixed narrow width and says
+     so, rather than collapsing to nothing. */
+  #strip { display: flex; align-items: stretch; gap: 0; flex-wrap: wrap; min-height: 120px; }
+  .block {
+    position: relative; display: flex; flex-direction: column; gap: 4px;
+    background: var(--bg2); border: 1px solid var(--line); border-radius: 6px;
+    padding: 8px 10px; margin: 0 6px 10px 0; cursor: grab; user-select: none;
+    border-left: 4px solid var(--hold);
+  }
+  .block[data-end="loop"] { border-left-color: var(--loop); }
+  .block[data-end="continue"] { border-left-color: var(--continue); }
+  .block.dragging { opacity: 0.35; cursor: grabbing; }
+  .block.drop-before { box-shadow: -3px 0 0 0 var(--accent); }
+  .block.drop-after { box-shadow: 3px 0 0 0 var(--accent); }
+  .block.invalid { border-color: var(--err); }
+  .block .title { font-weight: 600; font-size: 13px; }
+  .block .path { font-family: var(--mono); color: var(--fg3); font-size: 11px; word-break: break-all; }
+  .block .row { display: flex; align-items: center; gap: 6px; }
+  .block .len { font-family: var(--mono); color: var(--fg2); }
+  .block .cast { color: var(--fg3); }
+  .block select { min-height: 22px; padding: 1px 4px; }
+  .block .drop { color: var(--fg3); cursor: pointer; background: none; border: none; padding: 0 2px; }
+  .block .drop:hover { color: var(--err); }
+  .gap {
+    align-self: center; color: var(--fg3); font-family: var(--mono); font-size: 11px;
+    padding: 0 8px 10px 2px; white-space: nowrap;
+  }
+  #empty { color: var(--fg2); padding: 24px 4px; max-width: 60ch; }
+  #empty code { font-family: var(--mono); background: var(--bg3); padding: 1px 4px; border-radius: 3px; }
+
+  #issues { padding: 6px 8px; background: var(--bg2); border-top: 1px solid var(--line); max-height: 22vh; overflow: auto; }
+  #issues:empty { display: none; }
+  .issue { display: flex; gap: 8px; padding: 2px 0; }
+  .issue .sev { font-family: var(--mono); text-transform: uppercase; font-size: 10px; padding-top: 2px; }
+  .issue.error .sev { color: var(--err); }
+  .issue.warning .sev { color: var(--warn); }
+  .issue .where { font-family: var(--mono); color: var(--fg3); }
+  #status { padding: 4px 8px; color: var(--fg3); border-top: 1px solid var(--line); background: var(--bg2); }
+  #status.error { color: var(--err); }
+  #status.ok { color: var(--ok); }
+</style>
+</head>
+<body>
+
+<div id="topbar">
+  <span class="brand">duckset<small>setlist</small></span>
+  <span id="file-name">(new set)</span>
+  <span class="sep"></span>
+  <label>name <input id="set-name" type="text" placeholder="opening set"></label>
+  <span id="runtime"></span>
+</div>
+
+<div id="toolbar">
+  <select id="open-setlist" title="Open a setlist from shows/setlists/"><option value="">open setlist…</option></select>
+  <button id="new-setlist">New</button>
+  <span class="sep"></span>
+  <select id="add-show" title="Append a show to the set"><option value="">add show…</option></select>
+  <span class="sep"></span>
+  <button id="save" class="primary">Save</button>
+  <button id="download">Download</button>
+  <span class="sep"></span>
+  <span id="hint">Drag blocks to reorder. Double-click a block to open it in the editor.</span>
+</div>
+
+<div id="main">
+  <div id="strip"></div>
+  <div id="empty" class="hidden"></div>
+</div>
+
+<div id="issues"></div>
+<div id="status">loading…</div>
+
+<script type="module">
+import * as core from './duckset-core.js';
+
+// Same guard as duckshow-editor.html: this page and duckset-core.js are
+// fetched separately with no bundler and no content hash, so a browser can
+// pair a fresh page with a cached older module. Turn that into one accurate
+// instruction rather than an arbitrary TypeError further down.
+const EXPECTED_CORE_API = 1;
+const statusEl = document.getElementById('status');
+if (core.MODULE_API !== EXPECTED_CORE_API) {
+  const got = core.MODULE_API === undefined ? 'an older build (no MODULE_API)' : `API ${core.MODULE_API}`;
+  document.body.innerHTML = `<div style="padding:24px;font:14px/1.5 var(--sans)">
+    <b>Stale script cache.</b><br>duckset-core.js is ${got}, this page expects API ${EXPECTED_CORE_API}.
+    <br>Hard-reload (Shift-Cmd-R / Ctrl-Shift-R) and try again.</div>`;
+  throw new Error('duckset-core.js API mismatch');
+}
+
+const $ = (id) => document.getElementById(id);
+
+const state = {
+  doc: core.newSetlist('untitled set'),
+  path: null,       // "/shows/setlists/x.duckset.json", or null for a new set
+  dirty: false,
+  index: {},        // showPath -> {name, duration, roles}
+  serverSave: false,
+};
+
+function setStatus(text, kind = '') {
+  statusEl.textContent = text;
+  statusEl.className = kind;
+}
+
+function markDirty(dirty = true) {
+  state.dirty = dirty;
+  $('file-name').classList.toggle('dirty', dirty);
+}
+
+function edit(next) {
+  state.doc = next;
+  markDirty(true);
+  render();
+}
+
+// -- data ------------------------------------------------------------------
+
+async function loadIndex() {
+  try {
+    const res = await fetch('/api/shows', { cache: 'no-store' });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const body = await res.json();
+    state.index = {};
+    for (const s of body.shows || []) state.index[s.path] = s;
+    state.serverSave = true;
+  } catch (err) {
+    // file:// or the http.server fallback. The page still works: without the
+    // index the blocks lose their titles and durations, and Save falls back
+    // to a download. Say which of those is happening.
+    state.index = {};
+    state.serverSave = false;
+    setStatus(`no local server (${err.message}): show names, lengths and Save are unavailable. `
+      + 'Run ./scripts/edit.sh --setlist.', 'error');
+  }
+  const picker = $('add-show');
+  picker.innerHTML = '<option value="">add show…</option>';
+  for (const path of Object.keys(state.index).sort()) {
+    const option = document.createElement('option');
+    option.value = path;
+    option.textContent = state.index[path].name ? `${state.index[path].name} (${path})` : path;
+    picker.append(option);
+  }
+}
+
+async function loadSetlistChoices() {
+  const picker = $('open-setlist');
+  picker.innerHTML = '<option value="">open setlist…</option>';
+  if (!state.serverSave) return;
+  try {
+    const res = await fetch('/api/setlists', { cache: 'no-store' });
+    if (!res.ok) return;
+    for (const path of (await res.json()).setlists || []) {
+      const option = document.createElement('option');
+      option.value = path;
+      option.textContent = path.split('/').pop();
+      if (path === state.path) option.selected = true;
+      picker.append(option);
+    }
+  } catch { /* the picker just stays empty */ }
+}
+
+async function openSetlist(path) {
+  const res = await fetch(path, { cache: 'no-store' });
+  if (!res.ok) throw new Error(`could not fetch ${path}: HTTP ${res.status}`);
+  const { doc, error } = core.parseSetlist(await res.text());
+  if (error) throw new Error(`${path}: ${error}`);
+  state.doc = doc;
+  state.path = path;
+  markDirty(false);
+  render();
+  setStatus(`opened ${path}`, 'ok');
+}
+
+// -- rendering -------------------------------------------------------------
+
+function render() {
+  $('set-name').value = state.doc.meta?.name || '';
+  $('file-name').textContent = state.path || '(new set)';
+
+  const strip = $('strip');
+  strip.textContent = '';
+  const entries = state.doc.entries || [];
+  $('empty').classList.toggle('hidden', entries.length > 0);
+  if (!entries.length) {
+    $('empty').innerHTML = 'This set is empty. Pick a show from <b>add show…</b> to put the first block in.'
+      + '<br><br>A block is one <code>.duckshow</code> file. Each block ends in <b>hold</b>, <b>loop</b> or'
+      + ' <b>continue</b>; hold is the gap where you pick the ducks up and move them.'
+      + '<br>See <code>docs/setlist-format.md</code>.';
+  }
+
+  const issues = core.validateSetlist(state.doc, state.serverSave ? state.index : null);
+  const badEntries = new Set(issues.filter((i) => i.severity === 'error').map((i) => i.entry));
+
+  entries.forEach((entry, i) => {
+    strip.append(blockEl(entry, i, badEntries.has(entry.id)));
+    if (i < entries.length - 1) {
+      const gap = document.createElement('div');
+      gap.className = 'gap';
+      gap.textContent = `▸ ${core.endOf(entry)}`;
+      gap.title = core.END_DESCRIPTIONS[core.endOf(entry)] || '';
+      strip.append(gap);
+    }
+  });
+
+  renderRuntime();
+  renderIssues(issues);
+}
+
+function blockEl(entry, index, invalid) {
+  const meta = state.index[entry.show] || null;
+  const el = document.createElement('div');
+  el.className = 'block' + (invalid ? ' invalid' : '');
+  el.dataset.id = entry.id;
+  el.dataset.index = String(index);
+  el.dataset.end = core.endOf(entry);
+  el.draggable = true;
+
+  // Width tracks duration so the strip reads like a timeline. Clamped at both
+  // ends: a 4 s sting still needs a readable title, and a 5 minute number must
+  // not push everything else off screen.
+  const duration = meta?.duration;
+  el.style.width = Number.isFinite(duration)
+    ? `${Math.max(150, Math.min(420, 110 + duration * 4))}px`
+    : '170px';
+
+  const title = document.createElement('div');
+  title.className = 'title';
+  title.textContent = core.entryLabel(entry, meta);
+  title.title = 'Double-click the block to open this show in the editor';
+
+  const path = document.createElement('div');
+  path.className = 'path';
+  path.textContent = entry.show;
+
+  const row = document.createElement('div');
+  row.className = 'row';
+  const len = document.createElement('span');
+  len.className = 'len';
+  len.textContent = Number.isFinite(duration) ? core.formatClock(duration) : '--:--';
+  if (!Number.isFinite(duration)) len.title = 'no meta.duration readable for this show';
+  const select = document.createElement('select');
+  for (const behaviour of core.END_BEHAVIOURS) {
+    const option = document.createElement('option');
+    option.value = behaviour;
+    option.textContent = behaviour;
+    option.title = core.END_DESCRIPTIONS[behaviour];
+    if (behaviour === core.endOf(entry)) option.selected = true;
+    select.append(option);
+  }
+  select.title = core.END_DESCRIPTIONS[core.endOf(entry)];
+  select.addEventListener('change', () => edit(core.setEntryEnd(state.doc, entry.id, select.value)));
+  // A select inside a draggable parent: without this, dragging to open the
+  // menu starts a block drag instead in Chrome.
+  select.addEventListener('pointerdown', (e) => e.stopPropagation());
+  select.draggable = false;
+
+  const remove = document.createElement('button');
+  remove.className = 'drop';
+  remove.textContent = '✕';
+  remove.title = `Remove ${entry.id} from the set`;
+  remove.addEventListener('click', () => edit(core.removeEntry(state.doc, entry.id)));
+
+  row.append(len, select, remove);
+
+  const cast = document.createElement('div');
+  cast.className = 'cast';
+  cast.textContent = meta?.roles?.length ? `${meta.roles.length} ducks: ${meta.roles.join(', ')}` : '';
+
+  el.append(title, path, row, cast);
+  return el;
+}
+
+function renderRuntime() {
+  const { known, unknown, loops, leadIn } = core.totalRuntime(state.doc, durationIndex());
+  const parts = [`<b>${core.formatClock(known + leadIn)}</b>`];
+  if (unknown) parts.push(`+${unknown} of unknown length`);
+  if (loops) parts.push(`${loops} looping`);
+  parts.push(`incl. ${core.formatClock(leadIn)} of play lead`);
+  $('runtime').innerHTML = parts.join(' · ');
+  $('runtime').title = 'Every transition between entries costs at least the play lead '
+    + `(${core.PLAY_LEAD_S} s). See docs/setlist-format.md.`;
+}
+
+function durationIndex() {
+  const out = {};
+  for (const [path, meta] of Object.entries(state.index)) {
+    if (Number.isFinite(meta.duration)) out[path] = meta.duration;
+  }
+  return out;
+}
+
+function renderIssues(issues) {
+  const box = $('issues');
+  box.textContent = '';
+  for (const issue of issues) {
+    const el = document.createElement('div');
+    el.className = `issue ${issue.severity}`;
+    const sev = document.createElement('span');
+    sev.className = 'sev';
+    sev.textContent = issue.severity;
+    const where = document.createElement('span');
+    where.className = 'where';
+    where.textContent = issue.entry || 'set';
+    const msg = document.createElement('span');
+    msg.textContent = issue.message;
+    el.append(sev, where, msg);
+    box.append(el);
+  }
+}
+
+// -- dragging --------------------------------------------------------------
+//
+// HTML5 drag and drop rather than pointer maths: the blocks are ordinary
+// boxes in document order, so the browser's own hit testing is the whole
+// implementation. The drop index is "before or after the block under the
+// cursor", decided by which half of it the pointer is in.
+
+let dragId = null;
+
+function clearDropMarks() {
+  for (const el of document.querySelectorAll('.block')) {
+    el.classList.remove('drop-before', 'drop-after', 'dragging');
+  }
+}
+
+$('strip').addEventListener('dragstart', (e) => {
+  const block = e.target.closest('.block');
+  if (!block) return;
+  dragId = block.dataset.id;
+  block.classList.add('dragging');
+  e.dataTransfer.effectAllowed = 'move';
+  // Firefox does not start a drag without data on the transfer.
+  e.dataTransfer.setData('text/plain', dragId);
+});
+
+$('strip').addEventListener('dragover', (e) => {
+  const block = e.target.closest('.block');
+  if (!block || dragId === null) return;
+  e.preventDefault();
+  e.dataTransfer.dropEffect = 'move';
+  const box = block.getBoundingClientRect();
+  const after = e.clientX > box.left + box.width / 2;
+  for (const el of document.querySelectorAll('.block')) el.classList.remove('drop-before', 'drop-after');
+  block.classList.add(after ? 'drop-after' : 'drop-before');
+});
+
+$('strip').addEventListener('drop', (e) => {
+  const block = e.target.closest('.block');
+  if (!block || dragId === null) return;
+  e.preventDefault();
+  const box = block.getBoundingClientRect();
+  const after = e.clientX > box.left + box.width / 2;
+  const from = state.doc.entries.findIndex((x) => x.id === dragId);
+  let to = Number(block.dataset.index) + (after ? 1 : 0);
+  // Removing the dragged block first shifts everything after it left by one,
+  // so a destination past the source has to come back by one to land where
+  // the marker was drawn.
+  if (from < to) to -= 1;
+  clearDropMarks();
+  const id = dragId;
+  dragId = null;
+  if (from >= 0 && from !== to) edit(core.moveEntryById(state.doc, id, to));
+  else render();
+});
+
+$('strip').addEventListener('dragend', () => { dragId = null; clearDropMarks(); render(); });
+
+$('strip').addEventListener('dblclick', (e) => {
+  const block = e.target.closest('.block');
+  if (!block) return;
+  const entry = state.doc.entries.find((x) => x.id === block.dataset.id);
+  if (!entry) return;
+  // A new tab, deliberately: the setlist keeps its unsaved state, which
+  // navigating away would lose. docs/setlist-format.md says why this is a
+  // symptom rather than a design.
+  window.open(`./duckshow-editor.html?show=${encodeURIComponent(entry.show)}`, '_blank');
+});
+
+// -- toolbar ---------------------------------------------------------------
+
+$('set-name').addEventListener('input', () => {
+  edit({ ...state.doc, meta: { ...state.doc.meta, name: $('set-name').value } });
+});
+
+$('add-show').addEventListener('change', (e) => {
+  const path = e.target.value;
+  e.target.value = '';
+  if (!path) return;
+  edit(core.addEntry(state.doc, path));
+});
+
+$('open-setlist').addEventListener('change', async (e) => {
+  const path = e.target.value;
+  if (!path) return;
+  if (state.dirty && !confirm('Discard unsaved changes to this set?')) {
+    e.target.value = state.path || '';
+    return;
+  }
+  try {
+    await openSetlist(path);
+  } catch (err) {
+    setStatus(err.message, 'error');
+  }
+});
+
+$('new-setlist').addEventListener('click', () => {
+  if (state.dirty && !confirm('Discard unsaved changes to this set?')) return;
+  state.doc = core.newSetlist('untitled set');
+  state.path = null;
+  markDirty(false);
+  render();
+  setStatus('new set');
+});
+
+$('download').addEventListener('click', () => {
+  const blob = new Blob([core.serializeSetlist(state.doc)], { type: 'application/json' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = (state.path || '/untitled.duckset.json').split('/').pop();
+  a.click();
+  URL.revokeObjectURL(a.href);
+});
+
+$('save').addEventListener('click', async () => {
+  const errors = core.validateSetlist(state.doc, state.serverSave ? state.index : null)
+    .filter((i) => i.severity === 'error');
+  if (errors.length && !confirm(`This set has ${errors.length} error(s). Save anyway?`)) return;
+
+  if (!state.serverSave) {
+    setStatus('no local server: use Download and move the file into shows/setlists/ yourself.', 'error');
+    return;
+  }
+  let path = state.path;
+  if (!path) {
+    const suggested = (state.doc.meta?.name || 'set').toLowerCase().replace(/[^a-z0-9._-]+/g, '-')
+      .replace(/^-+|-+$/g, '') || 'set';
+    const name = prompt('Save as (shows/setlists/…)', `${suggested}.duckset.json`);
+    if (!name) return;
+    path = `/shows/setlists/${name.endsWith('.duckset.json') ? name : `${name}.duckset.json`}`;
+  }
+  try {
+    const res = await fetch('/api/save-setlist', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ setlist: path, setlist_text: core.serializeSetlist(state.doc) }),
+    });
+    const body = await res.json();
+    if (!res.ok) throw new Error(body.error || `HTTP ${res.status}`);
+    state.path = body.saved;
+    markDirty(false);
+    render();
+    await loadSetlistChoices();
+    setStatus(`saved ${body.saved} (${body.bytes} bytes)`, 'ok');
+  } catch (err) {
+    setStatus(`save failed: ${err.message}`, 'error');
+  }
+});
+
+window.addEventListener('beforeunload', (e) => {
+  if (state.dirty) e.preventDefault();
+});
+
+// -- boot ------------------------------------------------------------------
+
+async function boot() {
+  await loadIndex();
+  await loadSetlistChoices();
+  const wanted = new URLSearchParams(location.search).get('set');
+  if (wanted) {
+    try {
+      await openSetlist(wanted);
+      await loadSetlistChoices();
+      return;
+    } catch (err) {
+      setStatus(err.message, 'error');
+    }
+  }
+  render();
+  if (!statusEl.textContent || statusEl.textContent === 'loading…') {
+    setStatus(`${Object.keys(state.index).length} shows available. Pick one from "add show…".`);
+  }
+}
+
+// An unhandled rejection here used to leave the page half-built with nothing
+// on screen to say so. Same lesson as duckshow-editor.html's boot().
+boot().catch((err) => {
+  console.error(err);
+  setStatus(`could not start: ${err.message}`, 'error');
+  render();
+});
+</script>
+</body>
+</html>

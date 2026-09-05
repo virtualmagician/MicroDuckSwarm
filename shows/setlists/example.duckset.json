@@ -1,0 +1,25 @@
+{
+  "format": "duckset/1",
+  "meta": {
+    "name": "example set",
+    "notes": "One block of each end behaviour. The holds are the gaps where the cast gets picked up and repositioned; see docs/setlist-format.md."
+  },
+  "entries": [
+    {
+      "id": "octet",
+      "show": "/shows/octet/octet.duckshow.json",
+      "end": "hold"
+    },
+    {
+      "id": "showcase",
+      "show": "/shows/showcase/showcase.duckshow.json",
+      "end": "loop",
+      "label": "vamp"
+    },
+    {
+      "id": "demo",
+      "show": "/shows/demo/demo.duckshow.json",
+      "end": "hold"
+    }
+  ]
+}

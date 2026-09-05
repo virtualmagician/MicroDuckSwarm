@@ -27,6 +27,14 @@ Serves the checkout, opens the editor with the eight-duck piece loaded, and stop
 | `S` / `M` on a lane, `⌥S` | solo and mute for rehearsal (session state, never written to the file) |
 | **Create Preview** | bake the loaded show through MuJoCo and play the result back |
 
+A set of shows played in sequence, with an end behaviour on each, is a `.duckset` file:
+
+```bash
+./scripts/edit.sh --setlist
+```
+
+Blocks are shows, dragged into the order they run. Each block ends in `hold` (stop and wait for a cue, which is the gap where the cast gets picked up and repositioned), `loop` (play it again until the operator advances) or `continue` (load the next block and play it). The format and the editor exist; no master runs a setlist yet. [`docs/setlist-format.md`](docs/setlist-format.md).
+
 To watch the entire stack run without a single robot (two mock ducks, a duck-agent on each, the show master driving them, and a verifier checking they stayed in sync):
 
 ```bash
@@ -84,7 +92,7 @@ Pre-hardware. MicroDuck units ship late 2026. Everything here runs today against
 |---|---|
 | Cross-duck event sync (localhost, mock ducks) | **1.3 ms** measured, against a ~20 ms perceptual budget |
 | Clock discipline | NTP-style over UDP, min-RTT filtered, slew-limited |
-| Tests | 359 Python, 192 Swift, 294 editor |
+| Tests | 410 Python, 195 Swift, 300 editor |
 | End-to-end gates | 3: Python master, Swift master over OSC, recorder round-trip |
 | Physics bake | **6.0 s** for the eight-duck, 64 s show (25,600 frames, 4,281 frames/s) |
 | Third-party runtime dependencies | **0** |
@@ -101,10 +109,11 @@ Not built yet, and what unblocks each item.
 |---|---|
 | **Hardware bring-up:** latency and jitter measurement, `robot.setMode` timing, battery and boot timing, deadman behaviour under load | Hardware. |
 | **Rust port of the agent tick loop** | Only if the RK3566 cannot hold 40 Hz in Python. The `robotd` deadman is 500 ms, so a stalled tick loop zeroes velocity. |
-| **DuckSwarm.app:** SwiftUI shell around SwarmLink, editor in a WKWebView, recorder, preflight dashboard | Real telemetry. The dashboard shows battery, RSSI, clock offset and heartbeat age; the thresholds are unknown until measured. |
+| **DuckSwarm.app:** SwiftUI shell around SwarmLink, editor in a WKWebView, recorder, preflight dashboard | Real telemetry for the dashboard, which shows battery, RSSI, clock offset and heartbeat age; the thresholds are unknown until measured. The document half is not blocked on anything, and the three routes are costed in [`docs/setlist-format.md`](docs/setlist-format.md). |
 | **Servo cues:** laser homing, colour-beacon homing, marker following | Camera access for our agent alongside `mediad`, which owns it for WebRTC. Untested. |
 | **`roulade`** in the bake | It executes, but after its stated 1.0 s the duck is still inverted, and `manifest.json` marks it `chain: true` without naming what it chains into. Asked upstream. The other three skills are driven. |
 | **Roller mode** in the bake | **Parked until hardware.** Needs a second MJCF (`robot_groundcontact_rollers.xml`) and `roller.onnx` loaded alongside the legged model, for a mode no current show uses for more than a few seconds. |
+| **Setlist playback:** a master that runs a `.duckset`, holding, looping or continuing at each block | Nothing external. The format and the editor are built; what is missing is the runner and an operator verb for "advance to the next entry". [`docs/setlist-format.md`](docs/setlist-format.md) |
 | **Timeline control track:** *authored* hold cues in the show file | The operator pause/resume it builds on is done. What remains is hold entry from the file, which has to answer how a late-joining duck avoids skipping a hold, and how a held duck is recovered once the master's clock passes the end of the show. Sensor triggers need a duck sensor surface `robotd` does not expose. [`docs/control-track.md`](docs/control-track.md) |
 | **Overhead tag tracking** for tight walking formations | Only if in-place work and loose blocking prove insufficient in rehearsal. |
 | **Markerless person following** on the onboard NPU (~0.8 TOPS) | After marker-based servo cues work. |
@@ -126,8 +135,10 @@ Most of this is gated on hardware. MicroDuck currently quotes a four-to-six mont
 | `docs/bake-parts.md` | What the bake needs, where each part comes from, and its licence |
 | `docs/bake-format.md` | The `duckbake/1` pose-cache format |
 | `docs/control-track.md` | Hold/resume cues: the design, and what blocks it |
+| `docs/setlist-format.md` | The `.duckset` setlist format, and the path to a native app |
 | `docs/provisioning.md` | Installing the agent on a duck, and pushing shows and policies |
 | `python/duckshow/` | Format library: parse, validate, sample at 50 Hz |
+| `python/duckset/` | Setlist library: parse and validate `.duckset` files |
 | `python/duck_agent/` | On-duck agent: clock discipline, local playback, telemetry, puppet channel |
 | `python/mock_duck/` | Protocol-faithful mock `robotd`, with a timestamped intent log |
 | `python/tools/` | Reference show master, stdlib OSC send and listen, puppet streamer |
@@ -135,7 +146,7 @@ Most of this is gated on hardware. MicroDuck currently quotes a four-to-six mont
 | `editor/` | Zero-dependency timeline editor, WebGL2 stage viewer, bake playback |
 | `tools/bake/` | Optional native physics baker (MuJoCo plus the shipped policies) |
 | `deploy/` | Systemd unit and provisioning scripts, untested against hardware |
-| `shows/` | Example choreographies, including the eight-duck `octet` |
+| `shows/` | Example choreographies, including the eight-duck `octet`, and `shows/setlists/` |
 | `scripts/` | Launcher and three end-to-end gates |
 
 ## Components

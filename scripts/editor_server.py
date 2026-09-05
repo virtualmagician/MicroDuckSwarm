@@ -16,6 +16,13 @@ tools/bake itself instead of requiring a terminal command.
                                  starts a bake, returns a job id immediately.
     POST /api/save           -- {"show": "/shows/…", "show_text": "…"} writes
                                  the document back over that file.
+    GET  /api/shows          -- every show with its name, duration and cast,
+                                 which is what a setlist needs to describe
+                                 the blocks it holds.
+    GET  /api/setlists       -- the .duckset.json files under shows/setlists/.
+    POST /api/save-setlist   -- {"setlist": "/shows/setlists/x.duckset.json",
+                                 "setlist_text": "…"} writes a setlist, and is
+                                 the one route that may CREATE a file.
     GET  /api/bake/<job id>  -- progress, and once finished, the URL of the
                                  written cache plus a summary of its bake log.
 
@@ -46,6 +53,15 @@ deliberately narrowly:
         anything is written or spawned.
     No other request field influences a path, an argument, or the
     filesystem.
+  - POST /api/save-setlist is the only route that may create a file that
+    did not exist, because a new setlist has to start somewhere. It is
+    scoped harder than the others to pay for that: the parent directory is
+    the fixed SETLISTS_DIR constant, never anything from the request; the
+    request supplies only a filename, which must match _SETLIST_NAME_RE (no
+    separators, no dots beyond the suffix, no leading dot) and end in
+    ".duckset.json"; and the body must parse as a duckset/N document first.
+    The resolved path is then re-checked to be inside SETLISTS_DIR, so a
+    symlinked shows/setlists/ cannot widen it.
   - POST /api/save WRITES, so it is narrower still: the target must be an
     existing .duckshow.json under shows/, and never under shows/fixtures/
     (validator test data, several deliberately invalid -- an editor
@@ -76,7 +92,7 @@ import threading
 import time
 import urllib.parse
 import uuid
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Optional
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -85,6 +101,14 @@ BAKE_SCRIPT = REPO_ROOT / "tools" / "bake" / "bake_show.py"
 BAKE_CWD = REPO_ROOT / "tools" / "bake"
 ASSETS_DIR = REPO_ROOT / "assets" / "microduck"
 SHOWS_DIR = REPO_ROOT / "shows"
+# The only directory the setlist editor may write into, and the only one it
+# reads setlists from. Fixed here rather than taken from a request.
+SETLISTS_DIR = SHOWS_DIR / "setlists"
+SETLIST_SUFFIX = ".duckset.json"
+# A setlist filename an HTTP caller may name: a bare name, no separators, no
+# dots beyond the suffix. Combined with the fixed parent directory there is
+# no path left for a request to steer.
+_SETLIST_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 # Gitignored output directory for baked pose caches (see .gitignore and
 # docs/bake-format.md) -- deliberately NOT under shows/, which is authored
 # content, not build output.
@@ -151,6 +175,44 @@ def _known_shows() -> list[str]:
             continue
         out.append("/" + rel.as_posix())
     return out
+
+
+def _show_summary(path: Path) -> dict:
+    """Name, duration and cast for one show, read straight off its JSON.
+
+    Best-effort and never authoritative: python/duckshow is the loader, and
+    anything using this for more than a label is using it wrong. The setlist
+    editor needs a block title, a block width and the cast that block expects,
+    for shows it is not going to open.
+    """
+    rel = "/" + path.relative_to(REPO_ROOT).as_posix()
+    summary = {"path": rel, "name": None, "duration": None, "roles": []}
+    try:
+        doc = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return summary
+    if not isinstance(doc, dict):
+        return summary
+    meta = doc.get("meta")
+    if isinstance(meta, dict):
+        if isinstance(meta.get("name"), str):
+            summary["name"] = meta["name"]
+        duration = meta.get("duration")
+        if isinstance(duration, (int, float)) and duration > 0:
+            summary["duration"] = float(duration)
+    cast = doc.get("cast")
+    if isinstance(cast, list):
+        summary["roles"] = [m.get("role") for m in cast
+                            if isinstance(m, dict) and isinstance(m.get("role"), str)]
+    return summary
+
+
+def _known_setlists() -> list[str]:
+    """.duckset.json files under shows/setlists/, as "/shows/..." strings."""
+    if not SETLISTS_DIR.is_dir():
+        return []
+    return ["/" + p.relative_to(REPO_ROOT).as_posix()
+            for p in sorted(SETLISTS_DIR.glob("*" + SETLIST_SUFFIX))]
 
 
 def get_capabilities() -> dict:
@@ -402,6 +464,11 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         path = urllib.parse.urlsplit(self.path).path
         if path == "/api/capabilities":
             return self._json(200, get_capabilities())
+        if path == "/api/shows":
+            return self._json(200, {"shows": [_show_summary(REPO_ROOT / p.lstrip("/"))
+                                              for p in _known_shows()]})
+        if path == "/api/setlists":
+            return self._json(200, {"setlists": _known_setlists()})
         if path.startswith("/api/bake/"):
             job_id = path[len("/api/bake/"):]
             with JOBS_LOCK:
@@ -417,6 +484,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             return self._handle_post_bake()
         if path == "/api/save":
             return self._handle_post_save()
+        if path == "/api/save-setlist":
+            return self._handle_post_save_setlist()
         return self._json_error(404, "not found")
 
     def _read_json_body(self, limit: int) -> Optional[dict]:
@@ -491,6 +560,81 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 pass
             return self._json_error(500, f"could not write {rel.as_posix()}: {exc}")
         self._json(200, {"saved": "/" + rel.as_posix(), "bytes": len(show_text.encode("utf-8"))})
+
+    def _handle_post_save_setlist(self) -> None:
+        """Write a setlist, creating it if it does not exist yet.
+
+        The only route here that may create a file, so it is the narrowest.
+        The parent directory is the SETLISTS_DIR constant; the request supplies
+        a filename and nothing else that touches the filesystem. See the module
+        docstring's SECURITY section.
+        """
+        body = self._read_json_body(limit=1_000_000)
+        if body is None:
+            return
+
+        text = body.get("setlist_text")
+        if not isinstance(text, str):
+            return self._json_error(400, "setlist_text must be a string")
+        try:
+            doc = json.loads(text)
+        except json.JSONDecodeError as exc:
+            return self._json_error(400, f"setlist_text is not valid JSON: {exc}")
+        if not isinstance(doc, dict):
+            return self._json_error(400, "setlist_text must be a JSON object")
+        fmt = doc.get("format")
+        if not isinstance(fmt, str) or not fmt.startswith("duckset/"):
+            return self._json_error(
+                400, 'setlist_text is not a .duckset document (no "format": "duckset/N")')
+
+        raw = body.get("setlist")
+        if not isinstance(raw, str) or not raw.strip():
+            return self._json_error(400, "setlist path is required")
+        # A bare filename, or the full "/shows/setlists/<name>" the editor
+        # sends back after a save. Anything else is REFUSED rather than
+        # reduced to its basename: silently writing "x.duckset.json" for a
+        # request that said "/../../x.duckset.json" is contained but
+        # dishonest, and hides a client bug instead of reporting it.
+        supplied = raw.strip()
+        prefix = "/" + SETLISTS_DIR.relative_to(REPO_ROOT).as_posix() + "/"
+        if supplied.startswith(prefix):
+            supplied = supplied[len(prefix):]
+        if "/" in supplied or "\\" in supplied:
+            return self._json_error(400, f"setlist path must be a name in {prefix}")
+        name = supplied
+        if not name.endswith(SETLIST_SUFFIX):
+            return self._json_error(400, f"setlist path must end in {SETLIST_SUFFIX}")
+        stem = name[: -len(SETLIST_SUFFIX)]
+        if not _SETLIST_NAME_RE.match(stem):
+            return self._json_error(
+                400, "setlist name must be letters, digits, dot, dash or underscore, "
+                     "start with a letter or digit, and be at most 64 characters")
+
+        try:
+            SETLISTS_DIR.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            return self._json_error(500, f"could not create shows/setlists/: {exc}")
+
+        target = (SETLISTS_DIR / name).resolve()
+        try:
+            # Re-check after resolving, so a symlinked shows/setlists/ cannot
+            # widen the target beyond the directory this route is scoped to.
+            target.relative_to(SETLISTS_DIR.resolve())
+        except ValueError:
+            return self._json_error(403, "setlist path escapes shows/setlists/")
+
+        tmp = target.with_name(target.name + ".tmp")
+        try:
+            tmp.write_text(text, encoding="utf-8")
+            tmp.replace(target)
+        except OSError as exc:
+            try:
+                tmp.unlink()
+            except OSError:
+                pass
+            return self._json_error(500, f"could not write {name}: {exc}")
+        rel = "/" + target.relative_to(REPO_ROOT).as_posix()
+        self._json(200, {"saved": rel, "bytes": len(text.encode("utf-8"))})
 
     def _handle_post_bake(self) -> None:
         body = self._read_json_body(limit=4_000_000)

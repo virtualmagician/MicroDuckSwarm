@@ -118,6 +118,112 @@ class SaveEndpoint(unittest.TestCase):
         self.assertEqual(status, 400, body)
 
 
+class SaveSetlistEndpoint(unittest.TestCase):
+    """POST /api/save-setlist is the only route that may CREATE a file, so the
+    directory and the filename are the whole security story.
+
+    The parent is the fixed SETLISTS_DIR constant and the request supplies a
+    name. What matters is that a name which is not a name is refused rather
+    than reduced to its basename: silently writing "x.duckset.json" for a
+    request that said "/../../x.duckset.json" is contained, but it hides a
+    client bug and leaves a file nobody asked for.
+    """
+
+    VALID = json.dumps({"format": "duckset/1", "meta": {"name": "probe"}, "entries": []})
+
+    def setUp(self) -> None:
+        self.dir = REPO_ROOT / "shows" / "setlists"
+        self.existed = self.dir.is_dir()
+        self.before = set(self.dir.iterdir()) if self.existed else set()
+        self.addCleanup(self._cleanup)
+
+    def _cleanup(self) -> None:
+        if not self.dir.is_dir():
+            return
+        for path in set(self.dir.iterdir()) - self.before:
+            path.unlink()
+        if not self.existed and not any(self.dir.iterdir()):
+            self.dir.rmdir()
+
+    def test_creates_a_setlist_that_did_not_exist(self) -> None:
+        status, body = post_json("/api/save-setlist", {
+            "setlist": "probe-new.duckset.json", "setlist_text": self.VALID})
+        self.assertEqual(status, 200, body)
+        self.assertEqual(body["saved"], "/shows/setlists/probe-new.duckset.json")
+        written = json.loads((self.dir / "probe-new.duckset.json").read_text(encoding="utf-8"))
+        self.assertEqual(written["meta"]["name"], "probe")
+
+    def test_accepts_the_full_path_it_hands_back(self) -> None:
+        # The editor round-trips body["saved"] into the next save.
+        status, body = post_json("/api/save-setlist", {
+            "setlist": "/shows/setlists/probe-round.duckset.json", "setlist_text": self.VALID})
+        self.assertEqual(status, 200, body)
+        self.assertEqual(body["saved"], "/shows/setlists/probe-round.duckset.json")
+
+    def test_refuses_a_traversal_instead_of_taking_the_basename(self) -> None:
+        status, body = post_json("/api/save-setlist", {
+            "setlist": "/../../evil.duckset.json", "setlist_text": self.VALID})
+        self.assertEqual(status, 400, body)
+        self.assertNotIn("evil.duckset.json", [p.name for p in self.dir.iterdir()] if self.dir.is_dir() else [])
+
+    def test_refuses_any_path_separator(self) -> None:
+        for name in ["sub/dir/x.duckset.json", "/shows/other/x.duckset.json", "a\\b.duckset.json"]:
+            with self.subTest(name=name):
+                status, body = post_json("/api/save-setlist", {"setlist": name, "setlist_text": self.VALID})
+                self.assertEqual(status, 400, body)
+
+    def test_refuses_a_leading_dot_and_an_overlong_name(self) -> None:
+        for name in [".hidden.duckset.json", "-lead.duckset.json", "x" * 65 + ".duckset.json"]:
+            with self.subTest(name=name):
+                status, body = post_json("/api/save-setlist", {"setlist": name, "setlist_text": self.VALID})
+                self.assertEqual(status, 400, body)
+
+    def test_refuses_a_non_duckset_extension(self) -> None:
+        status, body = post_json("/api/save-setlist", {
+            "setlist": "probe.duckshow.json", "setlist_text": self.VALID})
+        self.assertEqual(status, 400, body)
+
+    def test_refuses_a_body_that_is_not_a_duckset_document(self) -> None:
+        for text, why in [("not json", "unparseable"), ("[]", "not an object"),
+                          ('{"format":"duckshow/1"}', "wrong format")]:
+            with self.subTest(why=why):
+                status, body = post_json("/api/save-setlist", {
+                    "setlist": "probe-bad.duckset.json", "setlist_text": text})
+                self.assertEqual(status, 400, body)
+        self.assertFalse((self.dir / "probe-bad.duckset.json").exists(),
+                         "a refused save must not have created the file")
+
+    def test_leaves_no_temp_file_behind(self) -> None:
+        post_json("/api/save-setlist", {"setlist": "probe-tmp.duckset.json", "setlist_text": self.VALID})
+        self.assertEqual(list(self.dir.glob("*.tmp")), [])
+
+
+class ShowIndexEndpoint(unittest.TestCase):
+    """GET /api/shows is what gives a setlist block its title, its width and
+    the cast it expects, for shows the setlist page never opens."""
+
+    def test_reports_name_duration_and_cast_for_every_show(self) -> None:
+        req = ServedRequest("/api/shows")
+        with req as res:
+            self.assertEqual(res.status, 200)
+        shows = json.loads(req.body)["shows"]
+        by_path = {s["path"]: s for s in shows}
+        demo = by_path.get("/shows/demo/demo.duckshow.json")
+        self.assertIsNotNone(demo, sorted(by_path))
+        self.assertEqual(demo["duration"], 20.0)
+        self.assertEqual(demo["roles"], ["lead", "wing"])
+        self.assertTrue(demo["name"])
+
+    def test_excludes_the_validator_fixtures(self) -> None:
+        # Several are deliberately invalid; offering them as setlist entries
+        # would put a show that cannot load in front of the author.
+        req = ServedRequest("/api/shows")
+        with req:
+            pass
+        shows = json.loads(req.body)["shows"]
+        self.assertEqual([s for s in shows if "/fixtures/" in s["path"]], [])
+
+
 class ServedRequest:
     """One request against a real editor_server.Handler on an ephemeral port."""
 

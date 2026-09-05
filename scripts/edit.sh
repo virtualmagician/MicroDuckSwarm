@@ -4,6 +4,8 @@
 #   ./scripts/edit.sh                     # opens with the demo show
 #   ./scripts/edit.sh shows/octet         # a directory: finds the .duckshow.json inside
 #   ./scripts/edit.sh shows/octet/octet.duckshow.json
+#   ./scripts/edit.sh --setlist           # the setlist editor (docs/setlist-format.md)
+#   ./scripts/edit.sh shows/setlists/opening.duckset.json
 #   PORT=9000 ./scripts/edit.sh           # pick the port yourself
 #
 # Serves the repo root (Chrome and Safari refuse ES-module imports from
@@ -22,7 +24,25 @@ REPO="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$REPO"
 
 # -- resolve an optional show argument to a path relative to the served root.
+PAGE="editor/duckshow-editor.html"
 SHOW_PARAM=""
+if [ "${1:-}" = "--setlist" ]; then
+  PAGE="editor/setlist.html"
+  shift
+fi
+if [ $# -gt 0 ] && [ "${1%.duckset.json}" != "$1" ]; then
+  # A setlist file names the setlist page even without --setlist, so
+  # tab-completing a .duckset.json does the obvious thing.
+  PAGE="editor/setlist.html"
+  target="$1"
+  [ -f "$target" ] || { echo "no such setlist: $target"; exit 1; }
+  case "$target" in
+    "$REPO"/*) target="${target#"$REPO"/}" ;;
+    ./*)       target="${target#./}" ;;
+  esac
+  SHOW_PARAM="?set=/${target}"
+  set --
+fi
 if [ $# -gt 0 ]; then
   target="$1"
   if [ -d "$target" ]; then
@@ -60,7 +80,7 @@ finally:
 fi
 [ -n "$PORT" ] || { echo "no free port found in 8000-8003, 8080, 8137 — set PORT=…"; exit 1; }
 
-URL="http://localhost:${PORT}/editor/duckshow-editor.html${SHOW_PARAM}"
+URL="http://localhost:${PORT}/${PAGE}${SHOW_PARAM}"
 
 SERVER_PID=""
 cleanup() {
@@ -144,8 +164,15 @@ else
   fi
 fi
 
-echo "duckshow editor → $URL"
-[ -n "$SHOW_PARAM" ] && echo "loading           ${SHOW_PARAM#?show=/}"
+case "$PAGE" in
+  *setlist.html) echo "duckset setlist   $URL" ;;
+  *)             echo "duckshow editor   $URL" ;;
+esac
+if [ -n "$SHOW_PARAM" ]; then
+  loading="${SHOW_PARAM#\?show=/}"
+  loading="${loading#\?set=/}"
+  echo "loading           $loading"
+fi
 [ "$BAKE_SERVER" = "1" ] && echo "baking            available via Create Preview (see docs/viewer.md)"
 echo "Ctrl+C to stop."
 
