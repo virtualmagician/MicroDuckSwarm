@@ -48,6 +48,33 @@ Master sends each command up to 5× at 100 ms intervals until ACKed; agents dedu
 
 Show files are distributed out-of-band before the show (rsync/scp in v1; the `load` hash check is what makes that safe).
 
+### The master must not play over a failed load
+
+`load` NACKs are per-duck and they are the whole point of the hash check, so a
+master that fans out `load`, collects the outcomes and then plays regardless has
+thrown away the only safety this protocol has against a duck performing the
+wrong show. A duck that NACKed keeps whatever show it had loaded before, and it
+will happily accept a `play` naming that older show id. That is a cast split
+produced by the master, not by the network.
+
+**`play` refuses when any duck's most recent `load` did not succeed**, and the
+error names them. The refusal covers every non-OK outcome, not just an explicit
+NACK: a timeout, a connection failure and a superseded command all mean the same
+thing, which is that the master does not know what that duck is holding.
+
+An operator can override deliberately — a duck that is genuinely off the roster
+tonight should not be able to block the show — but it has to be said out loud.
+In SwarmLink that is `play(allowingFailedLoads: true)`, and on the CLI
+`swarmctl play --allow-failed-loads`.
+
+**The override is deliberately not on the OSC surface.** Bypassing this gate
+means a duck performs a different show, and that should not be one fat-fingered
+cue away on a lighting desk. `/duckswarm/play` reports the refusal and names the
+ducks; releasing it is a decision taken at the console, not in a cue stack.
+
+The outcomes are cleared by the next `load`, so the gate always reflects the
+show that is actually about to play, never a stale verdict.
+
 ## 4 · Telemetry (agent → master, unicast, 1 Hz; 5 Hz while PLAYING)
 
 ```

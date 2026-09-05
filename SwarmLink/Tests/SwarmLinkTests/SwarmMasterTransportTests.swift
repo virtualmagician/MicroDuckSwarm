@@ -41,6 +41,72 @@ final class SwarmMasterTransportTests: XCTestCase {
         await duck.stop()
     }
 
+    // MARK: play must not run over a failed load
+    //
+    // docs/swarmlink-protocol.md "The master must not play over a failed
+    // load". A duck that NACKed a load still holds whatever show it had
+    // before and will accept a play naming it, so playing anyway is a cast
+    // split the master created rather than one the network caused.
+
+    func testPlayRefusesWhenADuckNackedTheLoad() async throws {
+        let (master, duck, show, roster) = try await rig()
+        await duck.setNack("load", error: "sha256 mismatch")
+        let outcomes = try await master.load(show: show, roster: roster)
+        XCTAssertEqual(outcomes[duck01]?.isOK, false)
+
+        do {
+            _ = try await master.play()
+            XCTFail("play must refuse while a duck has not loaded the current show")
+        } catch let error as SwarmMasterError {
+            XCTAssertEqual(error, .loadFailed([duck01]))
+            XCTAssertTrue(error.description.contains("duck-01"), error.description)
+        }
+        let plays = await duck.commands(named: "play")
+        XCTAssertTrue(plays.isEmpty, "a refused play must not reach any duck")
+        await duck.stop()
+    }
+
+    func testPlayProceedsWhenTheOperatorOverridesDeliberately() async throws {
+        let (master, duck, show, roster) = try await rig()
+        await duck.setNack("load", error: "sha256 mismatch")
+        _ = try await master.load(show: show, roster: roster)
+
+        _ = try await master.play(allowingFailedLoads: true)
+        let plays = await duck.waitForCommands(named: "play")
+        XCTAssertFalse(plays.isEmpty, "an explicit override must still fan out")
+        await duck.stop()
+    }
+
+    func testASuccessfulLoadClearsAPreviousFailure() async throws {
+        let (master, duck, show, roster) = try await rig()
+        await duck.setNack("load", error: "sha256 mismatch")
+        _ = try await master.load(show: show, roster: roster)
+        let failedBefore = await master.ducksWithFailedLoads
+        XCTAssertEqual(failedBefore, [duck01])
+
+        // The gate must reflect the show actually about to play, never a
+        // stale verdict about the previous one.
+        await duck.clearNack("load")
+        _ = try await master.load(show: show, roster: roster)
+        let failedAfter = await master.ducksWithFailedLoads
+        XCTAssertTrue(failedAfter.isEmpty, "a clean reload must clear the gate")
+        _ = try await master.play()
+        let plays = await duck.waitForCommands(named: "play")
+        XCTAssertFalse(plays.isEmpty)
+        await duck.stop()
+    }
+
+    func testPlayIsUngatedWhenEveryLoadSucceeded() async throws {
+        let (master, duck, show, roster) = try await rig()
+        _ = try await master.load(show: show, roster: roster)
+        let failed = await master.ducksWithFailedLoads
+        XCTAssertTrue(failed.isEmpty)
+        _ = try await master.play()
+        let plays = await duck.waitForCommands(named: "play")
+        XCTAssertFalse(plays.isEmpty)
+        await duck.stop()
+    }
+
     func testLoadRejectsRosterRoleNotInCast() async throws {
         let (master, duck, show, roster) = try await rig(role: "ghost")
         let outcomes = try await master.load(show: show, roster: roster)

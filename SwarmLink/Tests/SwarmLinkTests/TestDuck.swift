@@ -37,6 +37,7 @@ actor TestDuck {
 
     func setDropFirst(_ count: Int, of command: String) { dropFirst[command] = count }
     func setNack(_ command: String, error: String) { nackWith[command] = error }
+    func clearNack(_ command: String) { nackWith[command] = nil }
 
     func start() async throws -> UInt16 {
         let params = NWParameters.udp

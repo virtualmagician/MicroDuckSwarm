@@ -2,7 +2,7 @@
 //
 // Usage:
 //   swarmctl --roster roster.json load show.duckshow.json
-//   swarmctl --roster roster.json play show.duckshow.json [--lead-ms 300]
+//   swarmctl --roster roster.json play show.duckshow.json [--lead-ms 300] [--allow-failed-loads]
 //   swarmctl --roster roster.json run  show.duckshow.json [--lead-ms 300]
 //   swarmctl --roster roster.json seek <show_time>
 //   swarmctl --roster roster.json stop
@@ -47,7 +47,10 @@ func printUsage() {
 
     COMMANDS:
       load <show.duckshow.json>              verify + pre-load the show on every roster duck
-      play <show.duckshow.json> [--lead-ms]  load, play, then monitor telemetry until Ctrl+C (panic)
+      play <show.duckshow.json> [--lead-ms] [--allow-failed-loads]
+                                             load, play, then monitor telemetry until Ctrl+C (panic).
+                                             play refuses if any duck did not load the show;
+                                             --allow-failed-loads overrides that deliberately.
       run  <show.duckshow.json> [--lead-ms]  load, play, monitor until the show ends, stop, exit 0
       seek <show_time_seconds>               seek every duck (NACKed by ducks that are not playing)
       stop                                   graceful stop (zero locomotion, robot.stop, → LOADED)
@@ -275,6 +278,10 @@ struct SwarmCtl {
         var rosterPath: String?
         var masterPortRaw: String?
         var leadMs: Int64 = 300
+        // Overriding the load gate has to be said out loud: playing over a
+        // failed load means a duck performs whatever show it was already
+        // holding (docs/swarmlink-protocol.md).
+        var allowFailedLoads = false
         var statusSeconds: Double = 1.5
         var showsDirPath: String?
         var oscPortRaw: String?
@@ -311,6 +318,9 @@ struct SwarmCtl {
                 guard i + 1 < args.count else { badArgument("--master-port requires a port number (0-65535)") }
                 masterPortRaw = args[i + 1]
                 i += 2
+            case "--allow-failed-loads":
+                allowFailedLoads = true
+                i += 1
             case "--lead-ms":
                 guard i + 1 < args.count, let value = Int64(args[i + 1]) else { badArgument("--lead-ms requires an integer") }
                 leadMs = value
@@ -431,7 +441,12 @@ struct SwarmCtl {
             let show = await loadOrExit(args[1])
             let outcomes: [DuckID: CommandStatus]
             do {
-                outcomes = try await master.play(at: leadMs * 1_000_000)
+                outcomes = try await master.play(at: leadMs * 1_000_000, allowingFailedLoads: allowFailedLoads)
+            } catch let error as SwarmMasterError {
+                if case .loadFailed = error {
+                    fail("\(error). Fix them and reload, or re-run with --allow-failed-loads to play without them.")
+                }
+                fail("play failed: \(error)")
             } catch {
                 fail("play failed: \(error)")
             }

@@ -110,6 +110,13 @@ public enum TelemetryEvent: Sendable, Equatable {
 /// which show up as `LoadOutcome.Status` instead).
 public enum SwarmMasterError: Error, Sendable, Equatable, CustomStringConvertible {
     case notLoaded
+    /// `play()` while one or more ducks did not successfully `load` the
+    /// current show. A duck that NACKed a load still holds whatever show it
+    /// had before and will accept a `play` naming it, so playing anyway is a
+    /// cast split the master created. Pass `allowingFailedLoads: true` to
+    /// override deliberately. See docs/swarmlink-protocol.md "The master must
+    /// not play over a failed load".
+    case loadFailed([DuckID])
     /// `play()` while a `load()` is still under way (reading the show,
     /// stopping the previous one, or fanning out): arming now would arm
     /// whichever show happened to be current mid-load.
@@ -120,6 +127,9 @@ public enum SwarmMasterError: Error, Sendable, Equatable, CustomStringConvertibl
     public var description: String {
         switch self {
         case .notLoaded: return "no show is loaded"
+        case .loadFailed(let ducks):
+            let names = ducks.map(\.description).sorted().joined(separator: ", ")
+            return "these ducks did not load the current show: \(names)"
         case .loadInProgress: return "a load is in progress"
         case .notConnected(let duck): return "duck \(duck) is not connected (not on the dialed roster)"
         }
@@ -225,6 +235,10 @@ public actor SwarmMaster {
     /// `load()`s currently between issue and return; `play()` is refused
     /// with `loadInProgress` meanwhile.
     private var loadsInProgress: Int = 0
+    /// Per-duck result of the most recent `load()`, which `play()` gates on.
+    /// Replaced wholesale by the next load, so the gate never reflects a stale
+    /// verdict about a show that is no longer the one about to play.
+    private var lastLoadOutcomes: [DuckID: LoadOutcome] = [:]
 
     private var stateLoopTask: Task<Void, Never>?
     private var stateLoopGeneration: Int = 0
@@ -372,7 +386,16 @@ public actor SwarmMaster {
                 results[id] = outcome
             }
         }
+        lastLoadOutcomes = results
         return results
+    }
+
+    /// Ducks whose most recent `load` did not succeed. Every non-OK status
+    /// counts, not just an explicit NACK: a timeout, a connection failure and
+    /// a superseded command all mean the master does not know what that duck
+    /// is holding, which is the thing that makes playing unsafe.
+    public var ducksWithFailedLoads: [DuckID] {
+        Array(lastLoadOutcomes.filter { !$0.value.isOK }.keys).sorted()
     }
 
     /// Schedules playback to start `leadTimeNs` in the future (giving the
@@ -384,8 +407,14 @@ public actor SwarmMaster {
     /// instance (the agents need the show id) and
     /// `SwarmMasterError.loadInProgress` while a `load()` is under way.
     @discardableResult
-    public func play(at leadTimeNs: Int64 = 300_000_000) async throws -> [DuckID: CommandStatus] {
-        try await play(atMasterTime: MasterClock.nowNanoseconds() + max(0, leadTimeNs))
+    public func play(
+        at leadTimeNs: Int64 = 300_000_000,
+        allowingFailedLoads: Bool = false
+    ) async throws -> [DuckID: CommandStatus] {
+        try await play(
+            atMasterTime: MasterClock.nowNanoseconds() + max(0, leadTimeNs),
+            allowingFailedLoads: allowingFailedLoads
+        )
     }
 
     /// `play(at:)` with the start instant chosen by the caller: the show
@@ -396,9 +425,20 @@ public actor SwarmMaster {
     /// instead of re-deriving it. An instant already in the past starts at
     /// once (the agents join in progress within their 2 s grace).
     @discardableResult
-    public func play(atMasterTime: Int64) async throws -> [DuckID: CommandStatus] {
+    public func play(
+        atMasterTime: Int64,
+        allowingFailedLoads: Bool = false
+    ) async throws -> [DuckID: CommandStatus] {
         guard loadsInProgress == 0 else { throw SwarmMasterError.loadInProgress }
         guard show != nil else { throw SwarmMasterError.notLoaded }
+        // load NACKs are per-duck and are the entire point of the hash check.
+        // Playing over one means a duck performs whatever show it was already
+        // holding, which is a cast split the master created rather than one
+        // the network caused. Overridable, but only out loud.
+        if !allowingFailedLoads {
+            let failed = ducksWithFailedLoads
+            guard failed.isEmpty else { throw SwarmMasterError.loadFailed(failed) }
+        }
         _ = issueCommand()
         let now = MasterClock.nowNanoseconds()
         let fromShowTime = cueShowTime

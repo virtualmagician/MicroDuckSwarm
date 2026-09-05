@@ -590,6 +590,11 @@ public actor OSCFacade {
         }
     }
 
+    private func isLoadFailed(_ error: SwarmMasterError) -> Bool {
+        if case .loadFailed = error { return true }
+        return false
+    }
+
     private func performPlay(leadSeconds: Double, sender: NWConnection) async {
         guard admitArmingCommand(from: sender) else { return }
         do {
@@ -599,6 +604,12 @@ public actor OSCFacade {
             reply(error: "no show loaded", to: sender)
         } catch SwarmMasterError.loadInProgress {
             reply(error: "load in progress", to: sender)
+        } catch let error as SwarmMasterError where isLoadFailed(error) {
+            // Deliberately NOT overridable from the show-control surface:
+            // bypassing this gate means a duck performs a different show, and
+            // that should not be one fat-fingered cue away. The override lives
+            // on swarmctl (--allow-failed-loads).
+            reply(error: "\(error) — reload, or override with swarmctl --allow-failed-loads", to: sender)
         } catch {
             reply(error: "play failed: \(error)", to: sender)
         }
