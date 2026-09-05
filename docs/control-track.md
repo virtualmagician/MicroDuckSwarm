@@ -1,6 +1,6 @@
 # Timeline control track (hold / resume cues) — design, and why it is not built yet
 
-**Status: designed, reviewed, NOT implemented.** The design survived review at
+**Status: transport half built (2026-09-05), authored hold points not.** The design survived review at
 the format level and failed it at the protocol level. This records what is
 settled, what is blocked, and what has to exist first, so the next attempt does
 not restart from zero.
@@ -145,16 +145,29 @@ again.
 
 ## What has to exist first
 
-In order, each independently useful:
-
-1. **`/duckswarm/resume` in the OSC facade and the master**, with a real
-   transport state and a resume that parks rather than validating at arrival.
-   Blocker 1, 2 and 3 are all this.
-2. **A load-outcome gate on play.** `SwarmMaster.load` already returns
-   `[DuckID: LoadOutcome]` and `play` never consults it. That is the honest
-   version of what `requires.features` was being asked to do, and it is worth
-   having regardless of holds.
-3. Only then the format block, the agent hold state, and the editor UI.
+1. ~~**`/duckswarm/resume` in the OSC facade and the master**, with a real
+   transport state and a resume that parks rather than validating at
+   arrival.~~ **Done, 2026-09-05.** Shipped as an operator pause, which is
+   useful on its own and is the exact mechanism an authored hold will trigger
+   locally rather than a second one. `pause`/`resume` wire commands, a
+   `paused` transport, `/duckswarm/pause`, `/duckswarm/resume`,
+   `swarmctl pause|resume`, `showmaster.py pause|resume`. Blockers 1, 2, 3, 5
+   and 6 are closed by it: both commands park rather than validating on
+   arrival, resume is idempotent by state so a second GO cannot re-anchor, the
+   5 Hz state stream survives a pause, seek while paused moves the frozen
+   point instead of stranding the duck, and stop/panic/load all clear a
+   freeze.
+2. ~~**A load-outcome gate on play.**~~ **Done, 2026-09-05.** `play()` refuses
+   when any duck's most recent `load` did not succeed, overridable only
+   deliberately and not from the OSC surface. Blocker 7's real content: it is
+   the honest version of what `requires.features` was being asked to do, and
+   it works on old agents because it is enforced entirely at the master.
+3. **Still open: the format block, authored hold entry, and the editor UI.**
+   Blocker 4 (edge-triggered on the duck, level-triggered on the master) and
+   blocker 8 (the master ends the show without telling anyone, so a held duck
+   is stranded) are both specific to *authored* holds and are untouched by the
+   operator pause. They must be answered before `control.holds` is
+   implemented.
 
 ## One real bug already fixed from this review
 
