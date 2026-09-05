@@ -427,6 +427,10 @@ $('strip').addEventListener('drop', (e) => {
 $('strip').addEventListener('dragend', () => { dragId = null; clearDropMarks(); render(); });
 
 $('strip').addEventListener('dblclick', (e) => {
+  // A double-click on the end-behaviour picker or the remove button is aimed
+  // at that control, not at the block. Without this, changing an end
+  // behaviour with two quick clicks also opened the show in a new tab.
+  if (e.target.closest('select, button, input')) return;
   const block = e.target.closest('.block');
   if (!block) return;
   const entry = state.doc.entries.find((x) => x.id === block.dataset.id);
