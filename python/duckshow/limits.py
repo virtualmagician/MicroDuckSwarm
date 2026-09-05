@@ -62,8 +62,10 @@ DRIVE_MODES = (
 # sit_toggle mid-ramp are unverified (shows/octet/octet.duckshow.json's
 # `reed` role fires two 2.0 s apart on purpose, to exercise exactly that
 # unresolved case). There is no confirmed number to warn against, so
-# sit_toggle never occupies for the purposes of this check -- neither as
-# the earlier (occupying) skill nor as the later (interrupting) one.
+# sit_toggle never OCCUPIES for the purposes of this check: it opens no
+# window, so nothing scheduled after one is warned about. It can still be
+# the INTERRUPTING event -- landing inside another skill's window warns
+# like any other skill would.
 SKILL_DURATIONS_S = {
     "ground_pick": 2.8,  # alpha_ground_pick.onnx, walk-mode duration
     "roulade": 1.0,  # roulade.onnx

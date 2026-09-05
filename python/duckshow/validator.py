@@ -223,8 +223,8 @@ def _check_skill_occupancy_overlap(issues, role, show: Show, events) -> None:
     following a `roulade` is the documented way to keep rolling, not two
     skills contending for one window (limits.CHAINING_SKILLS), so that
     specific pairing never warns. `sit_toggle` has no confirmed duration
-    (limits.skill_duration_s returns None for it) and so never occupies
-    here, whether it is the earlier or the later event.
+    (limits.skill_duration_s returns None for it) and so never opens a
+    window here. It can still be the later, interrupting event.
     """
     skill_events = sorted((e for e in events if e.do is not None), key=lambda e: e.t)
     if len(skill_events) < 2:

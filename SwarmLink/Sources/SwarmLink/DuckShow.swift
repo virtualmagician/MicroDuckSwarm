@@ -630,9 +630,10 @@ public extension Show {
     // ramp_s/unwind_s posture transition rather than a fixed duration_s --
     // docs/bake-format.md records that the hand-off semantics for a second
     // sit_toggle mid-ramp are unverified. There is no confirmed number to
-    // warn against, so sit_toggle never occupies for the purposes of this
-    // check, neither as the earlier (occupying) skill nor the later
-    // (interrupting) one.
+    // warn against, so sit_toggle never OCCUPIES for the purposes of this
+    // check: it opens no window, so nothing scheduled after one is warned
+    // about. It can still be the INTERRUPTING event, warning like any other
+    // skill landing inside another's window.
     static let skillDurationsS: [String: Double] = [
         "ground_pick": 2.8, // alpha_ground_pick.onnx, walk-mode duration
         "roulade": 1.0, // roulade.onnx
@@ -917,8 +918,8 @@ public extension Show {
     /// following a `roulade` is the documented way to keep rolling, not two
     /// skills contending for one window (`Show.chainingSkills`), so that
     /// specific pairing never warns. `sit_toggle` has no confirmed duration
-    /// (`Show.skillDurationS` returns `nil` for it) and so never occupies
-    /// here, whether it is the earlier or the later event.
+    /// (`Show.skillDurationS` returns `nil` for it) and so never opens a
+    /// window here. It can still be the later, interrupting event.
     private func validateSkillOccupancyOverlap(
         _ events: [Event], role: String, into report: inout ValidationReport
     ) {
