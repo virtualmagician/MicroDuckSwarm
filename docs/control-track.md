@@ -1,4 +1,4 @@
-# Timeline control track (hold / resume cues) — design, and why it is not built yet
+# Timeline control track (hold / resume cues)
 
 **Status: transport half built (2026-09-05), authored hold points not.** The design survived review at
 the format level and failed it at the protocol level. This records what is
@@ -48,11 +48,15 @@ sensor never fires and the file says the operator may not intervene.
 ## What blocks it
 
 Three independent designs were each attacked through three lenses. 57 flaws
-were raised; one design was rated unsound outright. These are the ones that
-have to be answered before any code is written. They are almost all about
-components that do not exist rather than about the format.
+were raised; one design was rated unsound outright. They were almost all about
+components that did not exist rather than about the format, which is why the
+first two prerequisites below were buildable on their own.
 
-### 1. There is no operator resume path, and the obvious button is destructive
+**Six of the eight are now closed** by the operator pause and the load gate
+(marked below). Blockers 4 and 8 are specific to *authored* hold points and
+remain open.
+
+### 1. There is no operator resume path, and the obvious button is destructive — CLOSED
 
 `docs/osc-facade.md`'s inbound verbs are load/play/go/seek/stop/panic/ping/status.
 There is no resume. `/duckswarm/go` maps to `play`, and `SwarmMaster.play` starts
@@ -62,7 +66,7 @@ designed would ship with no way to release a hold and one very available way to
 destroy the show. `architecture.md` makes the OSC facade *the* integration seam,
 so this is the surface that matters, not an afterthought.
 
-### 2. Resume is not idempotent across two presses, and the master cancels its own retries
+### 2. Resume is not idempotent across two presses, and the master cancels its own retries — CLOSED
 
 A second GO produces a second `cmd_id` with a different `at_master_time`, which
 re-anchors to a *different* epoch. Worse, `SwarmMaster.fanOut` opens with
@@ -70,7 +74,7 @@ re-anchors to a *different* epoch. Worse, `SwarmMaster.fanOut` opens with
 as a newer command is issued — so a second resume cancels the first one's
 remaining retries **to exactly the duck that had not yet received it**.
 
-### 3. A NACK ends the retry ladder in both masters
+### 3. A NACK ends the retry ladder in both masters — CLOSED (both commands park)
 
 `showmaster.py` breaks out of its retry loop on any ack, and
 `SwarmMaster.swift` returns `.nacked` identically. A NACK is an ACK as far as
@@ -80,7 +84,7 @@ crossed `hold.t` — one early NACK, held forever. `_handle_seek` already avoids
 this by parking the command and letting the tick loop apply it; resume must do
 the same.
 
-### 4. Entry is edge-triggered on the duck and level-triggered on the master
+### 4. Entry is edge-triggered on the duck and level-triggered on the master — OPEN
 
 The agent would enter a hold by crossing `(_last_processed_show_time, show_time]`.
 The master enters on `showTime >= hold.t`. But `_begin_playback` jumps the clock
@@ -89,7 +93,7 @@ seeds `_last_processed_show_time` past the gap — so a late-joining duck **skip
 the hold entirely and performs alone**. A cast split produced by normal,
 documented late-join behaviour rather than by operator error.
 
-### 5. Adding a `held` transport silently kills the state stream
+### 5. Adding a `held` transport silently kills the state stream — CLOSED
 
 `SwarmMaster.publishStateTick()` opens with
 `guard transport == .armed || transport == .playing else { return false }`, and
@@ -97,14 +101,14 @@ returning false tears the 5 Hz loop down. Adding `.held` therefore stops the
 very telemetry a hold needs to be visible. It is a `==` comparison, so the
 compiler will not flag it.
 
-### 6. Seek during a hold strands the duck, and seek is the recommended recovery
+### 6. Seek during a hold strands the duck, and seek is the recommended recovery — CLOSED
 
 Nothing in the proposed design clears the hold state on the seek-apply path, so
 a duck seeked out of a stuck hold stays frozen at `hold.t` forever while the
 cast plays on. `MasterClock`'s frozen show-time has the mirror problem: it
 survives `stop()`, `panic()` and the next `play()`.
 
-### 7. `requires.features` cannot gate the population it exists to gate
+### 7. `requires.features` cannot gate the population it exists to gate — CLOSED by the load gate instead
 
 The proposal was to stay at `duckshow/1` and add
 `requires.features: ["control.holds"]`. But an agent that predates the field
@@ -120,7 +124,7 @@ test the major for **equality**, not "≤ supported", so flipping the constant
 does not add hold support, it drops every show that exists. CLAUDE.md rule 4
 requires a loader migration, which no design provided.
 
-### 8. The master ends the show without telling anyone
+### 8. The master ends the show without telling anyone — OPEN
 
 `publishStateTick` halts at `showTime >= duration` and deliberately fans out
 nothing, because every agent's clock reaches duration on its own. A held
