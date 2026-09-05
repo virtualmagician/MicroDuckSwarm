@@ -88,6 +88,8 @@
   }
   #empty { color: var(--fg2); padding: 24px 4px; max-width: 60ch; }
   #empty code { font-family: var(--mono); background: var(--bg3); padding: 1px 4px; border-radius: 3px; }
+  #empty p { margin: 0 0 12px; }
+  #empty button.open-known { font-family: var(--mono); color: var(--accent); border-color: var(--accent); }
 
   #issues { padding: 6px 8px; background: var(--bg2); border-top: 1px solid var(--line); max-height: 22vh; overflow: auto; }
   #issues:empty { display: none; }
@@ -157,6 +159,7 @@ const state = {
   dirty: false,
   index: {},        // showPath -> {name, duration, roles}
   serverSave: false,
+  knownSetlists: [], // "/shows/setlists/x.duckset.json" paths the server lists
 };
 
 function setStatus(text, kind = '') {
@@ -211,7 +214,8 @@ async function loadSetlistChoices() {
   try {
     const res = await fetch('/api/setlists', { cache: 'no-store' });
     if (!res.ok) return;
-    for (const path of (await res.json()).setlists || []) {
+    state.knownSetlists = (await res.json()).setlists || [];
+    for (const path of state.knownSetlists) {
       const option = document.createElement('option');
       option.value = path;
       option.textContent = path.split('/').pop();
@@ -219,6 +223,21 @@ async function loadSetlistChoices() {
       picker.append(option);
     }
   } catch { /* the picker just stays empty */ }
+}
+
+/** Open a saved set, asking first if this one has unsaved edits. Shared by
+ *  the picker and the empty-state links so both guard the same way. */
+async function openSetlistGuarded(path) {
+  if (!path) return false;
+  if (state.dirty && !confirm('Discard unsaved changes to this set?')) return false;
+  try {
+    await openSetlist(path);
+    await loadSetlistChoices();
+    return true;
+  } catch (err) {
+    setStatus(err.message, 'error');
+    return false;
+  }
 }
 
 async function openSetlist(path) {
@@ -244,10 +263,33 @@ function render() {
   const entries = state.doc.entries || [];
   $('empty').classList.toggle('hidden', entries.length > 0);
   if (!entries.length) {
-    $('empty').innerHTML = 'This set is empty. Pick a show from <b>add show…</b> to put the first block in.'
+    const empty = $('empty');
+    empty.textContent = '';
+    // A new, empty set on a machine that already has saved sets used to show
+    // nothing but "pick a show", with the saved sets hidden in a dropdown.
+    // It read as "the setlist editor does not work". Name what exists.
+    const known = state.path === null ? state.knownSetlists : [];
+    if (known.length) {
+      const p = document.createElement('p');
+      p.append(`${known.length === 1 ? 'A saved set is' : `${known.length} saved sets are`} on this machine: `);
+      known.forEach((path, i) => {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'open-known';
+        b.dataset.path = path;
+        b.textContent = path.split('/').pop();
+        b.title = `Open ${path}`;
+        p.append(b, i < known.length - 1 ? ' ' : '');
+      });
+      p.append('. Or start this new one:');
+      empty.append(p);
+    }
+    const p2 = document.createElement('p');
+    p2.innerHTML = 'This set is empty. Pick a show from <b>add show…</b> to put the first block in.'
       + '<br><br>A block is one <code>.duckshow</code> file. Each block ends in <b>hold</b>, <b>loop</b> or'
       + ' <b>continue</b>; hold is the gap where you pick the ducks up and move them.'
       + '<br>See <code>docs/setlist-format.md</code>.';
+    empty.append(p2);
   }
 
   const issues = core.validateSetlist(state.doc, state.serverSave ? state.index : null);
@@ -458,16 +500,12 @@ $('add-show').addEventListener('change', (e) => {
 
 $('open-setlist').addEventListener('change', async (e) => {
   const path = e.target.value;
-  if (!path) return;
-  if (state.dirty && !confirm('Discard unsaved changes to this set?')) {
-    e.target.value = state.path || '';
-    return;
-  }
-  try {
-    await openSetlist(path);
-  } catch (err) {
-    setStatus(err.message, 'error');
-  }
+  if (!(await openSetlistGuarded(path))) e.target.value = state.path || '';
+});
+
+$('empty').addEventListener('click', (e) => {
+  const b = e.target.closest('button.open-known');
+  if (b) openSetlistGuarded(b.dataset.path);
 });
 
 $('new-setlist').addEventListener('click', () => {
@@ -646,7 +684,11 @@ async function boot() {
   }
   render();
   if (!statusEl.textContent || statusEl.textContent === 'loading…') {
-    setStatus(`${Object.keys(state.index).length} shows available. Pick one from "add show…".`);
+    const n = Object.keys(state.index).length;
+    const saved = state.knownSetlists.length;
+    setStatus(saved
+      ? `new set. ${n} shows available, ${saved} saved ${saved === 1 ? 'set' : 'sets'} on this machine (see above, or "open setlist…").`
+      : `new set. ${n} shows available. Pick one from "add show…".`);
   }
 }
 

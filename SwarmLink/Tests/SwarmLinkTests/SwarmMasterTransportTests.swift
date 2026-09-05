@@ -303,21 +303,31 @@ final class SwarmMasterTransportTests: XCTestCase {
     func testStopSupersedesInFlightPlayRetries() async throws {
         let (master, duck, show, roster) = try await rig()
         _ = try await master.load(show: show, roster: roster)
-        await duck.setDropFirst(1, of: "play") // first play datagram "lost in a WiFi burst"
+        // Never ACK any copy of the play, so it can only resolve as .superseded
+        // (the stop got there) or .timeout (five attempts, 500 ms). The earlier
+        // version dropped ONE copy and then had to issue the stop inside the
+        // 100 ms before the first retry, minus a 10 ms poll and a 30 ms sleep:
+        // a 65 ms margin that a loaded CI runner missed on two consecutive
+        // commits that touched no Swift, ACKing the retry and resolving the
+        // play .ok. What this test is for was never "exactly one copy
+        // arrived"; it is "no copy arrived after the stop", which is what it
+        // asserts now, with a 500 ms margin instead of 65.
+        await duck.setDropFirst(SwarmLinkInfo.commandMaxAttempts, of: "play")
 
         async let playOutcome = try master.play(at: 300_000_000)
         await duck.waitForCommands(named: "play", count: 1)
-        await Task.sleepMs(30)
         let stopOutcome = await master.stop()
         XCTAssertEqual(stopOutcome, [duck01: .ok])
         let resolvedPlay = try await playOutcome
         XCTAssertEqual(resolvedPlay, [duck01: .superseded])
 
-        // No stale play retry may follow the stop.
+        // No stale play retry may follow the stop. 450 ms outlasts the four
+        // retries the ladder could still have owed had stop not superseded it.
         await Task.sleepMs(450)
-        let plays = await duck.commands(named: "play")
-        XCTAssertEqual(plays.count, 1, "the dropped first copy only; retries were superseded by stop: \(plays.map(\.cmdID))")
         let names = await duck.received.map(\.payload.cmdName)
+        let stopIndex = try XCTUnwrap(names.firstIndex(of: "stop"))
+        let lastPlayIndex = try XCTUnwrap(names.lastIndex(of: "play"))
+        XCTAssertLessThan(lastPlayIndex, stopIndex, "a play retry landed after the stop: \(names)")
         XCTAssertEqual(names.last, "stop")
         let transport = await master.currentTransport
         XCTAssertEqual(transport, .stopped)
@@ -528,7 +538,12 @@ final class SwarmMasterTransportTests: XCTestCase {
         _ = try await master.play(at: 10_000_000)
         let playing = await waitForTransport(master, .playing)
         XCTAssertEqual(playing, .playing)
-        await duck.setDropFirst(2, of: "stop") // the reload's stop phase takes ≥ 200 ms
+        // Three dropped stops hold the reload in its stop phase for >= 300 ms.
+        // Two gave 200 ms, a 160 ms margin over the ~40 ms the play attempt
+        // below spends getting there; same shape as the race that made
+        // testStopSupersedesInFlightPlayRetries flake on CI, so widened while
+        // that one was being fixed.
+        await duck.setDropFirst(3, of: "stop")
 
         async let reload = try master.load(show: show, roster: roster)
         await duck.waitForCommands(named: "stop", count: 1)
