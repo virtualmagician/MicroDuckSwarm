@@ -37,3 +37,6 @@ roster.json
 *.roster.json
 /fleet/
 !fleet.example.json
+
+# Built launcher app (scripts/make_launcher_app.sh): build output, not source.
+/dist/

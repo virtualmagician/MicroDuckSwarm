@@ -35,6 +35,14 @@ A set of shows played in sequence, with an end behaviour on each, is a `.duckset
 
 Blocks are shows, dragged into the order they run. Each block ends in `hold` (stop and wait for a cue, which is the gap where the cast gets picked up and repositioned), `loop` (play it again until the operator advances) or `continue` (load the next block and play it). The format and the editor exist; no master runs a setlist yet. [`docs/setlist-format.md`](docs/setlist-format.md).
 
+A Dock icon that does the same thing:
+
+```bash
+./scripts/make_launcher_app.sh --install
+```
+
+Builds `DuckSwarm Editor.app` and puts it in `~/Applications`. Drag it to the Dock. Clicking it opens a Terminal window running `edit.sh` and then the editor in your browser; close that window or press Ctrl+C to stop the server. It opens `shows/octet` by default; one line in `~/.duckswarm/editor-args` changes what it opens. No Xcode project, no dependencies: the app is a shell script in a bundle, and its icon is drawn by a Swift script with AppKit.
+
 To watch the entire stack run without a single robot (two mock ducks, a duck-agent on each, the show master driving them, and a verifier checking they stayed in sync):
 
 ```bash
