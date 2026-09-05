@@ -103,7 +103,9 @@
 
   .lane-head { display: flex; flex-direction: column; justify-content: center; padding: 0 6px; border-bottom: 1px solid var(--line); overflow: hidden; }
   .lane-head.group { flex-direction: row; align-items: center; gap: 6px; background: var(--group); font-weight: 600; }
-  .lane-head.group .name { flex: 1; overflow: hidden; text-overflow: ellipsis; }
+  /* nowrap is what makes the ellipsis work: without it a long role name
+     wraps inside a fixed-height row and gets clipped mid-word instead. */
+  .lane-head.group .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .lane-head.group .name input { width: 100%; font: inherit; font-weight: inherit; font-size: 11px; padding: 0 3px; min-height: 18px; }
   .lane-head.group button { min-height: 18px; padding: 0 5px; font-size: 11px; }
   .lane-head .title { color: var(--fg2); font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; }
@@ -757,7 +759,18 @@ function rebuildHeaders() {
         + `<button class="solo toggle" aria-pressed="false" title="Solo: only this role performs; every other role holds its mark (⌥S on the selected role)">S</button>`
         + `<button class="mute toggle" aria-pressed="false" title="Mute: this role holds its mark while the rest of the cast plays">M</button>`
         + `<button class="rename" title="Rename role">✎</button><button class="remove danger" title="remove role">✕</button>`;
-      el.querySelector('.name').textContent = lane.role + (cast?.notes ? ` · ${cast.notes}` : '');
+      // The role name only. Appending cast.notes made the header read
+      // "lead · front rank, house-left of centre - opens the kick solo" in a
+      // 220px column, which wrapped to several lines inside a fixed-height
+      // row and showed a middle slice of the notes with the role name
+      // scrolled out of view -- so the lane headers did not match the names
+      // on the 3D stage, which label the role. Notes move to the tooltip,
+      // where their length costs nothing.
+      const nameEl = el.querySelector('.name');
+      nameEl.textContent = lane.role;
+      nameEl.title = cast?.notes
+        ? `${lane.role} — ${cast.notes}\nClick to highlight this duck in the stage viewer.`
+        : 'click to highlight this duck in the stage viewer';
       el.querySelector('.collapse').onclick = () => { state.collapsed.has(lane.role) ? state.collapsed.delete(lane.role) : state.collapsed.add(lane.role); renderAll(); };
       el.querySelector('.remove').onclick = () => {
         if (confirm(`Remove role "${lane.role}" and all its tracks?`)) { commit(core.removeRole(state.show, lane.role)); status(`removed role ${lane.role}`); }

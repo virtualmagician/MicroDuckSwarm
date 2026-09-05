@@ -134,6 +134,8 @@ end of the show.
 
 ## Sensor-triggered resume is blocked on hardware, not on design
 
+**Asked upstream 2026-09-05.** Pollen have been emailed about this and about `roulade`'s chain partner; until they answer, the two remain open for the reason below rather than for want of asking.
+
 `docs/robotd-api.md` gives duck-agent no verified sensor surface.
 `robot.subscribe` → `robot.state` (`joints`, `targets`) and `robot.health` are
 the only real per-duck readings, and ToF lives in a **different daemon**
