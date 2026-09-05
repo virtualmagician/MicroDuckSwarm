@@ -202,6 +202,7 @@ def _summarize_cache(cache: dict) -> dict:
         "duration": show_meta.get("duration"),
         "frame_count_total": frame_total,
         "unsimulated_roles": cache.get("unsimulated_roles") or [],
+        "held_roles": cache.get("held_roles", []),
         "fallen_roles": cache.get("fallen_roles") or [],
         "log": log[:200],  # generous cap; a real bake logs at most a few dozen entries
     }

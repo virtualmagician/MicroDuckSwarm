@@ -108,7 +108,10 @@ export function formatBakeSummary(summary) {
   const fellList = summary.fallen_roles ?? summary.fallenRoles;
   const un = Array.isArray(unList) ? unList.length : 0;
   const fell = Array.isArray(fellList) ? fellList.length : 0;
+  const heldList = summary.held_roles ?? summary.heldRoles;
+  const held = Array.isArray(heldList) ? heldList.length : 0;
   if (un) notes.push(`${un} unsimulated`);
+  if (held) notes.push(`${held} partly held`);
   if (fell) notes.push(`${fell} fell`);
   return `${summary.roles} roles, ${summary.duration}s${notes.length ? ` · ${notes.join(' · ')}` : ''}`;
 }

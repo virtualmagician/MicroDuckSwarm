@@ -96,6 +96,7 @@ def build_cache(
     poses = {}
     log: list[dict] = []
     unsimulated_roles = []
+    held_roles = []
     fallen_roles = []
     for role, r in results.items():
         poses[role] = {
@@ -125,6 +126,8 @@ def build_cache(
             log.append(entry.to_json())
         if not r.simulated:
             unsimulated_roles.append(role)
+        elif r.partially_held:
+            held_roles.append(role)
         if any(e.kind == "fell" for e in r.log):
             fallen_roles.append(role)
 
@@ -164,6 +167,7 @@ def build_cache(
         "frame_rate": frame_rate,
         "roles": list(results.keys()),
         "unsimulated_roles": unsimulated_roles,
+        "held_roles": held_roles,
         "fallen_roles": fallen_roles,
         "poses": poses,
         "log": log,

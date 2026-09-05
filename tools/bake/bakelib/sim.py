@@ -107,7 +107,13 @@ class RoleBakeResult:
     # walkPhase, so a "baked physics" preview shows the kinematic waddle.
     joints: dict[str, np.ndarray] = field(default_factory=dict)
     log: list[RoleBakeLogEntry] = field(default_factory=list)
-    simulated: bool = True  # False for a role this baker could not drive at all (e.g. roller mode)
+    simulated: bool = True   # False only when the role was never simulated AT ALL
+    # True when some window was held but the rest is real physics. Kept
+    # separate from `simulated`: a role with one roller stretch is still
+    # performing for the rest of the show, and a consumer that reads
+    # "unsimulated" as "not performing" (the editor dims those) would be
+    # wrong about it for the other 74%.
+    partially_held: bool = False
 
 
 class _SkillDriver:
@@ -456,7 +462,7 @@ def simulate_role(
         head_yaw=head_yaw, head_pitch=head_pitch, head_roll=head_roll, neck_pitch=neck_pitch,
         body_z=body_z, body_roll=body_roll, body_pitch=body_pitch,
         mouth_open=mouth_open, walk_phase=walk_phase, joints=joint_angles,
-        log=log, simulated=not any_frozen,
+        log=log, simulated=True, partially_held=any_frozen,
     )
 
 

@@ -161,8 +161,18 @@ test('formatBakeSummary: accepts bake-cache.js summarize() output (camelCase), f
     fallen_roles: ['echo'],
   };
   const summary = summarize(cache);
-  assert.deepEqual(Object.keys(summary).sort(), ['duration', 'fallenRoles', 'roles', 'unsimulatedRoles']);
+  assert.deepEqual(Object.keys(summary).sort(), ['duration', 'fallenRoles', 'heldRoles', 'roles', 'unsimulatedRoles']);
   assert.equal(formatBakeSummary(summary), '8 roles, 64s · 1 unsimulated · 1 fell');
+});
+
+test('formatBakeSummary: a partly-held role reads as held, not as unsimulated', () => {
+  // shows/showcase is exactly this: one roller window, real physics for the
+  // rest. Calling it "unsimulated" would be wrong about 74% of the show.
+  const cache = {
+    roles: ['soloist'], show: { duration: 41.75 },
+    unsimulated_roles: [], held_roles: ['soloist'], fallen_roles: [],
+  };
+  assert.equal(formatBakeSummary(summarize(cache)), '1 roles, 41.75s · 1 partly held');
 });
 
 test('formatBakeSummary: both producers render an identical line for the same cache', () => {

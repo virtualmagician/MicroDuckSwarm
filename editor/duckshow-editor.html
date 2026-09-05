@@ -1706,6 +1706,10 @@ function paintBakedViewer() {
   // The bake log says so, but the stage is what you are looking at. Dim it
   // the way a rehearsal-neutral duck is dimmed: not performing, and visibly
   // so. `dimmed` is already part of the renderer contract (docs/viewer.md).
+  // unsimulated_roles ONLY -- a role in held_roles was held for one window
+  // and genuinely simulated for the rest, so dimming it for the whole show
+  // would be wrong about most of it. shows/showcase is exactly that case: one
+  // roller stretch, 74% real physics.
   const unsimulated = new Set(Array.isArray(cache.unsimulated_roles) ? cache.unsimulated_roles : []);
   const marks = state.norm && state.norm.editor ? (state.norm.editor.marks || {}) : {};
   const poses = bakeCache.poseAllAtTime(cache, t)

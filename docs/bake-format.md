@@ -487,6 +487,8 @@ Each role is spawned at its resolved stage mark (`editor.marks[role]` if the sho
 
   **Precision and size** — 4 decimals, i.e. 1e-4 rad. That is about 15x finer than the XL330's own 4096-tick encoder resolution (1.53e-3 rad), so more digits carry no physical meaning. Measured on the real cache: it adds ~1.95 MB to the 8-role 64 s octet, taking it from 2.43 MB to ~4.38 MB. That is a gitignored local file fetched from 127.0.0.1 and parsed once; a compact encoding would save ~1 MB and cost the format its "plain floats, same field names" property, so it is not worth it. The head four are deliberately **not** repeated here — they already ship as `headYaw`/`headPitch`/`headRoll`/`neckPitch`.
 
+- **`held_roles`** — roles with at least one held window but real physics elsewhere. Distinct from `unsimulated_roles` on purpose: after holds became per-window rather than per-role, a role with a single `roller` stretch was still being reported as "unsimulated" despite 74% of its show being genuinely simulated, which is both misleading in the log and wrong for any consumer that treats the flag as "this duck is not performing" (the editor dims those on stage). A role appears in exactly one of the two lists.
+
 - **`unsimulated_roles`** — roles this baker declined to simulate at all (roller mode only, in v1); their pose arrays are still full-length (held static at the mark) so the cache stays well-formed, but a consumer should treat them as informational only.
 - **`fallen_roles`** — any role with at least one `kind: "fell"` log entry.
 

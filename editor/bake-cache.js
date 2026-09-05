@@ -186,6 +186,11 @@ export function summarize(cache) {
     roles: cache.roles.length,
     duration: cache.show ? cache.show.duration : null,
     unsimulatedRoles: Array.isArray(cache.unsimulated_roles) ? cache.unsimulated_roles : [],
+    // Roles held for one window but genuinely simulated elsewhere. Reported
+    // separately from unsimulatedRoles so a partly-held role still raises a
+    // note without being called unsimulated -- absent in caches baked before
+    // the distinction existed, which read as "none", correctly.
+    heldRoles: Array.isArray(cache.held_roles) ? cache.held_roles : [],
     fallenRoles: Array.isArray(cache.fallen_roles) ? cache.fallen_roles : [],
   };
 }
