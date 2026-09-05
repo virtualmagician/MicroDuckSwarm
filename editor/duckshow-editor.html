@@ -333,7 +333,7 @@
 <main id="main">
   <div id="workspace">
     <section id="stage-section">
-      <h2>stage <span class="count" style="font-weight:400">1 house · 2 ¾ · 3 top · drag orbit · scroll dolly · drag mark in top view</span><button id="btn-viewer-names" class="toggle" aria-pressed="false" title="Show/hide each duck's role name above its head (remembered in this browser)">names</button><button id="btn-drift" class="toggle hidden" aria-pressed="false" title="Drift: draw the dead-reckoned path the choreography asked for underneath the simulated one, and report the separation (docs/viewer.md). Only meaningful with a bake loaded.">drift</button><button id="btn-setup" class="toggle" aria-pressed="false" title="Setup mode (⌥P): place the cast. Switches to Top view and opens the marks table — docs/authoring.md &quot;Setup mode&quot;">setup</button><button id="btn-create-preview" title="Create Preview unavailable — checking…" disabled>Create Preview</button><button id="btn-bake-open" title="Load a baked pose cache (a .duckbake.json from tools/bake) and play it back in place of the kinematic preview — docs/viewer.md &quot;Create Preview&quot;">Play Baked…</button><button id="btn-bake-exit" class="hidden" title="Back to the live kinematic preview">Kinematic ↩</button></h2>
+      <h2>stage <span class="count" style="font-weight:400">1 house · 2 ¾ · 3 top · drag orbit · scroll dolly · drag mark in top view</span><button id="btn-viewer-names" class="toggle" aria-pressed="false" title="Show/hide each duck's role name above its head (remembered in this browser)">names</button><button id="btn-drift" class="toggle" aria-pressed="false" title="Paths: draw each role's whole dead-reckoned path (the intent curve the locomotion track describes), not just the trailing few seconds. With a bake loaded it sits under the simulated path and the separation is reported per role — the drift diff (docs/viewer.md).">paths</button><button id="btn-setup" class="toggle" aria-pressed="false" title="Setup mode (⌥P): place the cast. Switches to Top view and opens the marks table — docs/authoring.md &quot;Setup mode&quot;">setup</button><button id="btn-create-preview" title="Create Preview unavailable — checking…" disabled>Create Preview</button><button id="btn-bake-open" title="Load a baked pose cache (a .duckbake.json from tools/bake) and play it back in place of the kinematic preview — docs/viewer.md &quot;Create Preview&quot;">Play Baked…</button><button id="btn-bake-exit" class="hidden" title="Back to the live kinematic preview">Kinematic ↩</button></h2>
       <div id="viewer-wrap">
         <canvas id="stage"></canvas>
         <div id="viewer-role-labels"></div>
@@ -2119,6 +2119,7 @@ function paintViewer() {
   paintEventLabels(frame.labels);
   updateRoleLabelPositions();
   renderActivePolicies();
+  paintDrift(null);
 }
 
 /** World point (show-space x/y, world-space height) -> canvas CSS-px, or null if behind the camera. */
@@ -2303,36 +2304,43 @@ function computeWorstDrift(cache) {
 }
 
 function setDriftMode(on) {
-  drift.on = Boolean(on) && Boolean(state.bakeCache);
+  // Available in both modes. Without a bake it is simply the intent curves --
+  // what the retired 2D stage drew for every role and the 3D viewer never
+  // did, since a trail is only the last ~4.8 s. With a bake it additionally
+  // becomes the diff, because there is finally an "actual" to compare to.
+  drift.on = Boolean(on);
   $('btn-drift').setAttribute('aria-pressed', String(drift.on));
-  if (drift.on && !drift.worst) drift.worst = computeWorstDrift(state.bakeCache);
+  if (drift.on && state.bakeCache && !drift.worst) drift.worst = computeWorstDrift(state.bakeCache);
   if (!drift.on && viewer.renderer) viewer.renderer.setGhostTrails({});
-  $('viewer-drift').classList.toggle('hidden', !drift.on);
+  $('viewer-drift').classList.toggle('hidden', !(drift.on && state.bakeCache));
   paintViewer();
 }
 
 /** Shows/hides the toggle itself: it is meaningless without a bake. */
 function updateDriftAvailability() {
-  const btn = $('btn-drift');
-  if (!btn) return;
-  const available = Boolean(state.bakeCache);
-  btn.classList.toggle('hidden', !available);
-  if (!available && drift.on) setDriftMode(false);
-  drift.worst = null;  // recomputed against whichever cache is now loaded
+  // The toggle itself is always available; only the numeric readout needs a
+  // bake. Recompute the worst-case pass against whichever cache is now loaded.
+  drift.worst = null;
+  if (drift.on) setDriftMode(true);
+  else $('viewer-drift').classList.add('hidden');
 }
 
 /** The intended path as a trail, plus the numeric readout. Called from the
  *  baked paint path only -- the kinematic path IS the intended one, so there
  *  is nothing to diff against outside baked playback. */
 function paintDrift(cache) {
-  if (!drift.on || !cache) return;
+  if (!drift.on) return;
+  // The whole path, not deriveTrail's trailing window: this is the plan, and
+  // the useful part is where the duck is GOING. Strided so a long show does
+  // not upload 3200 vertices per role for a line whose samples are 2 cm apart.
   const ghosts = {};
-  for (const role of cache.roles) {
+  for (const role of roles()) {
     const path = viewer.paths.get(role);
     if (!path || viewer.neutralRoles.has(role)) continue;
-    ghosts[role] = dv.deriveTrail(path, state.playhead, dv.TRAIL_MAX_POINTS, false);
+    ghosts[role] = dv.fullRolePath(path, 2);
   }
   viewer.renderer.setGhostTrails(ghosts);
+  if (!cache) return;   // no bake: intent curves only, nothing to diff
 
   const host = $('viewer-drift');
   const rows = [];

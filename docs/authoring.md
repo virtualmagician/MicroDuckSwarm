@@ -60,10 +60,12 @@ stage into a placement surface:
 - Shows a **marks table** in the rail: one row per role with numeric `x`, `y`
   and `heading` fields. Typing a value commits it the same way a drag does, as
   one undoable edit.
-- Leaves the existing ring drag alone for position. Heading is set by typing a
-  value or by a formation's facing rule; there is **no drag-to-rotate handle
-  yet**, so a one-off heading is a typed number. Heading is radians, CCW, with
-  0 facing downstage, matching the `.duckshow` convention everywhere else.
+- Leaves the existing ring drag alone: dragging moves the duck, and
+  **⌥-drag (or ⇧-drag) turns it**, pointing its heading at the cursor. That
+  gesture came across from the retired 2D stage and still works; setup mode
+  adds a typed value for when an exact angle matters. Heading is radians, CCW,
+  with 0 facing downstage, matching the `.duckshow` convention everywhere
+  else.
 - Offers **formation helpers** that rewrite every mark at once: line, arc and
   grid, each with a spacing or radius, and a facing rule (keep current, face
   downstage, or face the centre of the formation).

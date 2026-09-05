@@ -363,6 +363,29 @@ export const TRAIL_MAX_POINTS = 240;
  * so the shorter length wins and the caller is responsible for sampling both
  * on the same grid.
  */
+/**
+ * A role's WHOLE dead-reckoned path as {x, y} points: the intent curve, the
+ * complete shape the locomotion track describes, future included.
+ *
+ * deriveTrail() deliberately returns only a trailing window (TRAIL_MAX_POINTS,
+ * about 4.8 s at the default dt) because a trail encodes recency. An intent
+ * curve is a different object: it is the plan, and the useful thing about it
+ * is seeing where the duck is going, not where it has been. The retired 2D
+ * stage drew this for every role; the 3D viewer only ever showed the trail.
+ *
+ * `stride` thins the output for long shows -- consecutive path samples are
+ * 2 cm apart at walking speed, far below what a line on a floor resolves.
+ */
+export function fullRolePath(path, stride = 1) {
+  if (!path || !path.t || path.t.length === 0) return [];
+  const step = Math.max(1, Math.floor(stride));
+  const out = [];
+  for (let i = 0; i < path.t.length; i += step) out.push({ x: path.x[i], y: path.y[i] });
+  const last = path.t.length - 1;
+  if (last >= 0 && (last % step) !== 0) out.push({ x: path.x[last], y: path.y[last] });
+  return out;
+}
+
 export function driftSeries(intended, actual) {
   const n = Math.min(intended ? intended.length : 0, actual ? actual.length : 0);
   if (n === 0) return { current: 0, max: 0, maxIndex: -1, count: 0 };

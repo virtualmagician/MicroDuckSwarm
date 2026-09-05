@@ -122,7 +122,9 @@ See `docs/bake-parts.md` for the full parts list, exact asset-setup commands, an
 
 The path form (`{"show": "/shows/…"}`) still works and is what a script would use. Baking a document the browser only holds in memory is why the size cap on the request body is 4 MB rather than the 1 MB a path needs.
 
-**Intended versus actual: the drift diff.** With a bake loaded, the `drift` toggle draws each role's *dead-reckoned* path underneath its *simulated* one. The dead reckoning is what the choreography asked for, integrated from the `locomotion` track. The bake is what the policies actually did. Where they separate is where the show will not do what the timeline says.
+**Intent curves, and the drift diff.** The `paths` toggle draws each role's whole dead-reckoned path: the complete shape the `locomotion` track describes, future included. That is a different object from a trail, which shows only the last few seconds because it encodes recency; the retired 2D stage drew the full curve for every role and the 3D viewer never did. Marks stay draggable underneath it, and **⌥-drag (or ⇧-drag) turns a duck**, pointing its heading at the cursor.
+
+With a bake loaded the same toggle becomes the diff: the dead-reckoned path sits underneath the *simulated* one. The dead reckoning is what the choreography asked for, integrated from the `locomotion` track. The bake is what the policies actually did. Where they separate is where the show will not do what the timeline says.
 
 The two are drawn differently on purpose: the actual path keeps the role's colour, and the intended one is a single muted grey underneath it, so the physics reads as the subject and the plan as the reference. A per-role readout gives the separation at the playhead and the worst separation anywhere in the show, because the moment that matters is usually not the moment you happen to be scrubbing.
 
