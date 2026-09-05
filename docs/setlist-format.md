@@ -123,48 +123,81 @@ Warnings (run anyway, say so):
 
 ## Switching between the two editors
 
-The show editor and the setlist editor are two static sibling pages under
-`editor/`. A button in each topbar opens the other, and the contract between
-them is three URL parameters. Anything that changes one of them changes both
-pages together.
+`editor/index.html` is the page `scripts/edit.sh` opens. It is a shell: a tab
+bar and two frames, one holding `duckshow-editor.html` and one holding
+`setlist.html`. Switching shows one frame and hides the other. **Neither frame
+is ever navigated**, so an unsaved cue in the show editor and an unsaved
+reorder in the setlist both survive any number of switches, and so do the undo
+stack, the decoded audio, an open bake cache and an in-flight bake. Framed,
+the two pages post to the shell instead of opening tabs, their switch buttons
+read `Setlist` and `Show editor`, and the setlist's empty-set refusal does not
+apply because the show frame already holds a document. Nothing else about them
+changes, and both still work on their own at their own URLs.
+
+The shell's URL carries `view`, `show` and `set`, kept current with
+`history.replaceState`, so a reload restores the view you were on and any
+document that has a repo path: one opened via `?show=`, `?set=`, Load demo, or
+a setlist block. A show opened with Open… or dropped in has no path; the shell
+writes `show=` **empty** for it, and the show editor reads a present-but-empty
+`show=` as "start blank", where an absent one means "load the demo", which
+comes wired for in-place Save. A reload of a path-less document therefore
+gives a blank editor, not the demo.
+
+Messages between the frames and the shell are same-origin `postMessage`, and
+each side checks `event.origin` against `location.origin` and `event.source`
+against the window it expects:
+
+* frame to shell, `{"type": "duckswarm:switch", "view": "show" | "setlist"}`:
+  the in-page switch buttons and `⌥L` in either frame.
+* setlist to shell, `{"type": "duckswarm:open-show", "path": ...}`:
+  double-click on a block. The shell brings the show frame forward at once and
+  forwards `{"type": "duckswarm:load-show", "path": ...}` to it. The frame
+  shape-checks the path, refuses it while a timeline drag or a preview bake is
+  live, never reloads the show it already holds, and applies its own "discard
+  unsaved changes?" guard before loading anything. A refused load leaves the
+  show editor in front with the show it already held and a status line saying
+  why. An open-show that arrives before the show frame has announced its first
+  document is held and delivered then.
+* frame to shell, `{"type": "duckswarm:doc", "view": ..., "path": ...}`: what
+  the frame holds now, so the shell can keep the URL true. The first one from
+  a frame is also how the shell knows that frame is ready.
+* shell to frame, `{"type": "duckswarm:hidden"}` and
+  `{"type": "duckswarm:shown"}`: a `display: none` frame cannot tell it is
+  hidden. `document.hidden` tracks the top page, `requestAnimationFrame` keeps
+  running and audio keeps playing, so the shell says so. On `hidden` the show
+  editor pauses playback. On `shown` the setlist refetches `GET /api/shows`,
+  and the show editor re-sizes its stage, re-clamps its splitter (whose
+  boot-time value came from a zero-height layout) and re-fits a timeline whose
+  last fit ran against the 50 px width floor, after the message's own task so
+  the layout it reads is the un-hidden one. In a visible browser its
+  `ResizeObserver`s do the same when the frame's box goes from 0×0 to real;
+  the message means the frame does not depend on when those callbacks are
+  delivered, which a browser defers for as long as the top-level page is
+  hidden. `reflowSplit` refuses a zero-height main, so an early call is a
+  no-op rather than a wrong size.
+
+A frame's `beforeunload` guard fires on a top-level navigation or close of the
+shell, per the HTML specification for nested browsing contexts. That is not
+observable in the automated browser these pages are verified in, which
+suppresses the dialog for a plain standalone dirty page too, so it is stated
+here from the specification rather than from a measurement.
+
+The standalone pages keep their own URL contract and the earlier behaviour for
+their own buttons, which open the other editor in a tab or bring forward the
+tab they opened before:
 
 * `duckshow-editor.html?show=<repo path>` opens that show. It is also what
   makes `POST /api/save` write back in place instead of downloading a copy.
+  The path must be `/shows/…/<name>.duckshow.json` with no `..` and no
+  percent-escape; anything else is refused with a status line rather than
+  fetched.
 * `setlist.html?set=<repo path>` opens that setlist.
 * `duckshow-editor.html?from=<setlist repo path>` names the setlist that opened
-  the tab. The show editor uses it for the button's label and destination and
-  for nothing else. It is refused unless it is under `/shows/setlists/` and
-  ends `.duckset.json`, since that is the only directory `GET /api/setlists`
-  lists and the only one `POST /api/save-setlist` accepts. A set outside it
-  would open and then fail Save with a 400.
+  the tab, for the button's label and destination. It is refused unless it is
+  under `/shows/setlists/` and ends `.duckset.json`.
 
-**Switching always opens a tab. It never navigates the tab you clicked in, and
-it never navigates a tab that is already showing a page.** Neither page has a
-document model: nothing outside its `state` object is serialised, there is no
-autosave, and navigating away would take the undo stack, the decoded audio, an
-open bake cache and the poll loop for any in-flight bake with it. So the
-switcher opens a new tab, or brings forward the one it opened earlier if that
-tab is still around. Each page keeps the handle its own `window.open` returned,
-which is why this works only within one server origin. `scripts/edit.sh` picks
-a free port per run, so two editors launched from two terminals are on two
-origins and cannot see each other. That is the floor, and the status line says
-which of the two things happened on every click.
-
-**A switch never lands you on a document you did not ask for.** The setlist's
-button refuses when the set has no entries, rather than opening a show editor
-with no `?show=`: that path loads the demo show *with a writable repo path*
-(`loadDemo` passes `DEMO_SHOW_PATH`), so one Save would rewrite
-`shows/demo/demo.duckshow.json` for a user who thought they had a blank
-document.
-
-`⌥L` switches views from the keyboard in both pages. It is inert while a
-timeline drag is live, because `endDrag` is the only thing that pushes the
-pre-drag document onto the undo stack.
-
-Both buttons ship `disabled` in the markup and are enabled by the script that
-wires them. A page whose modules failed to load, which is what happens on
-`file://` and on a `MODULE_API` mismatch, therefore shows a visibly disabled
-button instead of a live-looking one that does nothing.
+The tab model was replaced as the default because it put the answer in a
+second tab and a status line, and it read as the button doing nothing.
 
 ## Why this is painful in a browser
 
@@ -175,17 +208,17 @@ never had one to begin with. That is why `POST /api/save` exists in
 that works in every browser and survives a reload.
 
 A setlist references many files, so moving between a set and the shows in it
-is a normal part of the work. Two tabs handle that without either page being
-unloaded, so an unsaved reorder and an unsaved cue both survive a switch. What
+is a normal part of the work. Two frames in one page handle that without either
+being unloaded, so an unsaved reorder and an unsaved cue both survive a switch. What
 neither page gets from a browser is a document model: no undo across a reload,
-no autosave, no file handle that survives relaunch, and no way for one tab to
+no autosave, no file handle that survives relaunch, and no way for one frame to
 know that the other is holding unsaved edits to a show it is drawing a block
-for. The setlist refetches `GET /api/shows` whenever its tab is brought
+for. The setlist refetches `GET /api/shows` whenever its frame comes
 forward, so a saved change to a show's duration or cast reaches the block that
 draws it, but an unsaved one cannot.
 
 **The native app is parked.** What follows records what a document model would
-buy and is still true. It is not being built. The two-tab switcher above is the
+buy and is still true. It is not being built. The two-frame shell above is the
 answer being maintained.
 
 **What a native macOS app buys.** A real document model: open / save / save-as

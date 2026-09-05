@@ -657,6 +657,11 @@ function saveWorkspaceH(h) {
 }
 /** Re-clamp the current split against #main's present size (e.g. after a window resize). */
 function reflowSplit() {
+  // No layout to reflow against (a display:none frame, or a message handled
+  // before the first layout): applying clampWorkspaceH's fallback here would
+  // hand #workspace a height that no later observer repairs. Wait for the
+  // mainEl ResizeObserver, which calls this again with real numbers.
+  if (!mainEl.clientHeight) return;
   const cur = workspaceEl.getBoundingClientRect().height || loadWorkspaceH();
   applyWorkspaceH(clampWorkspaceH(cur));
 }
@@ -1316,6 +1321,11 @@ function zoomAt(factor, x) {
 }
 function zoomFit() {
   state.pxPerSec = clamp(state.layout.W / Math.max(1, duration() + 1), 4, 4000);
+  // Booted inside a display:none frame (editor/index.html with the setlist in
+  // front), layoutTimeline's W floor is 50 px and this fit lands on the 4 px/s
+  // minimum. Remember that, so the first real layout re-fits: see the scrollEl
+  // ResizeObserver and the duckswarm:shown handler.
+  state.fitPending = state.layout.W <= 50;
   state.scrollT = 0;
   layoutTimeline(); drawRuler(); drawLanes();
 }
@@ -2790,6 +2800,7 @@ function loadShowText(text, fileName, path = null) {
     // the next edit invalidates it (see setShow's dirty:true branch).
     state.showText = text;
     state.showPath = path;
+    announceDoc();
     zoomFit();
     setViewerCameraPreset('house');
     const errs = state.issues.filter((i) => i.severity === 'error').length;
@@ -2933,14 +2944,19 @@ $('btn-save').onclick = save;
 
 $('btn-new').onclick = () => {
   if (state.dirty && !confirm('Discard unsaved changes?')) return;
+  startNewShow();
+};
+
+function startNewShow() {
   const show = core.newShow({ name: 'Untitled', duration: 30, bpm: 120, roles: ['lead'] });
   pause(); state.selection = null; state.collapsed.clear(); state.fileName = 'untitled.duckshow.json'; state.fileHandle = null; state.playhead = 0;
   setShow(show, { dirty: false, resetHistory: true }); zoomFit();
   state.showText = null; // no source file to verify a baked cache's hash against (see loadBakeCache)
   state.showPath = null; // ditto — nothing for Create Preview to bake either (see create-preview.js)
+  announceDoc();
   setViewerCameraPreset('house');
   status('new show');
-};
+}
 
 async function loadDemo({ quiet = false } = {}) {
   try {
@@ -2956,11 +2972,30 @@ async function loadDemo({ quiet = false } = {}) {
     return false;
   }
 }
+/** The one shape this editor will fetch a show from: an absolute repo path
+ *  under /shows/ ending .duckshow.json, with no '..' and no percent-escape (a
+ *  repo path never carries one, and the browser resolves %2e%2e before the
+ *  request). Applied to ?show= and to the shell's load-show alike: ?show= was
+ *  fetched as given before, which let any URL a page could open fetch any
+ *  same-origin resource into the editor. */
+function normalizeShowPathInput(raw) {
+  if (typeof raw !== 'string') return null;
+  const path = raw.trim();
+  if (!path.startsWith('/shows/') || !path.endsWith('.duckshow.json')) return null;
+  if (path.includes('..') || path.includes('%') || path.includes('\\')) return null;
+  return path;
+}
+
 async function loadShowFromUrl(url, { quiet = false } = {}) {
   // ?show=<path relative to the served root> — what scripts/edit.sh uses so
   // one command opens the editor with a piece already up.
+  const path = normalizeShowPathInput(url);
+  if (!path) {
+    if (!quiet) status(`will not fetch ${url}: a show path is /shows/…/name.duckshow.json`, 'error');
+    return false;
+  }
   try {
-    const res = await fetch(url, { cache: 'no-cache' });
+    const res = await fetch(path, { cache: 'no-cache' });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const text = await res.text();
     const name = url.split('/').pop() || 'show.duckshow.json';
@@ -3017,6 +3052,62 @@ window.addEventListener('beforeunload', (e) => { if (state.dirty) { e.preventDef
 // top of this file exists to police.
 let setlistTab = null;
 
+// Inside editor/index.html this page is one of two frames and the shell owns
+// switching (docs/setlist-format.md, "Switching between the two editors").
+// Standalone, the tab-opening path below stays. Every framed message goes to
+// the parent with our origin as the target, so a shell on another origin gets
+// nothing; and the one message we accept back is checked the same way.
+const FRAMED = window.parent !== window;
+function tellShell(message) {
+  if (FRAMED) { try { window.parent.postMessage(message, location.origin); } catch (_) {} }
+}
+function announceDoc() { tellShell({ type: 'duckswarm:doc', view: 'show', path: state.showPath || '' }); }
+
+window.addEventListener('message', async (e) => {
+  if (!FRAMED || e.origin !== location.origin || e.source !== window.parent) return;
+  const m = e.data;
+  if (!m || typeof m !== 'object' || typeof m.type !== 'string') return;
+  if (m.type === 'duckswarm:hidden') {
+    // A display:none frame cannot tell it is hidden (document.hidden tracks
+    // the top page) and would keep playing, audio included, behind the
+    // setlist. Pause instead; the operator picks it up where it stopped.
+    if (state.playing) { pause(); status('paused while the setlist was in front'); }
+    return;
+  }
+  if (m.type === 'duckswarm:shown') {
+    // Back from display:none. In a visible browser the ResizeObservers do all
+    // of this on their own once the frame has a real layout. They are not
+    // relied on: their callbacks arrive with the rendering update, which a
+    // browser skips while the top-level page is hidden (measured in an
+    // emulated viewport with the pane hidden: real client sizes, no callback
+    // for a full second). So repair explicitly, after this message's task so
+    // the layout the reads force is the un-hidden one. Every step is
+    // idempotent with the observers, and reflowSplit refuses a zero-height
+    // main, so an early call is a no-op rather than a wrong size.
+    setTimeout(() => {
+      reflowSplit();
+      layoutTimeline();
+      if (state.fitPending && state.layout.W > 50) zoomFit(); else { drawRuler(); drawLanes(); }
+      resizeViewer();
+    }, 0);
+    return;
+  }
+  if (m.type !== 'duckswarm:load-show') return;
+  const path = normalizeShowPathInput(m.path);
+  if (!path) { status('the shell asked for a show path this editor will not fetch', 'error'); return; }
+  if (path === state.showPath) {
+    // Never reload the open show from disk on a double-click: with unsaved
+    // edits that is a revert wearing a generic "discard?" question.
+    status(state.dirty ? `${path} is already open; unsaved changes kept` : `already showing ${path}`);
+    return;
+  }
+  if (state.drag) { status('finish the drag first, then open the show', 'error'); return; }
+  if (state.bakeJob) { status('a preview bake is running for this show; wait for it before opening another', 'error'); return; }
+  // Same guard as Open…: the shell never bypasses it, it only asks.
+  if (state.dirty && !confirm('Discard unsaved changes?')) { status('kept the unsaved show'); return; }
+  if (!(await loadShowFromUrl(path))) status(`could not load ${path}`, 'error');
+});
+
 function openOtherView(url, existing) {
   // A handle to a tab we opened that is still around: focus it rather than
   // stacking another copy. `.closed` on a same-origin tab we opened is safe to
@@ -3058,6 +3149,7 @@ function goToSetlist() {
   // only thing that pushes it onto the undo stack. Switching mid-drag would
   // strand it, so the gesture wins.
   if (state.drag) return;
+  if (FRAMED) { tellShell({ type: 'duckswarm:switch', view: 'setlist' }); return; }
   const url = originSetlist
     ? `./setlist.html?set=${encodeURIComponent(originSetlist)}`
     : './setlist.html';
@@ -3080,6 +3172,12 @@ if (originSetlist) {
 $('btn-setlist').title = originSetlist
   ? `Open ${originSetlist} in its own tab (⌥L)`
   : 'Open the setlist editor in its own tab (⌥L)';
+if (FRAMED) {
+  // Framed, the button is a view switch, not a tab opener, and the way back
+  // to a set is the shell's tab bar rather than the ?from= breadcrumb.
+  $('btn-setlist').textContent = 'Setlist';
+  $('btn-setlist').title = 'Switch to the setlist editor (⌥L)';
+}
 $('btn-setlist').disabled = false;
 $('btn-setlist').onclick = goToSetlist;
 
@@ -3142,7 +3240,13 @@ window.addEventListener('keydown', (e) => {
 // ---------------------------------------------------------------------------
 // Boot
 // ---------------------------------------------------------------------------
-new ResizeObserver(() => { layoutTimeline(); drawRuler(); drawLanes(); }).observe(scrollEl);
+new ResizeObserver(() => {
+  layoutTimeline();
+  // First real width after a fit against the 50 px floor: fit again (zoomFit
+  // lays out and draws itself). Not a loop: zoomFit does not change scrollEl.
+  if (state.fitPending && state.layout.W > 50) { zoomFit(); return; }
+  drawRuler(); drawLanes();
+}).observe(scrollEl);
 new ResizeObserver(() => resizeViewer()).observe($('stage-section'));
 new ResizeObserver(() => reflowSplit()).observe(mainEl); // window resize: keep the split within its (re-derived) bounds
 if (window.matchMedia) window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', renderAll);
@@ -3188,9 +3292,15 @@ async function boot() {
   state.fileName = 'starter.duckshow.json';
   zoomFit();
   setViewerCameraPreset('house');
-  const wanted = new URLSearchParams(location.search).get('show');
+  const bootParams = new URLSearchParams(location.search);
+  const wanted = bootParams.get('show');
   if (location.protocol.startsWith('http')) {
-    if (wanted) {
+    if (bootParams.has('show') && wanted === '') {
+      // Present but empty: "start blank". editor/index.html writes this for a
+      // show that has no repo path, so a reload gives a blank editor rather
+      // than the demo, which comes wired for in-place Save.
+      startNewShow();
+    } else if (wanted) {
       if (!(await loadShowFromUrl(wanted, { quiet: true }))) {
         status(`could not load ${wanted} — is the path relative to the served root?`, 'error');
       }

@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>duckswarm editor</title>
+<style>
+  :root {
+    color-scheme: dark light;
+    --bg: #15171c; --bg2: #1c1f26; --bg3: #242832; --bg4: #2c313c;
+    --line: #333945; --fg: #e7e9ee; --fg2: #9ba3b1; --fg3: #6b7381; --accent: #4da3ff;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  }
+  @media (prefers-color-scheme: light) {
+    :root {
+      --bg: #f4f5f7; --bg2: #ffffff; --bg3: #eceef2; --bg4: #e1e4ea;
+      --line: #d3d7de; --fg: #1a1d23; --fg2: #4d5563; --fg3: #7c8493; --accent: #1f6fd6;
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    font: 12px/1.35 var(--sans); color: var(--fg); background: var(--bg);
+    display: grid; grid-template-rows: auto 1fr; grid-template-columns: minmax(0, 1fr); overflow: hidden;
+  }
+  #tabs {
+    display: flex; align-items: center; gap: 4px; padding: 4px 8px;
+    background: var(--bg2); border-bottom: 1px solid var(--line);
+  }
+  #tabs .brand { font-weight: 600; letter-spacing: 0.02em; margin-right: 8px; }
+  #tabs .brand small { color: var(--fg3); font-weight: 400; margin-left: 4px; }
+  #tabs button[role="tab"] {
+    font: inherit; color: var(--fg2); background: transparent; border: 1px solid transparent;
+    border-radius: 4px; padding: 3px 10px; min-height: 24px; cursor: pointer;
+  }
+  #tabs button[role="tab"]:hover { background: var(--bg4); color: var(--fg); }
+  #tabs button[role="tab"][aria-selected="true"] { color: var(--fg); background: var(--bg3); border-color: var(--line); }
+  #tabs button:focus-visible { outline: 2px solid var(--accent); outline-offset: -1px; }
+  #doc { font-family: var(--mono); color: var(--fg3); margin-left: auto; }
+  #tabs kbd {
+    font-family: var(--mono); font-size: 11px; background: var(--bg3); border: 1px solid var(--line);
+    border-radius: 3px; padding: 0 4px; margin-left: 8px; color: var(--fg2);
+  }
+  #frames { position: relative; min-height: 0; }
+  iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; background: var(--bg); }
+  iframe[hidden] { display: none; }
+</style>
+</head>
+<body>
+
+<div id="tabs" role="tablist">
+  <span class="brand">duckswarm<small>editor</small></span>
+  <button id="tab-show" role="tab" aria-selected="true" title="The show editor. ⌥L toggles.">Show</button>
+  <button id="tab-setlist" role="tab" aria-selected="false" title="The setlist editor. ⌥L toggles.">Setlist</button>
+  <span id="doc"></span>
+  <kbd>⌥L</kbd>
+</div>
+<div id="frames">
+  <iframe id="frame-show" title="show editor"></iframe>
+  <iframe id="frame-setlist" title="setlist editor" hidden></iframe>
+</div>
+
+<script>
+// A classic script, not a module, on purpose: this shell imports nothing, so
+// a stale-module failure inside a frame (which each frame reports for itself)
+// cannot take the tab bar down with it. docs/setlist-format.md, "Switching
+// between the two editors".
+(() => {
+  const $ = (id) => document.getElementById(id);
+  const frames = { show: $('frame-show'), setlist: $('frame-setlist') };
+  const tabs = { show: $('tab-show'), setlist: $('tab-setlist') };
+
+  // The two frames are the existing standalone pages; framed, they post to
+  // this shell instead of opening tabs (see FRAMED in each). ?show= and ?set=
+  // mean exactly what they mean there; the shell only carries them. One
+  // convention is the shell's: a PRESENT BUT EMPTY show= means "start blank",
+  // where an absent one means "load the demo", which comes wired for
+  // in-place Save. So a document with no repo path (New, Open…, a drop)
+  // survives a reload as a blank editor rather than as the demo.
+  const params = new URLSearchParams(location.search);
+  const docs = { show: params.get('show') || '', setlist: params.get('set') || '' };
+  let view = params.get('view') === 'setlist' ? 'setlist' : 'show';
+  // A frame is ready once it has announced its first document. Until then an
+  // open-show for it is held rather than posted into a page that is still
+  // booting, which would drop it.
+  const ready = { show: false, setlist: false };
+  let pendingOpen = null;
+
+  frames.show.src = `./duckshow-editor.html${params.has('show') ? `?show=${encodeURIComponent(docs.show)}` : ''}`;
+  frames.setlist.src = `./setlist.html${docs.setlist ? `?set=${encodeURIComponent(docs.setlist)}` : ''}`;
+
+  function syncUrl() {
+    const q = new URLSearchParams();
+    if (view !== 'show') q.set('view', view);
+    if (docs.show) q.set('show', docs.show);
+    else if (ready.show) q.set('show', ''); // an announced "no document": see above
+    if (docs.setlist) q.set('set', docs.setlist);
+    const qs = q.toString();
+    history.replaceState(null, '', `${location.pathname}${qs ? `?${qs}` : ''}`);
+    $('doc').textContent = (view === 'show' ? docs.show : docs.setlist) || '';
+    document.title = view === 'show' ? 'duckshow editor' : 'duckset setlist';
+  }
+
+  function send(name, message) {
+    try { frames[name].contentWindow.postMessage(message, location.origin); } catch (_) { /* not loaded yet */ }
+  }
+
+  function show(next) {
+    const previous = view;
+    view = next === 'setlist' ? 'setlist' : 'show';
+    for (const [name, frame] of Object.entries(frames)) {
+      const on = name === view;
+      frame.hidden = !on;
+      tabs[name].setAttribute('aria-selected', String(on));
+    }
+    // A display:none frame cannot tell it is hidden: document.hidden tracks
+    // the top page, requestAnimationFrame keeps running, audio keeps playing.
+    // So the shell says so. The show editor pauses playback on hidden, and on
+    // shown re-sizes its stage, re-clamps its splitter and re-fits a timeline
+    // that was fitted against a zero-width layout (its ResizeObservers do the
+    // same in a visible browser; the message makes it not depend on when
+    // their callbacks are delivered). The setlist refetches its show index on
+    // shown. Focus follows, so ⌥L keeps working from inside the frame that is
+    // now on screen.
+    if (previous !== view) send(previous, { type: 'duckswarm:hidden' });
+    send(view, { type: 'duckswarm:shown' });
+    try { frames[view].contentWindow.focus(); } catch (_) { /* not loaded yet */ }
+    syncUrl();
+  }
+
+  function toggle() { show(view === 'show' ? 'setlist' : 'show'); }
+
+  tabs.show.onclick = () => show('show');
+  tabs.setlist.onclick = () => show('setlist');
+
+  window.addEventListener('message', (e) => {
+    // Same origin, and from one of our two frames. Anything else is ignored:
+    // a message is data, not an instruction, until both checks pass.
+    if (e.origin !== location.origin) return;
+    const from = Object.entries(frames).find(([, f]) => f.contentWindow === e.source)?.[0];
+    if (!from) return;
+    const m = e.data;
+    if (!m || typeof m !== 'object' || typeof m.type !== 'string') return;
+    switch (m.type) {
+      case 'duckswarm:switch':
+        if (m.view === 'show' || m.view === 'setlist') show(m.view); else toggle();
+        break;
+      case 'duckswarm:open-show':
+        // Only the setlist opens shows. The show frame comes forward at once
+        // and applies its own shape check and "discard unsaved changes?"
+        // guard before it loads anything, so a refused load leaves the show
+        // editor in front with the show it already held, and says why there.
+        if (from !== 'setlist' || typeof m.path !== 'string') return;
+        if (ready.show) send('show', { type: 'duckswarm:load-show', path: m.path });
+        else pendingOpen = m.path;
+        show('show');
+        break;
+      case 'duckswarm:doc':
+        docs[from] = typeof m.path === 'string' ? m.path : '';
+        if (!ready[from]) {
+          ready[from] = true;
+          if (from === 'show' && pendingOpen) {
+            const path = pendingOpen;
+            pendingOpen = null;
+            send('show', { type: 'duckswarm:load-show', path });
+          }
+        }
+        syncUrl();
+        break;
+      default:
+        break;
+    }
+  });
+
+  // ⌥L when focus is on the shell itself (the tab bar). Inside a frame the
+  // frame's own handler posts duckswarm:switch.
+  window.addEventListener('keydown', (e) => {
+    if (e.altKey && (e.code === 'KeyL' || e.key.toLowerCase() === 'l')) { e.preventDefault(); toggle(); }
+  });
+
+  show(view);
+})();
+</script>
+</body>
+</html>

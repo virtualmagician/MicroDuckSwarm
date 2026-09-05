@@ -162,6 +162,17 @@ const state = {
   knownSetlists: [], // "/shows/setlists/x.duckset.json" paths the server lists
 };
 
+// Inside editor/index.html this page is one of two frames and the shell owns
+// switching (docs/setlist-format.md, "Switching between the two editors").
+// Standalone, it keeps its own tab-opening buttons. Every framed message goes
+// to the parent with our origin as the target, so a shell on another origin
+// gets nothing.
+const FRAMED = window.parent !== window;
+function tellShell(message) {
+  if (FRAMED) { try { window.parent.postMessage(message, location.origin); } catch (_) {} }
+}
+function announceDoc() { tellShell({ type: 'duckswarm:doc', view: 'setlist', path: state.path || '' }); }
+
 function setStatus(text, kind = '') {
   statusEl.textContent = text;
   statusEl.className = kind;
@@ -247,6 +258,7 @@ async function openSetlist(path) {
   if (error) throw new Error(`${path}: ${error}`);
   state.doc = doc;
   state.path = path;
+  announceDoc();
   markDirty(false);
   render();
   setStatus(`opened ${path}`, 'ok');
@@ -478,9 +490,15 @@ $('strip').addEventListener('dblclick', (e) => {
   if (!block) return;
   const entry = state.doc.entries.find((x) => x.id === block.dataset.id);
   if (!entry) return;
-  // A new tab, deliberately: the setlist keeps its unsaved state, which
-  // navigating away would lose. docs/setlist-format.md says why this is a
-  // symptom rather than a design.
+  // Framed, the shell loads it into the show frame. Standalone, a new tab,
+  // deliberately: the setlist keeps its unsaved state, which navigating away
+  // would lose.
+  if (FRAMED) {
+    // The shell forwards this to the show frame, which applies its own
+    // "discard unsaved changes?" guard, then brings that frame forward.
+    tellShell({ type: 'duckswarm:open-show', path: entry.show });
+    return;
+  }
   window.open(`./duckshow-editor.html?show=${encodeURIComponent(entry.show)}`
     + (state.path ? `&from=${encodeURIComponent(state.path)}` : ''), '_blank');
 });
@@ -512,6 +530,7 @@ $('new-setlist').addEventListener('click', () => {
   if (state.dirty && !confirm('Discard unsaved changes to this set?')) return;
   state.doc = core.newSetlist('untitled set');
   state.path = null;
+  announceDoc();
   markDirty(false);
   render();
   setStatus('new set');
@@ -552,6 +571,7 @@ $('save').addEventListener('click', async () => {
     const body = await res.json();
     if (!res.ok) throw new Error(body.error || `HTTP ${res.status}`);
     state.path = body.saved;
+    announceDoc();
     markDirty(false);
     render();
     await loadSetlistChoices();
@@ -588,6 +608,10 @@ function openOtherView(url, existing) {
 }
 
 function goToShowEditor() {
+  // Framed, this is a view switch and nothing more: the show frame already
+  // holds whatever it holds, so the empty-set refusal below (which guards
+  // against opening a demo wired for overwrite) does not apply.
+  if (FRAMED) { tellShell({ type: 'duckswarm:switch', view: 'show' }); return; }
   // An empty set is refused rather than opened. Without ?show= the show editor
   // falls through to loadDemo(), which passes DEMO_SHOW_PATH, so the tab would
   // hold shows/demo/demo.duckshow.json wired for in-place overwrite. One Save
@@ -609,7 +633,10 @@ function goToShowEditor() {
   else setStatus('the browser blocked the new tab. Allow pop-ups for this page and click again.', 'error');
 }
 
-$('btn-show-editor').title = 'Open the first show in this set in its own tab (⌥L)';
+$('btn-show-editor').title = FRAMED
+  ? 'Switch to the show editor (⌥L)'
+  : 'Open the first show in this set in its own tab (⌥L)';
+if (FRAMED) $('btn-show-editor').textContent = 'Show editor';
 $('btn-show-editor').disabled = false;
 $('btn-show-editor').onclick = goToShowEditor;
 
@@ -666,6 +693,14 @@ async function refreshIndexIfChanged() {
 // event covers that and misses the first case in some browsers.
 document.addEventListener('visibilitychange', () => { if (!document.hidden) refreshIndexIfChanged(); });
 window.addEventListener('focus', refreshIndexIfChanged);
+// Framed, neither of those is reliable: document.hidden tracks the top page,
+// not this frame, and the shell's focus() is best-effort. The shell posts
+// duckswarm:shown as it brings this frame forward, and that is the trigger.
+window.addEventListener('message', (e) => {
+  if (!FRAMED || e.origin !== location.origin || e.source !== window.parent) return;
+  const m = e.data;
+  if (m && typeof m === 'object' && m.type === 'duckswarm:shown') refreshIndexIfChanged();
+});
 
 // -- boot ------------------------------------------------------------------
 

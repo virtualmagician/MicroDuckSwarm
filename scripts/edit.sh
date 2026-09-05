@@ -4,9 +4,14 @@
 #   ./scripts/edit.sh                     # opens with the demo show
 #   ./scripts/edit.sh shows/octet         # a directory: finds the .duckshow.json inside
 #   ./scripts/edit.sh shows/octet/octet.duckshow.json
-#   ./scripts/edit.sh --setlist           # the setlist editor (docs/setlist-format.md)
-#   ./scripts/edit.sh shows/setlists/opening.duckset.json
+#   ./scripts/edit.sh --setlist           # same page, setlist view in front (docs/setlist-format.md)
+#   ./scripts/edit.sh shows/setlists/example.duckset.json
 #   PORT=9000 ./scripts/edit.sh           # pick the port yourself
+#
+# Every form opens editor/index.html, a shell holding the show editor and the
+# setlist editor as two frames with a tab bar; switching between them keeps
+# both documents in memory. The two pages are still reachable on their own at
+# editor/duckshow-editor.html and editor/setlist.html.
 #
 # Serves the repo root (Chrome and Safari refuse ES-module imports from
 # file://, so a server is required) and shuts it down again on Ctrl+C.
@@ -23,41 +28,77 @@ set -euo pipefail
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$REPO"
 
-# -- resolve an optional show argument to a path relative to the served root.
-PAGE="editor/duckshow-editor.html"
+# -- classify the arguments. Every form opens editor/index.html: a show path
+# fills the show frame, a .duckset.json fills the setlist frame, --setlist
+# brings the setlist view forward. A second value of the same kind, or
+# anything else, is an error rather than something silently dropped.
+PAGE="editor/index.html"
+VIEW=""
 SHOW_PARAM=""
-if [ "${1:-}" = "--setlist" ]; then
-  PAGE="editor/setlist.html"
-  shift
-fi
-if [ $# -gt 0 ] && [ "${1%.duckset.json}" != "$1" ]; then
-  # A setlist file names the setlist page even without --setlist, so
-  # tab-completing a .duckset.json does the obvious thing.
-  PAGE="editor/setlist.html"
-  target="$1"
-  [ -f "$target" ] || { echo "no such setlist: $target"; exit 1; }
-  case "$target" in
-    "$REPO"/*) target="${target#"$REPO"/}" ;;
-    ./*)       target="${target#./}" ;;
+SET_PARAM=""
+
+# Strip the checkout prefix so the browser asks for a repo-root-relative path,
+# then refuse anything still absolute or climbing out: the page fetches this
+# verbatim, and a path outside the checkout would turn into a URL for another
+# host.
+relativize() {
+  local t="$1"
+  case "$t" in
+    "$REPO"/*) t="${t#"$REPO"/}" ;;
+    ./*)       t="${t#./}" ;;
   esac
-  SHOW_PARAM="?set=/${target}"
-  set --
-fi
-if [ $# -gt 0 ]; then
-  target="$1"
-  if [ -d "$target" ]; then
-    found="$(find "$target" -maxdepth 1 -name '*.duckshow.json' | sort | head -1)"
-    [ -n "$found" ] || { echo "no .duckshow.json inside $target"; exit 1; }
-    target="$found"
-  fi
-  [ -f "$target" ] || { echo "no such show: $target"; exit 1; }
-  # make it relative to the repo root, which is what the browser will request
-  case "$target" in
-    "$REPO"/*) target="${target#"$REPO"/}" ;;
-    ./*)       target="${target#./}" ;;
+  case "$t" in
+    /*|*..*) echo "must be inside the checkout: $1" >&2; return 1 ;;
   esac
-  SHOW_PARAM="?show=/${target}"
+  printf '%s' "$t"
+}
+
+for arg in "$@"; do
+  case "$arg" in
+    --setlist)
+      VIEW="setlist" ;;
+    *.duckset.json)
+      [ -z "$SET_PARAM" ] || { echo "only one setlist, got a second: $arg"; exit 1; }
+      [ -f "$arg" ] || { echo "no such setlist: $arg"; exit 1; }
+      rel="$(relativize "$arg")" || exit 1
+      SET_PARAM="/${rel}"
+      # A setlist file brings its view forward even without --setlist, so
+      # tab-completing a .duckset.json does the obvious thing.
+      VIEW="setlist" ;;
+    *)
+      [ -z "$SHOW_PARAM" ] || { echo "only one show, got a second: $arg"; exit 1; }
+      target="$arg"
+      if [ -d "$target" ]; then
+        found="$(find "$target" -maxdepth 1 -name '*.duckshow.json' | sort | head -1)"
+        [ -n "$found" ] || { echo "no .duckshow.json inside $target"; exit 1; }
+        target="$found"
+      fi
+      [ -f "$target" ] || { echo "no such show: $target"; exit 1; }
+      rel="$(relativize "$target")" || exit 1
+      SHOW_PARAM="/${rel}" ;;
+  esac
+done
+
+# Percent-encode the two paths (stdlib python, which the port probe below
+# already needs). A space, +, & or # in a path would otherwise be decoded into
+# something else by the browser's URL parser, and the page would fetch that.
+enc() { python3 -c 'import sys, urllib.parse; print(urllib.parse.quote(sys.argv[1], safe="/"))' "$1"; }
+
+# Assemble the shell's query: ?view=setlist when asked, ?show= for the show
+# frame, ?set= for the setlist frame. Reloading the page restores all three.
+# A launch with no show passes show= EMPTY on purpose whenever a view or a
+# setlist was named: to the show editor a present-but-empty show= means
+# "start blank", where an absent one means "load the demo", and the demo
+# comes wired for in-place Save.
+QUERY=""
+[ -n "$VIEW" ] && QUERY="${QUERY}&view=${VIEW}"
+if [ -n "$SHOW_PARAM" ]; then
+  QUERY="${QUERY}&show=$(enc "$SHOW_PARAM")"
+elif [ -n "$SET_PARAM" ] || [ -n "$VIEW" ]; then
+  QUERY="${QUERY}&show="
 fi
+[ -n "$SET_PARAM" ] && QUERY="${QUERY}&set=$(enc "$SET_PARAM")"
+[ -n "$QUERY" ] && QUERY="?${QUERY#&}"
 
 # -- find a free port rather than failing if 8000 is taken.
 PORT="${PORT:-}"
@@ -80,7 +121,7 @@ finally:
 fi
 [ -n "$PORT" ] || { echo "no free port found in 8000-8003, 8080, 8137 — set PORT=…"; exit 1; }
 
-URL="http://localhost:${PORT}/${PAGE}${SHOW_PARAM}"
+URL="http://localhost:${PORT}/${PAGE}${QUERY}"
 
 SERVER_PID=""
 cleanup() {
@@ -164,15 +205,9 @@ else
   fi
 fi
 
-case "$PAGE" in
-  *setlist.html) echo "duckset setlist   $URL" ;;
-  *)             echo "duckshow editor   $URL" ;;
-esac
-if [ -n "$SHOW_PARAM" ]; then
-  loading="${SHOW_PARAM#\?show=/}"
-  loading="${loading#\?set=/}"
-  echo "loading           $loading"
-fi
+echo "duckswarm editor  $URL"
+[ -n "$SHOW_PARAM" ] && echo "show              ${SHOW_PARAM#/}"
+[ -n "$SET_PARAM" ] && echo "setlist           ${SET_PARAM#/}"
 [ "$BAKE_SERVER" = "1" ] && echo "baking            available via Create Preview (see docs/viewer.md)"
 echo "Ctrl+C to stop."
 
