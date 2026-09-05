@@ -394,6 +394,26 @@ public struct Event: Codable, Sendable, Equatable {
     /// Never re-encoded.
     public var extraActionKeys: [String]
 
+    /// The `"mode"` value as it appeared in the file, kept even when another
+    /// action key won the do > sound > mode precedence.
+    ///
+    /// `extraActionKeys` records only the NAMES of the losing keys, so an
+    /// event carrying both `sound` and `mode` used to discard the mode value
+    /// entirely: `modeAt`, `validateModeValue` and `validateModeOverlap` all
+    /// read it back out of `action` and therefore could not see it. Python
+    /// and the editor both store all three fields unconditionally, so Swift
+    /// was one against two. Measured: `{"sound":"chirp","mode":"bogus_mode"}`
+    /// produced two errors in Python and one here.
+    public var declaredMode: String?
+
+    /// The drive mode this event declares, however it was spelled: the
+    /// winning `.mode` action, or a `mode` key that lost the precedence.
+    public var modeName: String? {
+        if let declaredMode { return declaredMode }
+        if case .mode(let name) = action { return name }
+        return nil
+    }
+
     public enum Action: Sendable, Equatable {
         /// `"do": "<skill>"` → `robot.do`.
         case skill(String)
@@ -403,10 +423,11 @@ public struct Event: Codable, Sendable, Equatable {
         case mode(String)
     }
 
-    public init(t: Double, action: Action, extraActionKeys: [String] = []) {
+    public init(t: Double, action: Action, extraActionKeys: [String] = [], declaredMode: String? = nil) {
         self.t = t
         self.action = action
         self.extraActionKeys = extraActionKeys
+        self.declaredMode = declaredMode
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -441,6 +462,7 @@ public struct Event: Codable, Sendable, Equatable {
             )
         }
         extraActionKeys = Array(present.dropFirst())
+        declaredMode = mode
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -755,6 +777,18 @@ public extension Show {
         }
     }
 
+    /// Renders a collection the way Python's `repr()` of a tuple does --
+    /// `('walk', 'roller')` -- because the canonical validator embeds tuple
+    /// reprs directly in its message text, and shows/fixtures/expected.json's
+    /// `error_substr` entries are matched against that text. Swift's own array
+    /// interpolation gives `["walk", "roller"]`, so the same show produced
+    /// different issue strings here than in the other two implementations.
+    /// The editor solves this with its own `pyTuple()`.
+    private func pyTuple(_ items: [String]) -> String {
+        if items.count == 1 { return "('\(items[0])',)" }  // Python's 1-tuple has a trailing comma
+        return "(" + items.map { "'\($0)'" }.joined(separator: ", ") + ")"
+    }
+
     private func checkSorted<T>(
         _ keyframes: [T], role: String, track: String, t: (T) -> Double, into report: inout ValidationReport
     ) {
@@ -842,7 +876,12 @@ public extension Show {
     /// check runs on a copy sorted by `t`.
     private func validateEvents(_ events: [Event], role: String, into report: inout ValidationReport) {
         for event in events where !event.extraActionKeys.isEmpty {
-            let keys = ([primaryActionKey(event.action)] + event.extraActionKeys).joined(separator: ", ")
+            // Python renders the list with repr(), so the strings are quoted:
+            // ["'sound'", "'mode'"] -> ['sound', 'mode']. The editor already
+            // matches via pyRepr(); Swift printed them bare, so the same show
+            // produced different issue text here than in the other two.
+            let keys = ([primaryActionKey(event.action)] + event.extraActionKeys)
+                .map { "'\($0)'" }.joined(separator: ", ")
             report.errors.append(ValidationIssue(role: role, track: "events", t: event.t,
                 message: "event has more than one action key: [\(keys)]"))
         }
@@ -867,11 +906,11 @@ public extension Show {
             case .skill(let name):
                 guard !Self.skills.contains(name) else { continue }
                 report.errors.append(ValidationIssue(role: role, track: "events", t: event.t,
-                    message: "do='\(name)' is not a recognized skill (expected one of \(Self.skills))"))
+                    message: "do='\(name)' is not a recognized skill (expected one of \(pyTuple(Self.skills)))"))
             case .sound(let tag, hold: _):
                 guard !Self.soundTags.contains(tag) else { continue }
                 report.errors.append(ValidationIssue(role: role, track: "events", t: event.t,
-                    message: "sound='\(tag)' is not a recognized sound tag (expected one of \(Self.soundTags))"))
+                    message: "sound='\(tag)' is not a recognized sound tag (expected one of \(pyTuple(Self.soundTags)))"))
             case .mode:
                 continue
             }
@@ -898,9 +937,9 @@ public extension Show {
     /// replaces, this is an ERROR, not a warning.
     private func validateModeValue(_ events: [Event], role: String, into report: inout ValidationReport) {
         for event in events {
-            guard case .mode(let name) = event.action, !Self.driveModes.contains(name) else { continue }
+            guard let name = event.modeName, !Self.driveModes.contains(name) else { continue }
             report.errors.append(ValidationIssue(role: role, track: "events", t: event.t,
-                message: "mode='\(name)' is not a valid drive mode (expected one of \(Self.driveModes))"))
+                message: "mode='\(name)' is not a valid drive mode (expected one of \(pyTuple(Self.driveModes)))"))
         }
     }
 
@@ -917,7 +956,7 @@ public extension Show {
         guard !locomotion.isEmpty else { return }
         let sorted = locomotion.sorted { $0.t < $1.t }
         for event in events {
-            guard case .mode(let name) = event.action else { continue }
+            guard let name = event.modeName else { continue }
             let lo = max(0.0, event.t - modeLocomotionGuardSeconds)
             let hi = event.t + modeLocomotionGuardSeconds
             var times: Set<Double> = [lo, hi]
@@ -974,7 +1013,7 @@ public extension Show {
     private func modeAt(_ events: [Event], at t: Double) -> String? {
         var best: (t: Double, mode: String)?
         for event in events {
-            guard case .mode(let name) = event.action, event.t <= t else { continue }
+            guard let name = event.modeName, event.t <= t else { continue }
             if best == nil || event.t > best!.t { best = (event.t, name) }
         }
         return best?.mode

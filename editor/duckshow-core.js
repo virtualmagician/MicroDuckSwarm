@@ -315,6 +315,11 @@ export function pyRepr(v) {
 }
 
 function pyTuple(items) {
+  // Python's one-element tuple repr carries a trailing comma: ('walk',).
+  // Unreachable for the current constants (all have 2+ entries), but the
+  // Swift side models it, and a constant shrinking to one entry should not
+  // quietly split the three validators' message text.
+  if (items.length === 1) return `(${pyRepr(items[0])},)`;
   return `(${items.map(pyRepr).join(', ')})`;
 }
 
