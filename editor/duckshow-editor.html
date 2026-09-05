@@ -293,7 +293,7 @@
   <button id="btn-save" class="primary" title="Save (⌘S)">Save</button>
   <button id="btn-demo" title="Fetch ../shows/demo/demo.duckshow.json (needs the page served over http)">Load demo</button>
   <span id="file-name">untitled.duckshow.json</span>
-  <span id="save-note">Save downloads a copy — browsers cannot write files in place.</span>
+  <span id="save-note"></span>
   <span class="sep"></span>
   <span class="field"><label for="f-name">name</label><input id="f-name" type="text" class="wide"></span>
   <span class="field"><label for="f-author">author</label><input id="f-author" type="text"></span>
@@ -730,6 +730,7 @@ function renderAll() {
   paintViewer();
   updateReadouts();
   renderSetupPanel();   // after syncViewerShow, which is what refreshes viewer.marks
+  renderSaveNote();
   updateTimeLabel();
   $('file-name').textContent = state.fileName;
   $('file-name').classList.toggle('dirty', state.dirty);
@@ -1802,6 +1803,7 @@ async function loadCapabilities() {
     state.capabilities = null;
   }
   updateCreatePreviewUi();
+  renderSaveNote();   // capabilities decide which save route is in force
 }
 
 /** Reflects capabilities + show state onto the button — never a dead disabled button with no explanation (docs/viewer.md). Called from renderAll(); skipped while a bake is actually in flight, since createPreview()/pollBakeJob() own the button's label and disabled state for that stretch. */
@@ -2852,10 +2854,55 @@ $('btn-bake-exit').onclick = () => exitBakeMode();
 // see createPreview()/pollBakeJob() above.
 $('btn-create-preview').onclick = () => createPreview();
 
+/** Says which of the three save routes is actually in force. The old fixed
+ *  text ("browsers cannot write files in place") described only the last
+ *  resort, and was simply untrue in Chrome, where the File System Access API
+ *  has always written in place after the first pick. */
+function renderSaveNote() {
+  const el = $('save-note');
+  if (!el) return;
+  if (state.showPath && state.capabilities) {
+    el.textContent = `Save writes back to ${state.showPath}.`;
+  } else if (window.showSaveFilePicker) {
+    el.textContent = 'Save writes the file in place (you pick it once).';
+  } else {
+    el.textContent = 'Save downloads a copy — move it into shows/ yourself.';
+  }
+}
+
 async function save() {
   let text;
   try { text = core.serializeShow(state.show); } catch (err) { status(`cannot save: ${err.message}`, 'error'); return; }
   const name = state.fileName || `${(state.norm.meta.name || 'show').toLowerCase().replace(/[^a-z0-9]+/g, '-')}.duckshow.json`;
+
+  // Best route first: the show was opened from the repo and editor_server.py
+  // is serving, so write straight back over it. No dialog, works in every
+  // browser, and survives a reload because the path travels with the show
+  // rather than living in a JS handle the way showSaveFilePicker's does.
+  if (state.showPath && state.capabilities) {
+    try {
+      const res = await fetch('/api/save', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ show: state.showPath, show_text: text }),
+      });
+      const body = await res.json();
+      if (res.ok) {
+        state.showText = text;   // these bytes are now what is on disk
+        state.dirty = false;
+        renderAll();
+        status(`saved ${body.saved}`, 'ok');
+        return;
+      }
+      // A refusal here is worth showing rather than silently falling back to
+      // a download: "shows/fixtures/ is not writable" is a real answer.
+      status(`could not save to ${state.showPath}: ${body.error || res.status}`, 'error');
+      return;
+    } catch (err) {
+      // Network/server gone: fall through to the browser routes below.
+    }
+  }
+
   if (window.showSaveFilePicker) {
     try {
       const handle = state.fileHandle || await window.showSaveFilePicker({ suggestedName: name, types: [{ description: 'duckshow', accept: { 'application/json': ['.json'] } }] });

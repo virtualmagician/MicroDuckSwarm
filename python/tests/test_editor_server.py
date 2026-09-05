@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import http.client
 import http.server
+import json
 import sys
 import threading
 import unittest
@@ -34,6 +35,87 @@ REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
 import editor_server  # noqa: E402
+
+
+def post_json(path: str, body: dict) -> tuple[int, dict]:
+    """One POST against a real editor_server.Handler on an ephemeral port."""
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), editor_server.Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        payload = json.dumps(body).encode("utf-8")
+        conn = http.client.HTTPConnection("127.0.0.1", server.server_address[1], timeout=10)
+        conn.request("POST", path, body=payload, headers={"Content-Type": "application/json"})
+        res = conn.getresponse()
+        parsed = json.loads(res.read().decode("utf-8"))
+        conn.close()
+        return res.status, parsed
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+class SaveEndpoint(unittest.TestCase):
+    """POST /api/save WRITES, so its refusals matter more than its successes.
+
+    The editor needs this because a browser cannot reliably write a file back:
+    the File System Access API works in Chrome but its handle does not survive
+    a reload, and a show opened via ?show= never has one. Writing through the
+    local server is the only route that works in every browser and survives a
+    reload, which is what makes multi-file authoring (a setlist) practical.
+    """
+
+    def setUp(self) -> None:
+        self.show = REPO_ROOT / "shows" / "demo" / "demo.duckshow.json"
+        self.original = self.show.read_text(encoding="utf-8")
+        self.addCleanup(lambda: self.show.write_text(self.original, encoding="utf-8"))
+
+    def test_writes_the_document_back_over_the_file(self) -> None:
+        doc = json.loads(self.original)
+        doc.setdefault("editor", {}).setdefault("marks", {})["probe"] = {"x": 1.25, "y": 0, "heading": 0}
+        text = json.dumps(doc, indent=2)
+        status, body = post_json("/api/save", {"show": "/shows/demo/demo.duckshow.json", "show_text": text})
+        self.assertEqual(status, 200, body)
+        self.assertEqual(body["saved"], "/shows/demo/demo.duckshow.json")
+        written = json.loads(self.show.read_text(encoding="utf-8"))
+        self.assertEqual(written["editor"]["marks"]["probe"]["x"], 1.25)
+
+    def test_leaves_no_temp_file_behind(self) -> None:
+        post_json("/api/save", {"show": "/shows/demo/demo.duckshow.json", "show_text": self.original})
+        self.assertEqual(list(self.show.parent.glob("*.tmp")), [],
+                         "a .tmp beside the show means the atomic rename did not happen")
+
+    def test_refuses_to_overwrite_a_validator_fixture(self) -> None:
+        # shows/fixtures/ is validator test data, several deliberately invalid.
+        # An editor overwriting one would corrupt the cross-language parity suite.
+        status, body = post_json("/api/save", {
+            "show": "/shows/fixtures/valid-baseline.duckshow.json", "show_text": self.original})
+        self.assertEqual(status, 403, body)
+        self.assertIn("fixtures", body["error"])
+
+    def test_refuses_a_path_outside_the_repo(self) -> None:
+        status, body = post_json("/api/save", {
+            "show": "/../etc/passwd.duckshow.json", "show_text": self.original})
+        self.assertEqual(status, 400, body)
+        self.assertIn("escapes", body["error"])
+
+    def test_refuses_a_non_duckshow_extension(self) -> None:
+        status, body = post_json("/api/save", {"show": "/CLAUDE.md", "show_text": self.original})
+        self.assertEqual(status, 400, body)
+
+    def test_refuses_a_body_that_is_not_a_duckshow_document(self) -> None:
+        for text, why in [("not json", "unparseable"), ('{"a":1}', "no format key"), ('[]', "not an object")]:
+            with self.subTest(why=why):
+                status, body = post_json("/api/save", {
+                    "show": "/shows/demo/demo.duckshow.json", "show_text": text})
+                self.assertEqual(status, 400, body)
+        self.assertEqual(self.show.read_text(encoding="utf-8"), self.original,
+                         "a refused save must not have touched the file")
+
+    def test_refuses_a_non_string_body(self) -> None:
+        status, body = post_json("/api/save", {"show": "/shows/demo/demo.duckshow.json", "show_text": 42})
+        self.assertEqual(status, 400, body)
 
 
 class ServedRequest:

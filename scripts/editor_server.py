@@ -14,6 +14,8 @@ tools/bake itself instead of requiring a terminal command.
     POST /api/bake           -- {"show": "/shows/octet/octet.duckshow.json"}
                                  or {"show_text": "<a .duckshow document>"}
                                  starts a bake, returns a job id immediately.
+    POST /api/save           -- {"show": "/shows/…", "show_text": "…"} writes
+                                 the document back over that file.
     GET  /api/bake/<job id>  -- progress, and once finished, the URL of the
                                  written cache plus a summary of its bake log.
 
@@ -44,6 +46,14 @@ deliberately narrowly:
         anything is written or spawned.
     No other request field influences a path, an argument, or the
     filesystem.
+  - POST /api/save WRITES, so it is narrower still: the target must be an
+    existing .duckshow.json under shows/, and never under shows/fixtures/
+    (validator test data, several deliberately invalid -- an editor
+    overwriting those would corrupt the cross-language parity suite). The
+    body must parse as a duckshow/N document before anything is written, and
+    the write goes through a temp file in the same directory followed by an
+    atomic rename, so an interrupted save cannot truncate a show someone is
+    performing from.
   - The baker subprocess is always invoked as an explicit argv list --
     never shell=True, never string-interpolated into a shell command --
     so there is no shell metacharacter or quoting hazard to get right.
@@ -405,25 +415,87 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         path = urllib.parse.urlsplit(self.path).path
         if path == "/api/bake":
             return self._handle_post_bake()
+        if path == "/api/save":
+            return self._handle_post_save()
         return self._json_error(404, "not found")
 
-    def _handle_post_bake(self) -> None:
+    def _read_json_body(self, limit: int) -> Optional[dict]:
+        """The request body as a JSON object, or None having already sent the
+        error. `limit` is a sanity bound rather than a budget: both POST
+        routes may carry a whole show document (shows/octet is ~40 KB).
+        """
         try:
             length = int(self.headers.get("Content-Length", "0") or "0")
         except ValueError:
             length = 0
-        # 4 MB, not 1: the body may now carry a whole show document rather than
-        # just a path (see the show_text branch below). shows/octet is ~40 KB;
-        # the cap is a sanity bound, not a budget.
-        if length <= 0 or length > 4_000_000:
-            return self._json_error(400, "missing or oversized request body")
+        if length <= 0 or length > limit:
+            self._json_error(400, "missing or oversized request body")
+            return None
         raw = self.rfile.read(length)
         try:
             body = json.loads(raw.decode("utf-8"))
         except (UnicodeDecodeError, json.JSONDecodeError):
-            return self._json_error(400, "request body must be JSON")
+            self._json_error(400, "request body must be JSON")
+            return None
         if not isinstance(body, dict):
-            return self._json_error(400, "request body must be a JSON object")
+            self._json_error(400, "request body must be a JSON object")
+            return None
+        return body
+
+    def _handle_post_save(self) -> None:
+        """Write an edited show back over the file it came from.
+
+        The narrowest useful write: an existing show, under shows/, not a
+        fixture, whose replacement parses as a duckshow document. See the
+        module docstring's SECURITY section.
+        """
+        body = self._read_json_body(limit=4_000_000)
+        if body is None:
+            return  # _read_json_body already sent the error
+
+        show_text = body.get("show_text")
+        if not isinstance(show_text, str):
+            return self._json_error(400, "show_text must be a string")
+        try:
+            doc = json.loads(show_text)
+        except json.JSONDecodeError as exc:
+            return self._json_error(400, f"show_text is not valid JSON: {exc}")
+        if not isinstance(doc, dict):
+            return self._json_error(400, "show_text must be a JSON object")
+        fmt = doc.get("format")
+        if not isinstance(fmt, str) or not fmt.startswith("duckshow/"):
+            return self._json_error(400, 'show_text is not a .duckshow document (no "format": "duckshow/N")')
+
+        try:
+            target = resolve_show_path(body.get("show"))
+        except ShowPathError as exc:
+            return self._json_error(400, str(exc))
+
+        rel = target.relative_to(REPO_ROOT)
+        if rel.parts[:1] != ("shows",):
+            return self._json_error(403, "saving is limited to shows/")
+        if rel.parts[:2] == ("shows", "fixtures"):
+            return self._json_error(403, "shows/fixtures/ is validator test data and is not writable from the editor")
+
+        # Same directory, so the rename is atomic on the same filesystem: a
+        # crash mid-write leaves the original show intact rather than half a
+        # file that someone is about to perform from.
+        tmp = target.with_name(target.name + ".tmp")
+        try:
+            tmp.write_text(show_text, encoding="utf-8")
+            tmp.replace(target)
+        except OSError as exc:
+            try:
+                tmp.unlink()
+            except OSError:
+                pass
+            return self._json_error(500, f"could not write {rel.as_posix()}: {exc}")
+        self._json(200, {"saved": "/" + rel.as_posix(), "bytes": len(show_text.encode("utf-8"))})
+
+    def _handle_post_bake(self) -> None:
+        body = self._read_json_body(limit=4_000_000)
+        if body is None:
+            return  # _read_json_body already sent the error
 
         caps = get_capabilities()
         if not caps["available"]:
