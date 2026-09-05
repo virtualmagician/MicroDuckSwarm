@@ -86,9 +86,30 @@ class DuckState:
             self.last_mouth = {"open": float(params.get("open", 0.0))}
 
     def stop(self) -> None:
-        """robot.stop: zero locomotion immediately."""
+        """robot.stop: zero locomotion immediately.
+
+        docs/robotd-api.md is explicit that this leaves the duck standing --
+        `enabled` is untouched here on purpose.
+        """
         with self._lock:
             self.last_move = {"vx": 0.0, "vy": 0.0, "vyaw": 0.0}
+
+    def relax(self) -> None:
+        """robot.relax: release torque.
+
+        Modelled, not documented -- see the warning in
+        docs/swarmlink-protocol.md. robotd's own signature is `{}` -> ack and
+        says nothing about the effect, so this encodes the assumption the
+        agent is written against: torque off, and no velocity left standing
+        for the deadman to inherit.
+        """
+        with self._lock:
+            self.enabled = False
+            self.last_move = {"vx": 0.0, "vy": 0.0, "vyaw": 0.0}
+
+    def set_enabled(self, on: bool) -> None:
+        with self._lock:
+            self.enabled = bool(on)
 
     # -- kinematics --
 
@@ -102,6 +123,11 @@ class DuckState:
         if dt <= 0.0:
             return
         with self._lock:
+            if not self.enabled:
+                # Torque off: whatever velocity was last commanded, the duck
+                # is not going anywhere. Without this a relaxed duck would
+                # keep dead-reckoning across the stage in telemetry.
+                return
             vx, vy, vyaw = (
                 self.last_move["vx"],
                 self.last_move["vy"],

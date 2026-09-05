@@ -535,6 +535,14 @@ public actor OSCFacade {
             logCommand(message, from: sender)
             Task { await self.performResume(sender: sender) }
 
+        case "/duckswarm/relax":
+            // Bare `/duckswarm/relax` relaxes; an explicit 0 re-torques. A
+            // console with only a momentary button therefore gets the useful
+            // half by default, and the toggle by sending the argument.
+            let on = message.args.first?.numberValue.map { $0 != 0 } ?? true
+            logCommand(message, from: sender)
+            Task { await self.performRelax(on: on, sender: sender) }
+
         case "/duckswarm/stop":
             logCommand(message, from: sender)
             Task { await self.performStop(sender: sender) }
@@ -649,6 +657,16 @@ public actor OSCFacade {
             return
         }
         await pushFeedback(command: "resume", outcomes: outcomes, sender: sender)
+    }
+
+    private func performRelax(on: Bool, sender: NWConnection) async {
+        guard admitArmingCommand(from: sender) else { return }
+        let outcomes = await master.relax(on: on)
+        guard !outcomes.isEmpty else {
+            reply(error: "cannot relax: stop the show first", to: sender)
+            return
+        }
+        await pushFeedback(command: "relax", outcomes: outcomes, sender: sender)
     }
 
     private func performStop(sender: NWConnection) async {

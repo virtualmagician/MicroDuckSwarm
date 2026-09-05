@@ -105,6 +105,39 @@ final class SwarmMasterTransportTests: XCTestCase {
         await duck.stop()
     }
 
+    // MARK: relax
+    //
+    // docs/swarmlink-protocol.md "Relax". The state in which the cast is safe
+    // to pick up between chapters -- the only reason a master ever needs it.
+
+    func testRelaxFansOutAfterAStopAndCarriesTheOnFlag() async throws {
+        let (master, duck, show, roster) = try await rig()
+        _ = try await master.load(show: show, roster: roster)
+        _ = await master.relax()
+        let relaxes = await duck.waitForCommands(named: "relax")
+        XCTAssertEqual(relaxes.last?.payload, .relax(on: true), "bare relax must mean on")
+
+        _ = await master.relax(on: false)
+        let all = await duck.waitForCommands(named: "relax", count: 2)
+        XCTAssertEqual(all.last?.payload, .relax(on: false), "relax(on: false) must say so on the wire")
+        await duck.stop()
+    }
+
+    func testRelaxWhilePlayingIsRefusedBeforeItReachesAnyDuck() async throws {
+        // The agents refuse it too, but a master that fanned it out mid-show
+        // would spend a full retry ladder collecting NACKs to learn that.
+        let (master, duck, show, roster) = try await rig()
+        _ = try await master.load(show: show, roster: roster)
+        _ = try await master.play(at: 0)
+        _ = await waitForTransport(master, .playing)
+
+        let outcomes = await master.relax()
+        XCTAssertTrue(outcomes.isEmpty, "relax while playing must refuse")
+        let relaxes = await duck.commands(named: "relax")
+        XCTAssertTrue(relaxes.isEmpty, "a refused relax must not reach any duck")
+        await duck.stop()
+    }
+
     func testResumeWhileAlreadyPlayingIsANoOp() async throws {
         // Two GO presses are two commands; the second must not re-anchor the
         // epoch and move this master away from the cast.

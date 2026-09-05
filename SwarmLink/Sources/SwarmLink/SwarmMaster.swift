@@ -88,6 +88,11 @@ public struct DuckTelemetry: Sendable, Equatable {
     /// protocol.md §6) — a duck under a live (or forgotten) puppet sender
     /// is indistinguishable from one on the timeline without it.
     public var puppet: Bool
+    /// True while this duck's torque is released (docs/swarmlink-protocol.md
+    /// "Relax") — which ducks are safe to pick up, per duck, so an operator
+    /// repositioning a cast between chapters reads it rather than remembering
+    /// it. `false` from an agent that predates the relax command.
+    public var relaxed: Bool
     /// Master-monotonic ns at which this snapshot was last refreshed by an
     /// actual telemetry datagram.
     public var lastSeenMasterNs: Int64
@@ -532,6 +537,20 @@ public actor SwarmMaster {
         return await fanOut(.stop)
     }
 
+    /// Releases torque on every duck so the cast can be picked up and
+    /// repositioned by hand (`on: false` re-torques). Refused while the
+    /// transport is armed, playing or paused: the agents refuse it too, but a
+    /// master that fanned it out mid-show would spend a full retry ladder
+    /// collecting eight NACKs to learn what it already knew. `.stopped` is
+    /// fine — it is the state a show sits in between chapters, which is
+    /// exactly when the cast gets moved by hand.
+    @discardableResult
+    public func relax(on: Bool = true) async -> [DuckID: CommandStatus] {
+        guard transport == .stopped else { return [:] }
+        _ = issueCommand()
+        return await fanOut(.relax(on: on))
+    }
+
     /// Highest-priority stop, valid from any state, never NACKed by agents.
     /// Needs no loaded show — only connections (`connect(roster:)`).
     @discardableResult
@@ -868,6 +887,7 @@ public actor SwarmMaster {
             rssiDbm: message.rssiDbm,
             lastError: message.lastError,
             puppet: message.puppet,
+            relaxed: message.relaxed,
             lastSeenMasterNs: now,
             lost: false
         )

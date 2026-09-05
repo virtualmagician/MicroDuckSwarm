@@ -55,10 +55,13 @@ func printUsage() {
       run  <show.duckshow.json> [--lead-ms]  load, play, monitor until the show ends, stop, exit 0
       seek <show_time_seconds>               seek every duck (NACKed by ducks that are not playing)
       stop                                   graceful stop (zero locomotion, robot.stop, → LOADED)
+      relax [on|off]                         release torque so the cast is safe to pick up (default on);
+                                             `relax off` re-torques. Stop the show first.
       panic                                  emergency stop from any state (→ IDLE)
       status [--seconds <n>]                 listen for telemetry for n seconds and print a table
       serve                                  long-lived OSC facade (docs/osc-facade.md): /duckswarm/load
-                                             <show-id>, /play [lead], /go, /seek <t>, /stop, /panic,
+                                             <show-id>, /play [lead], /go, /seek <t>, /relax [0|1],
+                                             /stop, /panic,
                                              /ping (subscribe to status feedback), /status
       record                                 puppeteer --duck over the puppet channel and capture the
                                              stream as --role's tracks in --out (docs/authoring.md §2)
@@ -176,11 +179,11 @@ func formatTelemetryTable(_ telemetry: [DuckID: DuckTelemetry], roster: Set<Duck
     if ducks.isEmpty {
         return "(no ducks on the roster)"
     }
-    var lines = ["DUCK\tSTATE\tSHOW_TIME\tOFFSET_MS\tRTT_MS\tPOLICIES_OK\tPUPPET\tLOST\tLAST_ERROR"]
+    var lines = ["DUCK\tSTATE\tSHOW_TIME\tOFFSET_MS\tRTT_MS\tPOLICIES_OK\tPUPPET\tRELAXED\tLOST\tLAST_ERROR"]
     for duckID in ducks {
         guard let t = telemetry[duckID] else {
             let flag = lost.contains(duckID) ? "LOST" : "no"
-            lines.append("\(duckID.raw)\t-\t-\t-\t-\t-\t-\t\(flag)\t(no telemetry received)")
+            lines.append("\(duckID.raw)\t-\t-\t-\t-\t-\t-\t-\t\(flag)\t(no telemetry received)")
             continue
         }
         lines.append([
@@ -191,6 +194,9 @@ func formatTelemetryTable(_ telemetry: [DuckID: DuckTelemetry], roster: Set<Duck
             formatMs(t.clockRttMs),
             t.policiesOk ? "yes" : "no",
             t.puppet ? "LIVE" : "no",
+            // Which ducks are safe to pick up, so an operator repositioning a
+            // cast between chapters reads it instead of remembering it.
+            t.relaxed ? "LIMP" : "no",
             (t.lost || lost.contains(duckID)) ? "LOST" : "no",
             t.lastError ?? "-"
         ].joined(separator: "\t"))
@@ -489,6 +495,19 @@ struct SwarmCtl {
         case "resume":
             report("resume", await master.resume())
             exit(0)
+
+        case "relax":
+            // `relax`, `relax on`, `relax off`. Anything else is a typo the
+            // operator should hear about rather than have read as "on".
+            let on: Bool
+            switch args.count >= 2 ? args[1].lowercased() : "on" {
+            case "on", "1", "true": on = true
+            case "off", "0", "false": on = false
+            default: fail("relax takes on|off")
+            }
+            await connect()
+            let ok = report("relax", await master.relax(on: on))
+            exit(ok ? 0 : 1)
 
         case "stop":
             await connect()

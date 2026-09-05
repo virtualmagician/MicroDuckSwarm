@@ -185,6 +185,9 @@ public struct CommandMessage: Sendable, Equatable {
         case pause(atMasterTime: Int64)
         /// `"at_master_time": <ns>` -- continue from where `pause` stopped.
         case resume(atMasterTime: Int64)
+        /// `"on": true` releases torque so the duck is safe to pick up;
+        /// `"on": false` re-torques it. See docs/swarmlink-protocol.md.
+        case relax(on: Bool)
         case stop
         case panic
 
@@ -195,6 +198,7 @@ public struct CommandMessage: Sendable, Equatable {
             case .seek: return "seek"
             case .pause: return "pause"
             case .resume: return "resume"
+            case .relax: return "relax"
             case .stop: return "stop"
             case .panic: return "panic"
             }
@@ -215,6 +219,7 @@ extension CommandMessage: Codable {
         case cmd
         case show, sha256, role
         case atMasterTime = "at_master_time"
+        case on
         case fromShowTime = "from_show_time"
         case showTime = "show_time"
     }
@@ -246,6 +251,11 @@ extension CommandMessage: Codable {
             payload = .pause(atMasterTime: try c.decode(Int64.self, forKey: .atMasterTime))
         case "resume":
             payload = .resume(atMasterTime: try c.decode(Int64.self, forKey: .atMasterTime))
+        case "relax":
+            // Absent `on` means relax, matching the agent's default: the
+            // command exists to make a duck handleable, so the bare form is
+            // the one an operator means.
+            payload = .relax(on: try c.decodeIfPresent(Bool.self, forKey: .on) ?? true)
         case "stop":
             payload = .stop
         case "panic":
@@ -275,6 +285,8 @@ extension CommandMessage: Codable {
             try c.encode(atMasterTime, forKey: .atMasterTime)
         case .pause(let atMasterTime), .resume(let atMasterTime):
             try c.encode(atMasterTime, forKey: .atMasterTime)
+        case .relax(let on):
+            try c.encode(on, forKey: .on)
         case .stop, .panic:
             break
         }
@@ -357,11 +369,17 @@ public struct TelemetryMessage: Sendable, Equatable {
     /// puppet sender. Decodes as `false` when the key is absent (an agent
     /// without the puppet channel).
     public var puppet: Bool
+    /// True while this duck's torque is released (docs/swarmlink-protocol.md
+    /// "Relax") -- which ducks are safe to pick up, per duck, rather than
+    /// something an operator has to remember. Decodes as `false` when the key
+    /// is absent (an agent that predates the relax command).
+    public var relaxed: Bool
 
     public init(
         v: Int = SwarmLinkInfo.protocolVersion, duck: DuckID, seq: Int, state: AgentState, show: String?,
         showTime: Double, clockOffsetMs: Double?, clockRttMs: Double?, policiesOk: Bool,
-        batteryPct: Double? = nil, rssiDbm: Double? = nil, lastError: String? = nil, puppet: Bool = false
+        batteryPct: Double? = nil, rssiDbm: Double? = nil, lastError: String? = nil, puppet: Bool = false,
+        relaxed: Bool = false
     ) {
         self.v = v
         self.duck = duck
@@ -376,6 +394,7 @@ public struct TelemetryMessage: Sendable, Equatable {
         self.rssiDbm = rssiDbm
         self.lastError = lastError
         self.puppet = puppet
+        self.relaxed = relaxed
     }
 }
 
@@ -390,6 +409,7 @@ extension TelemetryMessage: Codable {
         case rssiDbm = "rssi_dbm"
         case lastError = "last_error"
         case puppet
+        case relaxed
     }
 
     public init(from decoder: Decoder) throws {
@@ -407,6 +427,7 @@ extension TelemetryMessage: Codable {
         rssiDbm = try c.decodeIfPresent(Double.self, forKey: .rssiDbm)
         lastError = try c.decodeIfPresent(String.self, forKey: .lastError)
         puppet = try c.decodeIfPresent(Bool.self, forKey: .puppet) ?? false
+        relaxed = try c.decodeIfPresent(Bool.self, forKey: .relaxed) ?? false
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -431,6 +452,7 @@ extension TelemetryMessage: Codable {
         try c.encodeIfPresent(lastError, forKey: .lastError)
         // Always on the wire, like the Python agent's `build_telemetry`.
         try c.encode(puppet, forKey: .puppet)
+        try c.encode(relaxed, forKey: .relaxed)
     }
 }
 

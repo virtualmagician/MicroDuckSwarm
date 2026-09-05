@@ -32,7 +32,7 @@ Loss-tolerant by design (the next one comes in 200 ms); `seq` lets agents ignore
 ## 3 · Commands (master → agent, unicast, repeated, ACKed)
 
 ```
-{"v":1, "type":"cmd", "cmd_id":"<uuid>", "cmd":"load"|"play"|"stop"|"seek"|"pause"|"resume"|"panic", ...}
+{"v":1, "type":"cmd", "cmd_id":"<uuid>", "cmd":"load"|"play"|"stop"|"seek"|"pause"|"resume"|"relax"|"panic", ...}
 agent → master: {"v":1, "type":"ack", "duck":"duck-01", "cmd_id":"<uuid>", "ok": true, "error": null}
 ```
 
@@ -46,7 +46,50 @@ Master sends each command up to 5× at 100 ms intervals until ACKed; agents dedu
 | `stop` | — | End playback gracefully: zero locomotion, `robot.stop`, → LOADED. |
 | `pause` | `"at_master_time": <ns>` | Freeze the show clock at the instant given, holding show-time where it was. Keeps ticking at 50 Hz with locomotion commanded to **zero** (never silence — see below), so head/pose/mouth hold their frozen values. → PAUSED. |
 | `resume` | `"at_master_time": <ns>` | Un-freeze at the instant given: re-anchor the show clock so show-time continues from exactly where it stopped. → PLAYING. |
+| `relax` | `"on": true` (default) | `on: true` makes the duck safe to pick up: neutral head/pose/mouth, then `robot.relax`. `on: false` re-torques it (`robot.enable`). Refused while armed, playing or paused. Reports `relaxed` in telemetry. |
 | `panic` | — | Highest priority, any state: `robot.stop`, neutral head/pose, → IDLE. Never NACKed. |
+
+### Relax: a state that is safe to pick up
+
+Repositioning the cast by hand is an ordinary part of running a show with
+chapters, and until now there was no state in which doing so was safe.
+`stop` sends `robot.move {0,0,0}` and `robot.stop`, and `docs/robotd-api.md`
+is explicit that this leaves the duck **standing**: "it does not go limp or
+collapse". So the operator would be lifting a powered, actively balancing
+robot, frozen in whatever head and pose the last frame left it, with its bill
+open if the show happened to end mid-`mouthOpen`.
+
+`relax` neutralises head, pose and mouth, then calls `robot.relax`. The duck
+reports `relaxed: true` in telemetry until something re-torques it. Three
+things do: `relax` with `on: false`, a `play` (which sends
+`robot.enable {on: true}` before it arms), and a robotd reconnect, since the
+agent cannot know what a fresh daemon did to the torque state and says so
+rather than claiming a torque state it did not set.
+
+Relax is deliberately **not** part of `stop`: stopping is how a number ends
+and the cast should still be standing afterwards; going limp is a separate
+decision an operator makes when they are about to touch a duck. It is refused
+while armed, playing or paused for the same reason in reverse: there is no
+reading of "go limp mid-number" that an operator can have meant, and the
+failure mode is a duck on the floor.
+
+**A relaxed duck ignores the puppet stream.** Puppet packets are the setup-mode
+live drive (§5); forwarding them to a duck whose torque is off would command
+motion that cannot happen and would leave the editor's ghost showing a duck
+somewhere the real one is not. They are dropped, logged, and not buffered.
+Re-torque first (`relax on: false`), then drive.
+
+**The physical effect of `robot.relax` is inferred, not documented.**
+`docs/robotd-api.md` gives its signature (`{}` → ack) and nothing more. The
+name and the deadman note together read as "release torque", which is what
+this assumes, and `robot.enable {on: true, toggle: false}` is assumed to be its
+inverse. `python/mock_duck/server.py` models both that way (`robot.relax`
+clears `enabled` and zeroes the last move; `robot.enable` sets it) so the
+behaviour is testable, but it is one of the first things to check against a
+real duck,
+because a duck that goes limp while standing falls over rather than becoming
+handleable. Until then, treat `relax` as "ask robotd to make this duck
+handleable" and confirm before trusting it with hardware.
 
 ### Pause and resume
 
@@ -111,10 +154,10 @@ show that is actually about to play, never a stale verdict.
 ```
 {"v":1, "type":"telemetry", "duck":"duck-01", "seq": 88, "state":"idle"|"loaded"|"armed"|"playing"|"paused"|"degraded"|"fault",
  "show": "<id or null>", "show_time": 12.5, "clock_offset_ms": 1.8, "clock_rtt_ms": 4.2,
- "policies_ok": true, "battery_pct": null, "rssi_dbm": null, "last_error": null}
+ "policies_ok": true, "relaxed": false, "battery_pct": null, "rssi_dbm": null, "last_error": null}
 ```
 
-`battery_pct`/`rssi_dbm` are null until wired to `robot.health` / OS sources on real hardware. `clock_offset_ms`/`clock_rtt_ms` are **null until the first successful time-sync exchange** — masters must decode them as optional and treat null as "not yet synced", never as 0. Master marks a duck **lost** after 5 s without telemetry (preflight red; if PLAYING, the duck is presumed still performing from its local copy — that's the architecture working, not an emergency).
+`relaxed` says whether this duck's torque is released — which ducks are safe to pick up right now, per duck, rather than something the operator has to remember. `battery_pct`/`rssi_dbm` are null until wired to `robot.health` / OS sources on real hardware. `clock_offset_ms`/`clock_rtt_ms` are **null until the first successful time-sync exchange** — masters must decode them as optional and treat null as "not yet synced", never as 0. Master marks a duck **lost** after 5 s without telemetry (preflight red; if PLAYING, the duck is presumed still performing from its local copy — that's the architecture working, not an emergency).
 
 ## 5 · Agent state machine
 

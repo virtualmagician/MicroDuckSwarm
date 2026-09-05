@@ -25,6 +25,7 @@ swarmctl serve --roster roster.json --shows-dir shows/ [--osc-port 53300] [--mas
 | `/duckswarm/seek` | `f` show-time seconds | Seek (allowed while loaded, armed, or playing). |
 | `/duckswarm/pause` | — | Freeze the show where it is; every duck holds its pose with locomotion commanded to zero. Refused unless playing. |
 | `/duckswarm/resume` | — | Continue from exactly where `pause` stopped. Refused unless paused. A second `/duckswarm/resume` while already playing is a no-op, not a restart. |
+| `/duckswarm/relax` | `int` (optional) | Release torque on the cast so it can be picked up and repositioned by hand. No argument, or non-zero, relaxes; `0` re-torques. Refused unless the transport is `stopped` — the ducks refuse it while armed/playing/paused too. |
 | `/duckswarm/stop` | — | Graceful stop. |
 | `/duckswarm/panic` | — | Panic fan-out. Always executed, never refused, from any state. |
 | `/duckswarm/ping` | — | Subscribe the sender to status feedback (see below) for 5 s; re-ping to renew — identical contract to `/stagewand/ping`. |

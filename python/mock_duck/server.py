@@ -131,13 +131,14 @@ def _dispatch(method: str, params: dict[str, Any], ctx: ServerContext) -> Any:
         return {}
 
     if method == "robot.enable":
-        state.enabled = bool(params.get("on", True))
+        state.set_enabled(params.get("on", True))
         return {}
 
     if method == "robot.init":
         return {}
 
     if method == "robot.relax":
+        state.relax()
         return {}
 
     if method == "robot.mode":

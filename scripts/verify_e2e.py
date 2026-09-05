@@ -112,6 +112,29 @@ def count_notifications(entries, method):
     return sum(1 for e in entries if e.get("msg", {}).get("method") == method)
 
 
+def params_of(entries, method):
+    return [e.get("msg", {}).get("params", {}) for e in entries if e.get("msg", {}).get("method") == method]
+
+
+def only_the_closing_neutral(entries, method, **neutral):
+    """True when a role that declares no track for `method` still received at
+    most the one neutral frame the agent sends as a show ends.
+
+    The end-of-show neutral is a deliberate safety act, not a stream: a show
+    that ends between a mouthOpen keyframe and its close used to leave the bill
+    open on stage, because meta.duration is the only end-of-show trigger and
+    nothing on that path touched head, pose or mouth again. The invariant that
+    matters here is still "an omitted track never streams" -- the same shape as
+    the robot.move check above, which already allows the single closing zero.
+    """
+    frames = params_of(entries, method)
+    if not frames:
+        return True
+    if len(frames) > 1:
+        return False
+    return all(abs(float(frames[0].get(k, v)) - v) <= 1e-6 for k, v in neutral.items())
+
+
 def anchor_show_start(entries):
     """First rx_wall of any continuous-track notification -- this duck
     process's estimate of show_time == 0.0. Used to translate every later
@@ -341,8 +364,8 @@ def main():
           f"end-of-show ordering wrong: last record method="
           f"{lead[-1].get('msg', {}).get('method') if lead else None!r}, last robot.move before it={lead_last_move}")
 
-    check(count_notifications(lead, "robot.pose") == 0,
-          "no robot.pose sent for lead (no pose track on this role)",
+    check(only_the_closing_neutral(lead, "robot.pose", z=0.0, roll=0.0, pitch=0.0),
+          "no robot.pose stream for lead beyond the end-of-show neutral (no pose track on this role)",
           f"unexpected robot.pose notifications for lead ({count_notifications(lead, 'robot.pose')}) -- omitted tracks must emit nothing")
 
     print("wing (duck-02):")
@@ -382,8 +405,8 @@ def main():
     check(count_notifications(wing, "robot.move") <= 1,
           "no locomotion stream for wing beyond the end-of-show zero move (no locomotion track on this role)",
           f"unexpected robot.move notifications for wing ({count_notifications(wing, 'robot.move')}) -- omitted tracks must emit nothing")
-    check(count_notifications(wing, "robot.mouth") == 0,
-          "no robot.mouth sent for wing (no mouth track on this role)",
+    check(only_the_closing_neutral(wing, "robot.mouth", open=0.0),
+          "no robot.mouth stream for wing beyond the end-of-show close (no mouth track on this role)",
           f"unexpected robot.mouth notifications for wing ({count_notifications(wing, 'robot.mouth')}) -- omitted tracks must emit nothing")
 
     print("sync:")

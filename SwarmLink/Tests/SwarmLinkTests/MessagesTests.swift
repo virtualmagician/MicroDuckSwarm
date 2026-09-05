@@ -87,6 +87,20 @@ final class MessagesTests: XCTestCase {
         }
     }
 
+    func testRelaxCommandRoundTripsAndDefaultsToOn() throws {
+        for on in [true, false] {
+            let original = CommandMessage(cmdID: "uuid-relax", payload: .relax(on: on))
+            let data = try JSONEncoder().encode(original)
+            XCTAssertTrue(jsonString(data).contains("\"cmd\":\"relax\""))
+            XCTAssertEqual(try JSONDecoder().decode(CommandMessage.self, from: data), original)
+        }
+        // A console (or an older master) that sends a bare `relax` means the
+        // useful half: make the duck handleable. Same default as the agent.
+        let bare = Data(#"{"v":1,"type":"cmd","cmd_id":"uuid-relax","cmd":"relax"}"#.utf8)
+        let decoded = try JSONDecoder().decode(CommandMessage.self, from: bare)
+        XCTAssertEqual(decoded.payload, .relax(on: true))
+    }
+
     func testAckRoundTripAndSnakeCase() throws {
         let original = AckMessage(duck: "duck-02", cmdID: "uuid-5", ok: false, error: "bad_sha256")
         let data = try JSONEncoder().encode(original)

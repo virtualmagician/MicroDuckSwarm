@@ -154,6 +154,7 @@ _MAX_CMD_CACHE = 512
 
 _NEUTRAL_HEAD = {"neck_pitch": 0.0, "head_pitch": 0.0, "head_yaw": 0.0, "head_roll": 0.0}
 _NEUTRAL_POSE = {"z": 0.0, "roll": 0.0, "pitch": 0.0, "active": False}
+_NEUTRAL_MOUTH = {"open": 0.0}
 _ZERO_MOVE = {"vx": 0.0, "vy": 0.0, "vyaw": 0.0}
 
 _ROBOTD_FAILURES = (RobotdError, RobotdDisconnected, RobotdTimeout)
@@ -216,6 +217,11 @@ class DuckAgent:
         self._paused_show_time: Optional[float] = None
         self._pending_pause: Optional[int] = None
         self._pending_resume: Optional[int] = None
+        # Safe-to-handle: robot.relax has been sent and no play has
+        # re-enabled since. Surfaced in telemetry so an operator can see
+        # which ducks are safe to pick up (docs/swarmlink-protocol.md
+        # "Relax: a state that is safe to pick up").
+        self.relaxed = False
         # the running show clock
         self._play_epoch_local_ns: Optional[int] = None
         self._play_epoch_show_time: float = 0.0
@@ -353,6 +359,10 @@ class DuckAgent:
             "clock_offset_ms": self.clock.telemetry_offset_ms(),
             "clock_rtt_ms": self.clock.telemetry_rtt_ms(),
             "policies_ok": self.policies_ok,
+            # Which ducks are safe to pick up right now. An operator
+            # repositioning a cast between chapters needs to see this per
+            # duck, not assume it.
+            "relaxed": self.relaxed,
             "battery_pct": None,
             "rssi_dbm": None,
             "last_error": self.last_error,
@@ -371,6 +381,12 @@ class DuckAgent:
                 # still be executing the last velocity we ever sent it.
                 self._send_stop_sequence()
                 self._notify_neutral()
+            with self._playback_lock:
+                # A fresh daemon's torque state is not ours to assert. Claiming
+                # `relaxed: true` on an operator's screen for a duck that is
+                # actually standing is worse than admitting we no longer know,
+                # and the play path re-enables unconditionally when unsure.
+                self.relaxed = False
             return
         if self._stop_event.is_set():
             return  # our own shutdown closing the link, not a robotd failure
@@ -403,8 +419,14 @@ class DuckAgent:
         try:
             self.robotd.notify("robot.head", dict(_NEUTRAL_HEAD))
             self.robotd.notify("robot.pose", dict(_NEUTRAL_POSE))
+            # The mouth was previously closed by nothing at all -- not stop,
+            # not end-of-show, not even panic. robot.mouth was only ever sent
+            # from the two tick paths, so a show ending mid-mouthOpen left the
+            # bill open indefinitely, on stage, until something else happened
+            # to move it.
+            self.robotd.notify("robot.mouth", dict(_NEUTRAL_MOUTH))
         except RobotdDisconnected as exc:
-            logger.warning("%s: neutral head/pose notify failed: %s", self.duck_id, exc)
+            logger.warning("%s: neutral head/pose/mouth notify failed: %s", self.duck_id, exc)
 
     def _fault_locked(self, reason: str) -> None:
         """FSM side of entering FAULT; caller holds _playback_lock."""
@@ -472,6 +494,16 @@ class DuckAgent:
             packet = parse_puppet_packet(msg)
         except PuppetPacketError as exc:
             logger.debug("%s: dropping malformed puppet packet: %s", self.duck_id, exc)
+            return
+        with self._playback_lock:
+            relaxed = self.relaxed
+        if relaxed:
+            # swarmlink-protocol.md, "Relax": driving a duck whose torque is
+            # off commands motion that cannot happen, and the editor's ghost
+            # would then show it somewhere the real duck is not. Drop rather
+            # than buffer -- these are 30-60 Hz live packets, a backlog is
+            # worse than a gap.
+            logger.debug("%s: dropping puppet packet seq=%s (relaxed)", self.duck_id, packet.seq)
             return
         if not self._puppet.offer(packet, time.monotonic_ns()):
             logger.debug("%s: dropping puppet packet seq=%s (stale seq or muted)", self.duck_id, packet.seq)
@@ -554,6 +586,7 @@ class DuckAgent:
             "seek": self._handle_seek,
             "pause": self._handle_pause,
             "resume": self._handle_resume,
+            "relax": self._handle_relax,
             "stop": self._handle_stop,
             "panic": self._handle_panic,
         }
@@ -774,6 +807,9 @@ class DuckAgent:
 
         # Use the freshest sample rather than whatever the last tick applied.
         self.clock.update_applied_offset(playing=(self.state == "playing"))
+        # A relaxed duck handed a play would try to perform limp. Re-torque
+        # before arming, outside the lock (it is a robotd round trip).
+        self._reenable_if_relaxed()
 
         held: list[str] = []
         try:
@@ -897,10 +933,75 @@ class DuckAgent:
                     self.state = "loaded" if self.show is not None else "idle"
             self._play_epoch_local_ns = None
             self._play_epoch_show_time = 0.0
+            needs_neutral = self.state in ("loaded", "idle")
+        # Outside the lock: these are notifies, but _release_held_sounds below
+        # is a blocking request and the same rule applies -- never hold the
+        # lock panic needs across a robotd round trip.
+        if needs_neutral:
+            self._notify_neutral()
         self._release_held_sounds(held)
         if error is not None:
             return False, error
         return True, None
+
+    def _handle_relax(self, fields: dict[str, Any]) -> tuple[bool, Optional[str]]:
+        """`on: true` (default) makes this duck safe to pick up: neutral first,
+        so it is not frozen mid-gesture in someone's hands, then robot.relax.
+        `on: false` re-torques it.
+
+        Refused while armed/playing/paused: going limp mid-number is not a
+        thing an operator can mean, and the failure mode is a duck on the
+        floor. Idempotent by state, like pause/resume.
+        """
+        want_relaxed = bool(fields.get("on", True))
+        with self._playback_lock:
+            if self.state == "fault":
+                return False, "duck is in fault state; reload required"
+            if self.state in ("armed", "playing", "paused"):
+                return False, "cannot relax while armed, playing or paused: stop first"
+            if not self.robotd.connected:
+                return False, "robotd not connected"
+            if self.relaxed == want_relaxed:
+                return True, None
+        if not want_relaxed:
+            err = self._enable_torque()
+            if err is not None:
+                return False, err
+            return True, None
+        # Neutral BEFORE the torque goes away: afterwards nothing can move.
+        self._notify_neutral()
+        try:
+            self.robotd.request("robot.relax", {}, timeout=ROBOTD_REQUEST_TIMEOUT_S)
+        except _ROBOTD_FAILURES as exc:
+            return False, f"robot.relax failed: {exc}"
+        with self._playback_lock:
+            self.relaxed = True
+            self.last_error = None
+        return True, None
+
+    def _enable_torque(self) -> Optional[str]:
+        """`robot.enable {on: true}` and clear the relaxed flag. Returns an
+        error string on failure, and leaves the flag set: a duck whose
+        re-torque failed is still limp and telemetry must keep saying so."""
+        try:
+            self.robotd.request("robot.enable", {"on": True, "toggle": False},
+                                timeout=ROBOTD_REQUEST_TIMEOUT_S)
+        except _ROBOTD_FAILURES as exc:
+            return f"robot.enable failed: {exc}"
+        with self._playback_lock:
+            self.relaxed = False
+            self.last_error = None
+        return None
+
+    def _reenable_if_relaxed(self) -> None:
+        """Re-torque before motion. Called from the play path: a relaxed duck
+        that was handed a `play` would otherwise try to perform limp."""
+        with self._playback_lock:
+            if not self.relaxed:
+                return
+        err = self._enable_torque()
+        if err is not None:
+            logger.warning("%s: re-torque before play failed: %s", self.duck_id, err)
 
     def _handle_panic(self, fields: dict[str, Any]) -> tuple[bool, Optional[str]]:
         # "Never NACKed" (swarmlink-protocol.md #3): always ACK true, even
@@ -1330,6 +1431,15 @@ class DuckAgent:
             if self.state != "playing":
                 return  # an event failure / stop / panic already handled the exit
             held = self._take_held_sounds_locked()
+            # Put the duck back to a known shape while it is still being
+            # commanded, and before the stop, so the last thing robotd hears
+            # is still robot.stop. Without this a show ending between a
+            # mouthOpen keyframe and its close left the bill open on stage:
+            # meta.duration is the only end-of-show trigger, and nothing on
+            # this path ever touched head, pose or mouth again. These are
+            # notifies, not round trips, unlike the stop sequence below that
+            # already runs under this lock.
+            self._notify_neutral()
             err = self._send_stop_sequence()
             if err is not None:
                 # Any robotd error -> FAULT, reported -- never a silent

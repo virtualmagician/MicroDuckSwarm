@@ -18,7 +18,7 @@ Usage:
     python3 tools/showmaster.py --duck duck-01=127.0.0.1:47801 \\
         --role lead=duck-01 run shows/demo/demo.duckshow.json
 
-Subcommands: load, play, seek, stop, panic, monitor, run.
+Subcommands: load, play, seek, pause, resume, relax, stop, panic, monitor, run.
 """
 
 from __future__ import annotations
@@ -569,6 +569,16 @@ class SwarmMaster:
             self.paused_show_time = None
         return results
 
+    def relax(self, on: bool = True) -> dict[str, bool]:
+        """Release torque on the cast so it can be picked up (`on=False`
+        re-torques). Refused unless the transport is stopped: the agents
+        refuse it mid-show too, so fanning it out would only collect NACKs.
+        """
+        if self.transport != "stopped":
+            return {}
+        duck_ids = self.target_ducks()
+        return self.send_command(duck_ids, "relax", {"on": bool(on)})
+
     def panic(self) -> dict[str, bool]:
         # Safety: panic always addresses the whole roster, not just the
         # current cast, per swarmlink-protocol.md ("Never NACKed").
@@ -631,6 +641,9 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("pause", help="Freeze the running show where it is.")
     sub.add_parser("resume", help="Continue a paused show from where it stopped.")
     sub.add_parser("stop", help="Stop playback gracefully.")
+    p_relax = sub.add_parser("relax", help="Release torque so the cast is safe to pick up.")
+    p_relax.add_argument("state", nargs="?", default="on", choices=["on", "off"],
+                         help="on (default) releases torque; off re-torques.")
     sub.add_parser("panic", help="Panic-stop the whole roster immediately.")
     sub.add_parser("monitor", help="Print telemetry and answer time syncs until interrupted.")
 
@@ -703,6 +716,14 @@ def main(argv: Optional[list[str]] = None) -> int:
                 print(f"[{args.command}] refused: transport is {master.transport}")
                 return 1
             _print_ack_report(args.command, results)
+            return 0 if all(results.values()) else 1
+
+        if args.command == "relax":
+            results = master.relax(on=args.state == "on")
+            if not results:
+                print(f"[relax] refused: transport is {master.transport}")
+                return 1
+            _print_ack_report("relax", results)
             return 0 if all(results.values()) else 1
 
         if args.command == "stop":
