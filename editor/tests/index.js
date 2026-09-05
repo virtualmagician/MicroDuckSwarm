@@ -19,6 +19,7 @@ import './integrate.test.mjs';
 import './editops.test.mjs';
 import './beatgrid.test.mjs';
 import './formations.test.mjs';
+import './policies.test.mjs';
 import './viewer-gl.test.mjs';
 import './viewer-pose.test.mjs';
 import './rehearsal.test.mjs';

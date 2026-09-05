@@ -146,6 +146,64 @@ export function skillInfo(skill, mode) {
   };
 }
 
+/**
+ * Which ONNX policy is driving each role at time `t`, as
+ * [{policy, roles: [...]}] sorted by policy name.
+ *
+ * This exists because most of the shipped policies can never be named by an
+ * event label: docs/duckshow-format.md's own mapping table lists
+ * alpha_walking.onnx / roller.onnx as "implicit in `locomotion`" and
+ * alpha_stand.onnx as "implicit in `pose`", so no `.duckshow` event ever
+ * spells them and no amount of label work reaches them. A readout is the only
+ * surface that can.
+ *
+ * Rules, in order:
+ *   1. Inside a skill's occupancy window -> that skill's policy (roller-aware,
+ *      so a ground_pick in roller mode reports roller_crouch.onnx).
+ *   2. Otherwise the perpetual locomotion policy for the drive mode in force:
+ *      roller.onnx in roller mode, alpha_walking.onnx otherwise.
+ *
+ * DELIBERATELY NOT MODELLED: alpha_stand.onnx. The manifest marks it
+ * "perpetual" alongside alpha_walking, but nothing documents when robotd
+ * switches between them -- robot.setMode names only "walk"/"roller", never a
+ * walk/stand distinction (docs/robotd-api.md). tools/bake makes the same
+ * simplification and flags it. Claiming a duck is running alpha_stand at a
+ * given instant would be a guess presented as a readout.
+ */
+export function activePolicies(show, t) {
+  const norm = normalizeShow(show);
+  const byPolicy = new Map();
+  const add = (policy, role) => {
+    if (!policy) return;
+    if (!byPolicy.has(policy)) byPolicy.set(policy, []);
+    byPolicy.get(policy).push(role);
+  };
+  for (const member of norm.cast) {
+    const role = member.role;
+    const events = norm.tracksFor(role).events;
+    let mode = null;
+    for (const e of events) {
+      if (e.mode !== null && e.mode !== undefined && e.t <= t) mode = e.mode;
+    }
+    // A skill in progress owns the duck; the latest one wins if two overlap
+    // (which the validator already warns about).
+    let active = null;
+    for (const e of events) {
+      if (e.do === null || e.do === undefined || e.t > t) continue;
+      let modeAtStart = null;
+      for (const m of events) {
+        if (m.mode !== null && m.mode !== undefined && m.t <= e.t) modeAtStart = m.mode;
+      }
+      const info = skillInfo(e.do, modeAtStart);
+      if (typeof info.duration_s === 'number' && t <= e.t + info.duration_s) active = info.policy;
+    }
+    add(active || (mode === 'roller' ? 'roller.onnx' : 'alpha_walking.onnx'), role);
+  }
+  return [...byPolicy.entries()]
+    .map(([policy, roles]) => ({ policy, roles: roles.slice().sort() }))
+    .sort((a, b) => (a.policy < b.policy ? -1 : a.policy > b.policy ? 1 : 0));
+}
+
 export const CURVE_TRACKS = Object.freeze(['locomotion', 'head', 'pose', 'mouth']);
 export const ALL_TRACKS = Object.freeze(['locomotion', 'head', 'pose', 'mouth', 'events', 'servo']);
 

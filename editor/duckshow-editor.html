@@ -157,6 +157,19 @@
     background: rgba(0,0,0,0.45); color: #e7e9ee; font-size: 10px; letter-spacing: 0.04em;
     text-transform: uppercase; pointer-events: none; border: 1px solid rgba(255,255,255,0.18);
   }
+  /* Active-policy readout, bottom-right opposite the mode badge. The only
+     surface that can name alpha_walking.onnx / roller.onnx at all: both are
+     "implicit in locomotion" per docs/duckshow-format.md, so no event label
+     ever spells them. */
+  #viewer-policies {
+    position: absolute; right: 8px; bottom: 8px; padding: 2px 7px; border-radius: 3px;
+    background: rgba(0,0,0,0.45); color: #e7e9ee; font-size: 10px; letter-spacing: 0.02em;
+    pointer-events: none; border: 1px solid rgba(255,255,255,0.18); text-align: right;
+    max-width: 46%; line-height: 1.45;
+  }
+  #viewer-policies:empty { display: none; }
+  #viewer-policies b { font-weight: 600; }
+  #viewer-policies i { font-style: normal; opacity: 0.66; }
   #viewer-error { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
     padding: 12px; text-align: center; color: var(--err); font-size: 11px; background: var(--lane); }
   /* Bake-log panel (docs/viewer.md "Create Preview": "the most useful
@@ -311,6 +324,7 @@
         <div id="viewer-role-labels"></div>
         <div id="viewer-labels"></div>
         <div id="viewer-badge">kinematic preview</div>
+        <div id="viewer-policies" title="Which ONNX policy is driving each duck at the playhead. alpha_walking/roller are implicit in the tracks and are named nowhere else in the UI — docs/duckshow-format.md 'Policy mapping'."></div>
         <div id="bake-log" class="hidden"></div>
       </div>
       <div id="stage-legend"></div>
@@ -1724,6 +1738,7 @@ function paintBakedViewer() {
   viewer.lastLabels = labels;
   paintEventLabels(labels);
   updateRoleLabelPositions();
+  renderActivePolicies();
 }
 
 // ---------------------------------------------------------------------------
@@ -2066,6 +2081,7 @@ function paintViewer() {
   viewer.lastLabels = frame.labels;
   paintEventLabels(frame.labels);
   updateRoleLabelPositions();
+  renderActivePolicies();
 }
 
 /** World point (show-space x/y, world-space height) -> canvas CSS-px, or null if behind the camera. */
@@ -2207,6 +2223,33 @@ function updateRoleLabelPositions() {
     el.classList.toggle('selected', role === viewer.selectedRole);
     el.classList.toggle('dimmed', viewer.neutralRoles.has(role));
   }
+}
+
+/**
+ * Names the policy driving each duck at the playhead, bottom-right of the
+ * stage. Most of the shipped policies can be surfaced nowhere else: an event
+ * label can only name a policy some event spells, and alpha_walking.onnx /
+ * roller.onnx are implicit in the tracks (docs/duckshow-format.md's own
+ * mapping table). Called from the same paint path the labels use, so it
+ * follows scrubbing without a timer of its own.
+ */
+function renderActivePolicies() {
+  const host = $('viewer-policies');
+  if (!host) return;
+  if (!state.show || !viewer.renderer) { host.replaceChildren(); return; }
+  const groups = core.activePolicies(state.norm, state.playhead);
+  host.replaceChildren(...groups.map((g) => {
+    const line = document.createElement('div');
+    const name = document.createElement('b');
+    name.textContent = g.policy;
+    line.appendChild(name);
+    // The count carries more than the names once a cast is large: with eight
+    // ducks, "x8" reads instantly where a role list wraps to three lines.
+    const who = document.createElement('i');
+    who.textContent = g.roles.length > 3 ? ` \u00d7${g.roles.length}` : ` ${g.roles.join(', ')}`;
+    line.appendChild(who);
+    return line;
+  }));
 }
 
 function renderViewerLegend() {
