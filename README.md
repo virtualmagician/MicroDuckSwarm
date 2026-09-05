@@ -113,6 +113,7 @@ Not built yet, and what unblocks each item.
 | **Servo cues:** laser homing, colour-beacon homing, marker following | Camera access for our agent alongside `mediad`, which owns it for WebRTC. Untested. |
 | **`roulade`** in the bake | It executes, but after its stated 1.0 s the duck is still inverted, and `manifest.json` marks it `chain: true` without naming what it chains into. Asked upstream. The other three skills are driven. |
 | **Roller mode** in the bake | **Parked until hardware.** Needs a second MJCF (`robot_groundcontact_rollers.xml`) and `roller.onnx` loaded alongside the legged model, for a mode no current show uses for more than a few seconds. |
+| **Fleet deployment:** a `duckbundle/1` artifact, one-click staged deploy with a publish barrier, symlink-flip rollback, `identify` to find which bird is which | Nothing external for most of it. The design is written and the prerequisites it cannot settle are listed in [`docs/fleet.md`](docs/fleet.md); the ssh user, passwordless sudo and a stable hardware id all need duck number one. |
 | **Setlist playback:** a master that runs a `.duckset`, holding, looping or continuing at each block | Nothing external. The format and the editor are built; what is missing is the runner and an operator verb for "advance to the next entry". [`docs/setlist-format.md`](docs/setlist-format.md) |
 | **Timeline control track:** *authored* hold cues in the show file | The operator pause/resume it builds on is done. What remains is hold entry from the file, which has to answer how a late-joining duck avoids skipping a hold, and how a held duck is recovered once the master's clock passes the end of the show. Sensor triggers need a duck sensor surface `robotd` does not expose. [`docs/control-track.md`](docs/control-track.md) |
 | **Overhead tag tracking** for tight walking formations | Only if in-place work and loose blocking prove insufficient in rehearsal. |
@@ -135,7 +136,8 @@ Most of this is gated on hardware. MicroDuck currently quotes a four-to-six mont
 | `docs/bake-parts.md` | What the bake needs, where each part comes from, and its licence |
 | `docs/bake-format.md` | The `duckbake/1` pose-cache format |
 | `docs/control-track.md` | Hold/resume cues: the design, and what blocks it |
-| `docs/setlist-format.md` | The `.duckset` setlist format, and the path to a native app |
+| `docs/setlist-format.md` | The `.duckset` setlist format, and switching between the two editors |
+| `docs/fleet.md` | Fleet enrolment, naming, physical identification and one-click deploy: designed, not built |
 | `docs/provisioning.md` | Installing the agent on a duck, and pushing shows and policies |
 | `python/duckshow/` | Format library: parse, validate, sample at 50 Hz |
 | `python/duckset/` | Setlist library: parse and validate `.duckset` files |
