@@ -230,6 +230,9 @@
   #banner button { float: right; margin-left: 12px; }
   #drop-hint { position: fixed; inset: 0; background: rgba(77,163,255,0.12); border: 3px dashed var(--accent); z-index: 20; pointer-events: none; display: none; }
   body.dropping #drop-hint { display: block; }
+/* Policy name under a skill label (docs/viewer.md): subdued and on its own
+   line, so the skill still reads first and the label stays scannable. */
+.viewer-label .policy { display: block; font-style: normal; opacity: 0.62; font-size: 0.82em; letter-spacing: 0.01em; }
 /* Setup mode: the start-marks table and formation controls (docs/authoring.md
    "4 · Setup mode"). Sized to sit in the same rail as selection/validation. */
 #setup-formations { display: flex; flex-wrap: wrap; gap: 6px; align-items: flex-end; padding: 6px 8px; }
@@ -1684,11 +1687,17 @@ function paintBakedViewer() {
   // here: hold a rehearsal-neutral role at its start mark, dimmed, with no
   // trail, exactly as the kinematic path's neutralPoseAt() does.
   const neutral = viewer.neutralRoles;
+  // A role the baker declined to simulate is held static at its mark, which
+  // on stage is indistinguishable from a duck deliberately standing still.
+  // The bake log says so, but the stage is what you are looking at. Dim it
+  // the way a rehearsal-neutral duck is dimmed: not performing, and visibly
+  // so. `dimmed` is already part of the renderer contract (docs/viewer.md).
+  const unsimulated = new Set(Array.isArray(cache.unsimulated_roles) ? cache.unsimulated_roles : []);
   const marks = state.norm && state.norm.editor ? (state.norm.editor.marks || {}) : {};
   const poses = bakeCache.poseAllAtTime(cache, t)
     .filter((p) => roleSet.has(p.role))
     .map((p) => {
-      if (!neutral.has(p.role)) return p;
+      if (!neutral.has(p.role)) return unsimulated.has(p.role) ? { ...p, dimmed: true } : p;
       const m = marks[p.role] || { x: p.x, y: p.y, heading: p.heading };
       return {
         role: p.role, x: m.x, y: m.y, heading: m.heading,
@@ -2115,6 +2124,18 @@ function paintEventLabels(labels) {
     div.style.left = `${screen.x}px`;
     div.style.top = `${screen.y}px`;
     div.textContent = label.text;
+    // Name the policy actually running. Without this the stage says
+    // "ground_pick" whether the robot is running alpha_ground_pick.onnx or,
+    // in roller mode, roller_crouch.onnx -- a different clip of a different
+    // length. It is also the only place three of the nine shipped policies
+    // could ever be named, since alpha_stand/roller/roller_crouch are
+    // implicit in tracks and no event ever spells them.
+    if (label.policy) {
+      const pol = document.createElement('em');
+      pol.className = 'policy';
+      pol.textContent = label.policy;
+      div.appendChild(pol);
+    }
     frag.appendChild(div);
   }
   host.replaceChildren(frag);

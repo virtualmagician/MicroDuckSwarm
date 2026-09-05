@@ -52,7 +52,7 @@
 // keeps the frame loop alive for the ~0.5 s of its own ease.
 // ---------------------------------------------------------------------
 
-import { normalizeShow, createSampler, integrate, getMark } from './duckshow-core.js';
+import { normalizeShow, createSampler, integrate, getMark, skillInfo } from './duckshow-core.js';
 
 // ---------------------------------------------------------------------------
 // Small maths helpers — no dependency, just what a stage camera needs.
@@ -388,12 +388,41 @@ export function deriveEventLabels(show, t, window = DEFAULT_EVENT_LABEL_WINDOW) 
   const labels = [];
   for (const member of norm.cast) {
     const role = member.role;
-    for (const e of norm.tracksFor(role).events) {
-      let text = null, kind = null;
-      if (e.do !== null && e.do !== undefined) { text = e.do; kind = 'skill'; }
-      else if (e.sound !== null && e.sound !== undefined) { text = e.sound; kind = 'sound'; }
-      else continue; // mode event, or malformed (no action) — validator's problem, not ours
-      if (t >= e.t - before && t <= e.t + after) labels.push({ role, text, t: e.t, kind });
+    const tracks = norm.tracksFor(role);
+    // The drive mode in force when the skill STARTS decides which policy runs
+    // and for how long: a ground_pick in roller mode is roller_crouch.onnx at
+    // 3.5 s, not alpha_ground_pick.onnx at 2.8 s. Resolved per event rather
+    // than once, since a show can switch mode mid-piece.
+    const modeAtEventStart = (evT) => {
+      let mode = null;
+      for (const ev of tracks.events) {
+        if (ev.mode !== null && ev.mode !== undefined && ev.t <= evT) mode = ev.mode;
+      }
+      return mode;
+    };
+    for (const e of tracks.events) {
+      let text = null, kind = null, policy = null, durationS = null;
+      if (e.do !== null && e.do !== undefined) {
+        text = e.do; kind = 'skill';
+        const info = skillInfo(e.do, modeAtEventStart(e.t));
+        policy = info.policy;
+        durationS = info.duration_s;
+      } else if (e.sound !== null && e.sound !== undefined) {
+        text = e.sound; kind = 'sound';
+      } else continue; // mode event, or malformed (no action) — validator's problem, not ours
+      // A label used to last a flat 1.0 s whatever the clip did, so a 2.8 s
+      // ground_pick vanished 1.8 s before the robot stopped doing it and a
+      // 0.5 s kick lingered for twice its length. Where the occupancy is
+      // known, the label lasts exactly that long; where it is not (sounds,
+      // and sit_toggle, whose manifest gives ramp/unwind rather than a
+      // duration) the old window still applies.
+      const holdFor = typeof durationS === 'number' && durationS > 0 ? durationS : after;
+      if (t >= e.t - before && t <= e.t + holdFor) {
+        const label = { role, text, t: e.t, kind };
+        if (policy) label.policy = policy;
+        if (typeof durationS === 'number') label.durationS = durationS;
+        labels.push(label);
+      }
     }
   }
   labels.sort((a, b) => a.t - b.t);

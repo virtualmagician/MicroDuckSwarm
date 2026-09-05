@@ -392,14 +392,50 @@ describe('camera preset easing', () => {
 // ---------------------------------------------------------------------------
 
 describe('event label windowing', () => {
-  test('a skill event is a label only inside its window, gone outside it', () => {
+  test('a skill label lasts its real occupancy, not a flat window', () => {
+    // kick_left is 0.5 s (ball_kick_left.onnx). It used to label for a flat
+    // 1.0 s, i.e. twice as long as the robot was actually doing it.
     const doc = show({ lead: { events: [{ t: 5.0, do: 'kick_left' }] } }, { duration: 10 });
-    const { before, after } = DEFAULT_EVENT_LABEL_WINDOW;
+    const { before } = DEFAULT_EVENT_LABEL_WINDOW;
     assert.equal(deriveEventLabels(doc, 5.0 - before - 0.01).length, 0, 'too early');
-    assert.deepEqual(deriveEventLabels(doc, 5.0 - before), [{ role: 'lead', text: 'kick_left', t: 5.0, kind: 'skill' }]);
-    assert.equal(deriveEventLabels(doc, 5.0 + 0.3).length, 1, 'still inside the window');
-    assert.equal(deriveEventLabels(doc, 5.0 + after).length, 1, 'right at the trailing edge');
-    assert.equal(deriveEventLabels(doc, 5.0 + after + 0.01).length, 0, 'too late');
+    assert.deepEqual(deriveEventLabels(doc, 5.0 - before), [
+      { role: 'lead', text: 'kick_left', t: 5.0, kind: 'skill', policy: 'ball_kick_left.onnx', durationS: 0.5 },
+    ]);
+    assert.equal(deriveEventLabels(doc, 5.0 + 0.4).length, 1, 'still inside the clip');
+    assert.equal(deriveEventLabels(doc, 5.0 + 0.5).length, 1, 'right at the trailing edge');
+    assert.equal(deriveEventLabels(doc, 5.0 + 0.51).length, 0, 'gone once the clip is over');
+  });
+
+  test('a longer skill labels for longer: ground_pick is 2.8 s, not 1.0', () => {
+    const doc = show({ lead: { events: [{ t: 5.0, do: 'ground_pick' }] } }, { duration: 20 });
+    assert.equal(deriveEventLabels(doc, 6.5).length, 1, 'a 2.8 s clip must still be labelled at +1.5 s');
+    assert.equal(deriveEventLabels(doc, 5.0 + 2.8).length, 1);
+    assert.equal(deriveEventLabels(doc, 5.0 + 2.81).length, 0);
+    assert.equal(deriveEventLabels(doc, 5.0)[0].policy, 'alpha_ground_pick.onnx');
+  });
+
+  test('roller mode changes both the policy named and how long the label lasts', () => {
+    // The same authored skill runs a different clip of a different length in
+    // roller mode; a label saying "ground_pick" for 2.8 s would be wrong twice.
+    const doc = show({ lead: { events: [
+      { t: 1.0, mode: 'roller' },
+      { t: 5.0, do: 'ground_pick' },
+    ] } }, { duration: 20 });
+    const at = deriveEventLabels(doc, 5.0)[0];
+    assert.equal(at.policy, 'roller_crouch.onnx');
+    assert.equal(at.durationS, 3.5);
+    assert.equal(deriveEventLabels(doc, 5.0 + 3.4).length, 1, 'still inside the roller clip');
+    assert.equal(deriveEventLabels(doc, 5.0 + 3.51).length, 0);
+  });
+
+  test('a skill with no known duration keeps the default window', () => {
+    // sit_toggle is "scripted": the manifest gives ramp_s/unwind_s rather
+    // than a duration, so there is no occupancy to honour.
+    const doc = show({ lead: { events: [{ t: 5.0, do: 'sit_toggle' }] } }, { duration: 20 });
+    const { after } = DEFAULT_EVENT_LABEL_WINDOW;
+    assert.equal(deriveEventLabels(doc, 5.0 + after).length, 1);
+    assert.equal(deriveEventLabels(doc, 5.0 + after + 0.01).length, 0);
+    assert.equal(deriveEventLabels(doc, 5.0)[0].policy, 'alpha_sitstand.onnx');
   });
 
   test('sounds label too (dimmer is a renderer concern, but kind must say "sound"); mode events never label', () => {
